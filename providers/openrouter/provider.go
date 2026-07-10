@@ -41,8 +41,8 @@ type Config struct {
 	// Retry 控制 retry 策略;nil 走 loom.DefaultRetryConfig()。
 	Retry *loom.RetryConfig
 
-	// Capabilities 模型能力,生产路径必须由 modelfactory 从 t_llm_model 填充。
-	// nil = 零值"未声明"(能力校验跳过、纯透传),只服务测试与能力核验旁路。
+	// Capabilities 模型能力,由调用方或 modelfactory 按实际模型配置填充。
+	// nil = 零值"未声明"(能力校验跳过、纯透传)。
 	Capabilities *loom.ModelCapabilities
 }
 
@@ -75,8 +75,8 @@ func New(cfg Config) (*Model, error) {
 	if retryCfg == nil {
 		retryCfg = loom.DefaultRetryConfig()
 	}
-	// 能力的唯一权威来源是 t_llm_model(经 modelfactory 传入),这里不写死默认值。
-	// 裸构造(nil)= 零值"未声明",各能力校验跳过、纯透传 — 只服务测试与能力核验旁路。
+	// 能力由调用方或 modelfactory 传入,这里不写死模型默认值。
+	// 裸构造(nil)= 零值"未声明",各能力校验跳过、纯透传。
 	capabilities := loom.ModelCapabilities{}
 	if cfg.Capabilities != nil {
 		capabilities = *cfg.Capabilities
@@ -284,7 +284,7 @@ func translateReasoning(resolved loom.ResolvedReasoning) (map[string]any, error)
 			reasoning["effort"] = string(resolved.Effort)
 		case loom.ReasoningEffortMax:
 			// OpenRouter 统一档位只有 low/medium/high(max 是 deepseek 专属),
-			// 正常情况下 ResolveReasoning 已按 t_llm_model.reasoning_efforts 提前拦截。
+			// 正常情况下 ResolveReasoning 已按 capabilities.ReasoningEfforts 提前拦截。
 			return nil, fmt.Errorf("loom/openrouter: openrouter 不支持 reasoning effort %q(支持 low/medium/high)", resolved.Effort)
 		case loom.ReasoningEffortDefault:
 			// 只开推理,档位走模型默认

@@ -70,8 +70,8 @@ type Usage struct {
 }
 
 // ReasoningEffort 推理预算等级。具体含义由 provider 翻译;
-// 各模型支持的档位子集记在 t_llm_model.reasoning_efforts,由
-// ResolveReasoning 做能力校验(deepseek: high/max;doubao: low/medium/high)。
+// 各模型支持的档位子集由 ModelCapabilities.ReasoningEfforts 声明,
+// ResolveReasoning 负责能力校验(deepseek: high/max;doubao: low/medium/high)。
 // "minimal=不思考"类档位不建模 — 不思考用 ReasoningModeDisabled 表达。
 type ReasoningEffort string
 
@@ -115,14 +115,14 @@ const (
 //
 // 用在两处,取值集合略有差异:
 //   - ModelCapabilities.StructuredOutput(能力声明):None=明确声明不支持,
-//     ""=未声明(不经 modelfactory 的裸构造,跳过能力校验、纯透传);
+//     ""=未声明(跳过能力校验、纯透传);
 //   - ChatRequest.StructuredOutput.Mode(请求):JSONObject/JSONSchema,
 //     ""(Unsupported)表示不要结构化输出。
 type StructuredOutputMode string
 
 const (
 	StructuredOutputUnsupported StructuredOutputMode = ""            // 请求:不要结构化输出 / 能力:未声明
-	StructuredOutputNone        StructuredOutputMode = "none"        // 能力专用:明确声明不支持(对应 t_llm_model.structured_output=none)
+	StructuredOutputNone        StructuredOutputMode = "none"        // 能力专用:明确声明不支持
 	StructuredOutputJSONObject  StructuredOutputMode = "json_object" // 仅能要求 JSON object
 	StructuredOutputJSONSchema  StructuredOutputMode = "json_schema" // 可传 JSON Schema
 )
@@ -141,9 +141,9 @@ const (
 
 // ModelCapabilities 是模型在初始化时声明的能力。
 //
-// 能力的唯一权威来源是 t_llm_model(经 modelfactory 填充),provider 包
-// 不写死任何默认值 — 裸构造(不传 Capabilities)时一律是零值"未声明",
-// 各能力校验对未声明跳过、纯透传(只服务测试和能力核验旁路)。
+// 能力由调用方或 modelfactory 按实际模型配置填充,provider 包不写死
+// 任何默认值。裸构造(不传 Capabilities)时一律是零值"未声明",
+// 各能力校验对未声明跳过、纯透传。
 type ModelCapabilities struct {
 	StructuredOutput StructuredOutputMode
 
@@ -181,8 +181,7 @@ type ResolvedReasoning struct {
 // 在构造阶段直接报错,绝不发出去(「声明与使用矛盾要暴露,不静默降级/被吞」)。
 //
 // 覆盖结构化输出与输出长度;推理由 ResolveReasoning 单独校验。
-// 能力未声明(裸构造,对应字段为零值)时跳过对应校验、纯透传 —
-// 生产路径经 modelfactory 必有声明,未声明只出现在测试和能力核验旁路。
+// 能力未声明(对应字段为零值)时跳过对应校验、纯透传。
 //
 // 有意不校验输入是否超 max_context_tokens(别加)。2026-06 实测三家供应商
 // (deepseek/ark/openrouter)超窗均在生成前返回 400 — 不计费、报文带精确
@@ -252,7 +251,7 @@ func CheckRequestAgainstCapabilities(caps ModelCapabilities, req ChatRequest) er
 // reasoning_test.go 的 TestResolveReasoningMatrix;要点:
 //   - Mode 必传:零值直接报错,这是"每个调用点显式决策"的强制点;
 //   - 声明与能力矛盾(none×enabled / always_on×disabled / 档位越界)报错而非静默忽略;
-//   - 能力未声明(caps.Reasoning=="",不经 modelfactory 的构造路径)只做必传校验,纯透传。
+//   - 能力未声明(caps.Reasoning=="")只做必传校验,纯透传。
 func ResolveReasoning(caps ModelCapabilities, r Reasoning) (ResolvedReasoning, error) {
 	switch r.Mode {
 	case ReasoningModeEnabled, ReasoningModeDisabled:
@@ -412,7 +411,7 @@ type Stream interface {
 }
 
 // ChatModel 一个具体模型实例(provider × model 组合)。
-// 实现见 pkg/loom/providers/* 子包。
+// 实现见 providers/* 子包。
 type ChatModel interface {
 	// Name 返回模型可读标识,形如 "deepseek/deepseek-v4-flash"。
 	// 用于 log / observability,不参与请求路由。

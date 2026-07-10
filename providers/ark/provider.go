@@ -40,8 +40,8 @@ type Config struct {
 	BaseURL string
 	// Retry 控制 retry 策略;nil 走 loom.DefaultRetryConfig()。
 	Retry *loom.RetryConfig
-	// Capabilities 模型能力,生产路径必须由 modelfactory 从 t_llm_model 填充。
-	// nil = 零值"未声明"(能力校验跳过、纯透传),只服务测试与能力核验旁路。
+	// Capabilities 模型能力,由调用方或 modelfactory 按实际模型配置填充。
+	// nil = 零值"未声明"(能力校验跳过、纯透传)。
 	Capabilities *loom.ModelCapabilities
 }
 
@@ -72,8 +72,8 @@ func New(cfg Config) (*Model, error) {
 	if retryCfg == nil {
 		retryCfg = loom.DefaultRetryConfig()
 	}
-	// 能力的唯一权威来源是 t_llm_model(经 modelfactory 传入),这里不写死默认值。
-	// 裸构造(nil)= 零值"未声明",各能力校验跳过、纯透传 — 只服务测试与能力核验旁路。
+	// 能力由调用方或 modelfactory 传入,这里不写死模型默认值。
+	// 裸构造(nil)= 零值"未声明",各能力校验跳过、纯透传。
 	capabilities := loom.ModelCapabilities{}
 	if cfg.Capabilities != nil {
 		capabilities = *cfg.Capabilities
@@ -181,11 +181,12 @@ func (s *streamAdapter) Close() error {
 // buildRequest 把 loom.ChatRequest 翻译成 arkmodel.ChatCompletionRequest。
 //
 // Reasoning.Mode 必传并映射到请求级 Thinking 字段(enabled/disabled);
-// thinking 绑死在 endpoint 配置、请求参数不生效的旧 endpoint,应在 t_llm_model
-// 里登记为 always_on/none,ResolveReasoning 会兜住(报错或 omit),不会发出无效参数。
+// thinking 绑死在 endpoint 配置、请求参数不生效的旧 endpoint,应在模型
+// capabilities 中声明为 always_on/none,ResolveReasoning 会兜住(报错或 omit),
+// 不会发出无效参数。
 // Reasoning.Effort 映射到 reasoning_effort(doubao-seed 2.0 支持 low/medium/high;
 // minimal=不思考不建模,用 Mode=Disabled 表达;max 是 deepseek 专属档位,ark 报错,
-// 正常情况下 ResolveReasoning 已按 t_llm_model.reasoning_efforts 提前拦截)。
+// 正常情况下 ResolveReasoning 已按 capabilities.ReasoningEfforts 提前拦截)。
 func (m *Model) buildRequest(req loom.ChatRequest) (arkmodel.CreateChatCompletionRequest, error) {
 	out := arkmodel.CreateChatCompletionRequest{
 		Model:    m.name,

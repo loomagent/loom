@@ -70,12 +70,31 @@ func main() {
 
 - `github.com/loomagent/loom`: runtime, events, writers, sinks, tools, and model abstractions
 - `github.com/loomagent/loom/loomfs`: filesystem-backed context and workspace utilities
+- `github.com/loomagent/loom/modelfactory`: storage-independent model construction and configuration loading
 - `github.com/loomagent/loom/providers/ark`: Volcengine Ark provider
 - `github.com/loomagent/loom/providers/deepseek`: DeepSeek provider
 - `github.com/loomagent/loom/providers/openrouter`: OpenRouter provider
 
 The architecture and original design decisions are documented in
 [DESIGN.md](DESIGN.md).
+
+## Model factory
+
+`modelfactory` selects providers explicitly and does not infer them from a URL.
+It accepts plain Go configuration and has no database or ORM dependency:
+
+```go
+model, err := modelfactory.Build(modelfactory.Config{
+	Provider: modelfactory.ProviderOpenRouter,
+	APIKey:   os.Getenv("OPENROUTER_API_KEY"),
+	Model:    "openai/gpt-5",
+})
+```
+
+Applications that select models by ID can implement
+`modelfactory.ConfigLoader` and use `modelfactory.Factory`. A loader may read
+from a file, environment variables, a secrets manager, or a database without
+coupling Loom to that storage system.
 
 ## Project status
 
@@ -88,4 +107,3 @@ change between minor versions. Production users should pin an exact version.
 go test ./...
 go vet ./...
 ```
-

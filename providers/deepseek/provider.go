@@ -49,8 +49,8 @@ type Config struct {
 	// 这是 provider 限流的兜底语义,业务不应该关)。
 	Retry *loom.RetryConfig
 
-	// Capabilities 模型能力,生产路径必须由 modelfactory 从 t_llm_model 填充。
-	// nil = 零值"未声明"(能力校验跳过、纯透传),只服务测试与能力核验旁路。
+	// Capabilities 模型能力,由调用方或 modelfactory 按实际模型配置填充。
+	// nil = 零值"未声明"(能力校验跳过、纯透传)。
 	Capabilities *loom.ModelCapabilities
 }
 
@@ -88,8 +88,8 @@ func New(cfg Config) (*Model, error) {
 	if retryCfg == nil {
 		retryCfg = loom.DefaultRetryConfig()
 	}
-	// 能力的唯一权威来源是 t_llm_model(经 modelfactory 传入),这里不写死默认值。
-	// 裸构造(nil)= 零值"未声明",各能力校验跳过、纯透传 — 只服务测试与能力核验旁路。
+	// 能力由调用方或 modelfactory 传入,这里不写死模型默认值。
+	// 裸构造(nil)= 零值"未声明",各能力校验跳过、纯透传。
 	capabilities := loom.ModelCapabilities{}
 	if cfg.Capabilities != nil {
 		capabilities = *cfg.Capabilities
@@ -267,7 +267,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (goseek.ChatCompletionRequest
 		out.ReasoningEffort = goseek.ReasoningEffortMax
 	case loom.ReasoningEffortLow, loom.ReasoningEffortMedium:
 		// deepseek API 只有 high/max 两档(doubao 专属档位),正常情况下
-		// ResolveReasoning 已按 t_llm_model.reasoning_efforts 提前拦截。
+		// ResolveReasoning 已按 capabilities.ReasoningEfforts 提前拦截。
 		return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: deepseek 不支持 reasoning effort %q(支持 high/max)", resolved.Effort)
 	case loom.ReasoningEffortDefault:
 		// 不传,goseek 用默认
