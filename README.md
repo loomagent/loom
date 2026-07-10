@@ -69,11 +69,13 @@ func main() {
 ## Packages
 
 - `github.com/loomagent/loom`: runtime, events, writers, sinks, tools, and model abstractions
+- `github.com/loomagent/loom/handlerregistry`: concurrent, explicit handler registration
 - `github.com/loomagent/loom/loomfs`: filesystem-backed context and workspace utilities
 - `github.com/loomagent/loom/modelfactory`: storage-independent model construction and configuration loading
 - `github.com/loomagent/loom/providers/ark`: Volcengine Ark provider
 - `github.com/loomagent/loom/providers/deepseek`: DeepSeek provider
 - `github.com/loomagent/loom/providers/openrouter`: OpenRouter provider
+- `github.com/loomagent/loom/tools/workspace`: in-memory workspace backend and file tools
 
 The architecture and original design decisions are documented in
 [DESIGN.md](DESIGN.md).
@@ -95,6 +97,24 @@ Applications that select models by ID can implement
 `modelfactory.ConfigLoader` and use `modelfactory.Factory`. A loader may read
 from a file, environment variables, a secrets manager, or a database without
 coupling Loom to that storage system.
+
+## Workspace tools
+
+The workspace package provides `ls`, `read_file`, `write_file`, and `edit_file`
+as Loom tools over a small storage interface. Its in-memory backend enforces
+read-before-write for existing files and is useful in tests or ephemeral agent
+runs:
+
+```go
+backend := workspace.NewInMemoryBackend()
+tools := loom.NewToolRegistry()
+if err := workspace.RegisterAll(tools, backend); err != nil {
+	return err
+}
+```
+
+Applications can implement `workspace.Backend` to add their own persistent
+storage without introducing an ORM dependency into Loom.
 
 ## Project status
 
