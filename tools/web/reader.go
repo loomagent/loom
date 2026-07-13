@@ -15,8 +15,8 @@ import (
 	"github.com/loomagent/loom"
 )
 
-// Reader fetches and normalizes one web document.
-type Reader interface {
+// WebReader fetches and normalizes one web document.
+type WebReader interface {
 	Read(ctx context.Context, request ReadRequest) (Document, error)
 }
 
@@ -43,12 +43,12 @@ type ReaderToolOptions struct {
 	Description string
 }
 
-// NewReaderTool exposes Reader as a Loom tool. It accepts only absolute HTTP(S)
+// NewReaderTool exposes WebReader as a Loom tool. It accepts only absolute HTTP(S)
 // URLs; network policy, authentication, caching, and persistence remain the
-// Reader implementation's responsibility.
-func NewReaderTool(reader Reader, options ReaderToolOptions) (loom.Tool, error) {
+// WebReader implementation's responsibility.
+func NewReaderTool(reader WebReader, options ReaderToolOptions) (loom.Tool, error) {
 	if reader == nil {
-		return nil, errors.New("web: Reader is required")
+		return nil, errors.New("web: WebReader is required")
 	}
 	name := strings.TrimSpace(options.Name)
 	if name == "" {

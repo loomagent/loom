@@ -124,6 +124,8 @@ type Client struct {
 	limiter       *limiter
 }
 
+var _ web.WebReader = (*Client)(nil)
+
 // New creates an Unifuncs reader. An empty key falls back to
 // UNIFUNCS_API_KEY.
 func New(apiKey string, options ...Option) *Client {
@@ -144,7 +146,7 @@ func New(apiKey string, options ...Option) *Client {
 	return c
 }
 
-// Read implements web.Reader.
+// Read implements web.WebReader.
 func (c *Client) Read(ctx context.Context, request web.ReadRequest) (web.Document, error) {
 	markdown, stats, err := c.ReadWithStats(ctx, request)
 	if err != nil {

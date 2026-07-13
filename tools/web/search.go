@@ -13,8 +13,8 @@ import (
 	"github.com/loomagent/loom"
 )
 
-// Searcher performs provider-specific web searches behind a stable interface.
-type Searcher interface {
+// WebSearcher performs provider-specific web searches behind a stable interface.
+type WebSearcher interface {
 	Search(ctx context.Context, request SearchRequest) (SearchResponse, error)
 }
 
@@ -47,10 +47,10 @@ type SearchToolOptions struct {
 	MaxLimit     int
 }
 
-// NewSearchTool exposes Searcher as a Loom tool.
-func NewSearchTool(searcher Searcher, options SearchToolOptions) (loom.Tool, error) {
+// NewSearchTool exposes WebSearcher as a Loom tool.
+func NewSearchTool(searcher WebSearcher, options SearchToolOptions) (loom.Tool, error) {
 	if searcher == nil {
-		return nil, errors.New("web: Searcher is required")
+		return nil, errors.New("web: WebSearcher is required")
 	}
 	name := strings.TrimSpace(options.Name)
 	if name == "" {

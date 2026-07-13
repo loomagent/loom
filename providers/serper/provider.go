@@ -57,6 +57,8 @@ type Client struct {
 	endpoint string
 }
 
+var _ web.WebSearcher = (*Client)(nil)
+
 // New creates a Serper search provider.
 func New(apiKey string, options ...Option) *Client {
 	c := &Client{
@@ -90,7 +92,7 @@ type result struct {
 	Position int    `json:"position,omitempty"`
 }
 
-// Search implements web.Searcher.
+// Search implements web.WebSearcher.
 func (c *Client) Search(ctx context.Context, request web.SearchRequest) (web.SearchResponse, error) {
 	query := strings.TrimSpace(request.Query)
 	if query == "" {

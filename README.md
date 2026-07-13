@@ -176,7 +176,7 @@ reviewer, criteria, and instructions to the application.
 
 ## Web tools
 
-The `tools/web` package defines normalized `Searcher` and `Reader` interfaces
+The `tools/web` package defines normalized `WebSearcher` and `WebReader` interfaces
 plus Loom tool wrappers. Provider implementations own network access, caching,
 authentication, and retries. The public tool layer does not assign citation
 IDs, persist documents, or depend on a search vendor.
