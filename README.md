@@ -72,6 +72,7 @@ func main() {
 - `github.com/loomagent/loom/handlerregistry`: concurrent, explicit handler registration
 - `github.com/loomagent/loom/loomfs`: filesystem-backed context and workspace utilities
 - `github.com/loomagent/loom/modelfactory`: storage-independent model construction and configuration loading
+- `github.com/loomagent/loom/modelprobe`: behavioral model capability probing and declaration comparison
 - `github.com/loomagent/loom/contextpolicy`: composable context construction and audit decisions
 - `github.com/loomagent/loom/react`: provider-neutral ReAct runtime and policy interfaces
 - `github.com/loomagent/loom/react/review`: generic ReAct quality gate
@@ -110,6 +111,34 @@ Applications that select models by ID can implement
 `modelfactory.ConfigLoader` and use `modelfactory.Factory`. A loader may read
 from a file, environment variables, a secrets manager, or a database without
 coupling Loom to that storage system.
+
+## Model capability probing
+
+`modelprobe` observes real API behavior instead of trusting configuration. It
+tests default and explicit reasoning behavior, accepted reasoning-effort values,
+and native JSON object and JSON Schema output. Reports distinguish positive,
+negative, and operationally inconclusive checks, carry a versioned JSON schema,
+and can be compared with declared `loom.ModelCapabilities` without a database:
+
+```go
+base := modelfactory.Config{
+	Provider: modelfactory.ProviderOpenRouter,
+	APIKey:   os.Getenv("OPENROUTER_API_KEY"),
+	Model:    "openai/gpt-5",
+}
+
+report, err := modelprobe.Probe(ctx, modelprobe.BuilderFunc(
+	func(_ context.Context, capabilities loom.ModelCapabilities) (loom.ChatModel, error) {
+		cfg := base
+		cfg.Capabilities = &capabilities
+		return modelfactory.Build(cfg)
+	},
+), modelprobe.Options{})
+```
+
+By default, request errors remain inconclusive and never silently become an
+"unsupported" capability. Applications may provide an `ErrorClassifier` when
+their provider exposes a reliable unsupported-parameter error classification.
 
 ## Workspace tools
 
