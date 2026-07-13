@@ -153,8 +153,9 @@ func (s *TurnSession) ObserveSearch(_ context.Context, obs SearchObservation) (Q
 			Date:       strings.TrimSpace(hit.Date),
 			DateSource: strings.TrimSpace(hit.DateSource),
 			Relevant:   hit.Relevant,
+			SrcID:      strings.TrimSpace(hit.SrcID),
 		}
-		if qh.URL != "" {
+		if qh.URL != "" && qh.SrcID == "" {
 			if src, ok := s.sourceByURL[NormalizeURL(qh.URL)]; ok {
 				qh.SrcID = src.ID
 			}

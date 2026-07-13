@@ -66,6 +66,13 @@ func main() {
 }
 ```
 
+Runnable ReAct examples are available in [`examples/react`](examples/react):
+
+- a minimal calculator and time tool loop;
+- one-turn web deep research with stable citations;
+- an interactive multi-turn research conversation that reuses `SRC-N`
+  references and workspace evidence across turns.
+
 ## Packages
 
 - `github.com/loomagent/loom`: runtime, events, writers, sinks, tools, and model abstractions

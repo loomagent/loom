@@ -12,6 +12,27 @@ import (
 	"github.com/loomagent/loom"
 )
 
+func TestObserveSearchPreservesExplicitSourceID(t *testing.T) {
+	ws, err := OpenWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := ws.BeginTurn(TurnMeta{ConversationID: "conv", TurnIndex: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := session.ObserveSearch(context.Background(), SearchObservation{
+		Query: "query",
+		Hits:  []SearchHit{{URL: "https://example.com", SrcID: "SRC-7", Relevant: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Hits) != 1 || record.Hits[0].SrcID != "SRC-7" {
+		t.Fatalf("record = %+v", record)
+	}
+}
+
 func TestTurnSessionMaterializesSearchSourceLinks(t *testing.T) {
 	root := t.TempDir()
 	ws, err := OpenWorkspace(root)

@@ -51,6 +51,10 @@ type SearchHit struct {
 	Date       string
 	DateSource string
 	Relevant   bool
+	// SrcID is an optional stable source reference assigned before the search
+	// observation is persisted. When empty, TurnSession falls back to a source
+	// already known for the URL.
+	SrcID string
 }
 
 type SourceObservation struct {
