@@ -75,6 +75,7 @@ func main() {
 - `github.com/loomagent/loom/providers/ark`: Volcengine Ark provider
 - `github.com/loomagent/loom/providers/deepseek`: DeepSeek provider
 - `github.com/loomagent/loom/providers/openrouter`: OpenRouter provider
+- `github.com/loomagent/loom/tools/web/sourcedate`: provider-neutral publication-date extraction
 - `github.com/loomagent/loom/tools/workspace`: in-memory workspace backend and file tools
 - `github.com/loomagent/loom/tools/workspacebash`: validated, read-only shell tool contract
 - `github.com/loomagent/loom/tools/workspacebash/gobash`: pure-Go workspace shell runner
@@ -140,6 +141,16 @@ bashTool := workspacebash.NewTool(workspacebash.ToolOptions{
 
 The built-in command set includes `cat`, `grep`, `jq`, `find`, `ls`, `sed`,
 `head`, `tail`, `sort`, `uniq`, `xargs`, and other read-only text utilities.
+
+## Source dates
+
+`tools/web/sourcedate` conservatively extracts publication dates from the top
+of Markdown documents. It recognizes labelled and standalone English, ISO, and
+Chinese date formats while rejecting implausibly old or future dates. Results
+include the original text, parsed UTC date, evidence source, and confidence.
+
+The package only parses document content. Search-provider metadata and source
+registry policies intentionally remain outside this package.
 
 ## Project status
 
