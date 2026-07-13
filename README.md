@@ -78,6 +78,8 @@ func main() {
 - `github.com/loomagent/loom/providers/ark`: Volcengine Ark provider
 - `github.com/loomagent/loom/providers/deepseek`: DeepSeek provider
 - `github.com/loomagent/loom/providers/openrouter`: OpenRouter provider
+- `github.com/loomagent/loom/providers/serper`: Serper web-search provider
+- `github.com/loomagent/loom/providers/unifuncs`: Unifuncs document-reader provider
 - `github.com/loomagent/loom/tools/web/sourcedate`: provider-neutral publication-date extraction
 - `github.com/loomagent/loom/tools/web`: provider-neutral search and reader contracts
 - `github.com/loomagent/loom/tools/calculator`: sandboxed Starlark calculator
@@ -178,6 +180,31 @@ The `tools/web` package defines normalized `Searcher` and `Reader` interfaces
 plus Loom tool wrappers. Provider implementations own network access, caching,
 authentication, and retries. The public tool layer does not assign citation
 IDs, persist documents, or depend on a search vendor.
+
+Serper and Unifuncs are available as optional provider implementations. Their
+clients directly satisfy the provider-neutral interfaces:
+
+```go
+searchTool, err := web.NewSearchTool(
+	serper.New(os.Getenv("SERPER_API_KEY")),
+	web.SearchToolOptions{},
+)
+if err != nil {
+	return err
+}
+
+readerTool, err := web.NewReaderTool(
+	unifuncs.New(os.Getenv("UNIFUNCS_API_KEY")),
+	web.ReaderToolOptions{},
+)
+if err != nil {
+	return err
+}
+```
+
+The Unifuncs provider includes request throttling, bounded retries for transient
+failures, `Retry-After` handling, and publication-date extraction. The Serper
+provider preserves vendor date and result-position fields as result metadata.
 
 ## Built-in utility tools
 
