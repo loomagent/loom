@@ -79,6 +79,7 @@ func main() {
 - `github.com/loomagent/loom/proreportbench`: offline report-agent trace and artifact evaluation
 - `github.com/loomagent/loom/prompttemplate`: explicit prompt placeholder validation and rendering
 - `github.com/loomagent/loom/sourceregistry`: storage-neutral source deduplication and stable citation IDs
+- `github.com/loomagent/loom/sourceregistry/sourceregistrytest`: reusable Store conformance suite
 - `github.com/loomagent/loom/providers/ark`: Volcengine Ark provider
 - `github.com/loomagent/loom/providers/deepseek`: DeepSeek provider
 - `github.com/loomagent/loom/providers/openrouter`: OpenRouter provider
@@ -235,6 +236,20 @@ The Store contract requires per-namespace linearizability, unique URL and
 sequence keys, contiguous allocation, ordered results, and all-or-nothing batch
 commits. A custom URL normalizer can implement product-specific rules such as
 tracking-parameter removal.
+
+Database adapters can run the same conformance suite used by `MemoryStore`:
+
+```go
+func TestStoreContract(t *testing.T) {
+	sourceregistrytest.TestStore(t, func(t *testing.T) sourceregistry.Store {
+		return newTestStore(t)
+	})
+}
+```
+
+The suite checks empty batches, ordered contiguous allocation, metadata merging,
+namespace isolation, returned-value aliasing, canceled transactions, and
+linearizable concurrent registration of both distinct and identical sources.
 
 ## ReAct runtime
 
