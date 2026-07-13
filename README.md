@@ -78,6 +78,7 @@ func main() {
 - `github.com/loomagent/loom/react/review`: generic ReAct quality gate
 - `github.com/loomagent/loom/proreportbench`: offline report-agent trace and artifact evaluation
 - `github.com/loomagent/loom/prompttemplate`: explicit prompt placeholder validation and rendering
+- `github.com/loomagent/loom/sourceregistry`: storage-neutral source deduplication and stable citation IDs
 - `github.com/loomagent/loom/providers/ark`: Volcengine Ark provider
 - `github.com/loomagent/loom/providers/deepseek`: DeepSeek provider
 - `github.com/loomagent/loom/providers/openrouter`: OpenRouter provider
@@ -206,6 +207,34 @@ include the original text, parsed UTC date, evidence source, and confidence.
 
 The package only parses document content. Search-provider metadata and source
 registry policies intentionally remain outside this package.
+
+## Source registry
+
+`sourceregistry` assigns stable `SRC-N` references within a conversation or
+other namespace. It normalizes URLs, deduplicates within and across batches,
+allocates new references consecutively in first-seen order, preserves metadata
+provenance, and upgrades full-content availability monotonically:
+
+```go
+store := sourceregistry.NewMemoryStore()
+registry, err := sourceregistry.New("conversation-123", store)
+if err != nil {
+	return err
+}
+
+refs, err := registry.EnsureBatch(ctx, []sourceregistry.Input{
+	{URL: "https://example.com/report", Origin: "web_search", Title: "Report"},
+	{URL: "https://example.com/report#results", Origin: "web_reader", HasContent: true},
+})
+```
+
+The two observations above share one sequence and content path. `Created` is
+true only on the first input, so it can be counted without double-counting.
+Applications can replace `MemoryStore` with a transactional database Store.
+The Store contract requires per-namespace linearizability, unique URL and
+sequence keys, contiguous allocation, ordered results, and all-or-nothing batch
+commits. A custom URL normalizer can implement product-specific rules such as
+tracking-parameter removal.
 
 ## ReAct runtime
 
