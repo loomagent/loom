@@ -72,10 +72,16 @@ func main() {
 - `github.com/loomagent/loom/handlerregistry`: concurrent, explicit handler registration
 - `github.com/loomagent/loom/loomfs`: filesystem-backed context and workspace utilities
 - `github.com/loomagent/loom/modelfactory`: storage-independent model construction and configuration loading
+- `github.com/loomagent/loom/contextpolicy`: composable context construction and audit decisions
+- `github.com/loomagent/loom/react`: provider-neutral ReAct runtime and policy interfaces
+- `github.com/loomagent/loom/react/review`: generic ReAct quality gate
 - `github.com/loomagent/loom/providers/ark`: Volcengine Ark provider
 - `github.com/loomagent/loom/providers/deepseek`: DeepSeek provider
 - `github.com/loomagent/loom/providers/openrouter`: OpenRouter provider
 - `github.com/loomagent/loom/tools/web/sourcedate`: provider-neutral publication-date extraction
+- `github.com/loomagent/loom/tools/web`: provider-neutral search and reader contracts
+- `github.com/loomagent/loom/tools/calculator`: sandboxed Starlark calculator
+- `github.com/loomagent/loom/tools/gettime`: fixed Beijing-time tool
 - `github.com/loomagent/loom/tools/workspace`: in-memory workspace backend and file tools
 - `github.com/loomagent/loom/tools/workspacebash`: validated, read-only shell tool contract
 - `github.com/loomagent/loom/tools/workspacebash/gobash`: pure-Go workspace shell runner
@@ -151,6 +157,34 @@ include the original text, parsed UTC date, evidence source, and confidence.
 
 The package only parses document content. Search-provider metadata and source
 registry policies intentionally remain outside this package.
+
+## ReAct runtime
+
+`react.Run` handles streaming model calls, tool execution, per-tool and total
+budgets, finish reasons, and a final tool-free soft landing. Applications can
+extend it without forking the loop through three small policy interfaces:
+
+- `StepPolicy` adjusts context, visible tools, and tool choice before a call.
+- `AfterToolsPolicy` reviews results, changes context, or stops the loop.
+- `FinishPolicy` accepts or rejects a model's attempt to finish.
+
+`contextpolicy.ReactStepPolicy` adapts composable context builders to the loop.
+`react/review.Policy` supplies a stateful quality gate while leaving the actual
+reviewer, criteria, and instructions to the application.
+
+## Web tools
+
+The `tools/web` package defines normalized `Searcher` and `Reader` interfaces
+plus Loom tool wrappers. Provider implementations own network access, caching,
+authentication, and retries. The public tool layer does not assign citation
+IDs, persist documents, or depend on a search vendor.
+
+## Built-in utility tools
+
+`tools/calculator` evaluates expressions in a restricted Starlark environment
+and uses ordinary JSON request/response structs. `tools/gettime` intentionally
+returns a fixed Asia/Shanghai local time alongside UTC; models cannot override
+the timezone through tool arguments.
 
 ## Project status
 

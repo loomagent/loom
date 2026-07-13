@@ -11,6 +11,7 @@ require (
 	github.com/volcengine/volcengine-go-sdk v1.2.40
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
+	go.starlark.net v0.0.0-20260708150628-5395d018f003
 	mvdan.cc/sh/v3 v3.13.1
 )
 
@@ -36,6 +37,6 @@ require (
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/term v0.41.0 // indirect
-	google.golang.org/protobuf v1.31.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v2 v2.2.8 // indirect
 )
