@@ -75,6 +75,7 @@ func main() {
 - `github.com/loomagent/loom/contextpolicy`: composable context construction and audit decisions
 - `github.com/loomagent/loom/react`: provider-neutral ReAct runtime and policy interfaces
 - `github.com/loomagent/loom/react/review`: generic ReAct quality gate
+- `github.com/loomagent/loom/proreportbench`: offline report-agent trace and artifact evaluation
 - `github.com/loomagent/loom/providers/ark`: Volcengine Ark provider
 - `github.com/loomagent/loom/providers/deepseek`: DeepSeek provider
 - `github.com/loomagent/loom/providers/openrouter`: OpenRouter provider
@@ -173,6 +174,14 @@ extend it without forking the loop through three small policy interfaces:
 `contextpolicy.ReactStepPolicy` adapts composable context builders to the loop.
 `react/review.Policy` supplies a stateful quality gate while leaving the actual
 reviewer, criteria, and instructions to the application.
+
+## Report-agent evaluation
+
+`proreportbench` performs offline comparisons between report-agent traces and
+reference marker traces. It normalizes Loom turns, item arrays, and generic
+JSON item trees into signals, checks required ordering and forbidden events,
+builds batch comparison reports, and extracts metrics from stable research
+artifacts. It has no database, model, tool, or network dependency.
 
 ## Web tools
 
