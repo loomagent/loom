@@ -76,6 +76,7 @@ func main() {
 - `github.com/loomagent/loom/react`: provider-neutral ReAct runtime and policy interfaces
 - `github.com/loomagent/loom/react/review`: generic ReAct quality gate
 - `github.com/loomagent/loom/proreportbench`: offline report-agent trace and artifact evaluation
+- `github.com/loomagent/loom/prompttemplate`: explicit prompt placeholder validation and rendering
 - `github.com/loomagent/loom/providers/ark`: Volcengine Ark provider
 - `github.com/loomagent/loom/providers/deepseek`: DeepSeek provider
 - `github.com/loomagent/loom/providers/openrouter`: OpenRouter provider
@@ -113,9 +114,8 @@ coupling Loom to that storage system.
 ## Workspace tools
 
 The workspace package provides `ls`, `read_file`, `write_file`, and `edit_file`
-as Loom tools over a small storage interface. Its in-memory backend enforces
-read-before-write for existing files and is useful in tests or ephemeral agent
-runs:
+as Loom tools over a small storage interface. Its in-memory and local filesystem
+backends enforce read-before-write for existing files:
 
 ```go
 backend := workspace.NewInMemoryBackend()
@@ -127,6 +127,23 @@ if err := workspace.RegisterAll(tools, backend); err != nil {
 
 Applications can implement `workspace.Backend` to add their own persistent
 storage without introducing an ORM dependency into Loom.
+
+For a persistent local workspace, pass the root explicitly. The backend confines
+all access beneath that directory, including symbolic-link resolution:
+
+```go
+backend, err := workspace.OpenLocalBackend("./agent-workspace")
+if err != nil {
+	return err
+}
+defer backend.Close()
+```
+
+## Prompt templates
+
+`prompttemplate` validates that required placeholders occur exactly once before
+rendering them. Built-in placeholders cover user input, assistant answers, and
+conversation context; callers may also use arbitrary placeholder strings.
 
 ## Read-only workspace shell
 
