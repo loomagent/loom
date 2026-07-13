@@ -76,6 +76,8 @@ func main() {
 - `github.com/loomagent/loom/providers/deepseek`: DeepSeek provider
 - `github.com/loomagent/loom/providers/openrouter`: OpenRouter provider
 - `github.com/loomagent/loom/tools/workspace`: in-memory workspace backend and file tools
+- `github.com/loomagent/loom/tools/workspacebash`: validated, read-only shell tool contract
+- `github.com/loomagent/loom/tools/workspacebash/gobash`: pure-Go workspace shell runner
 
 The architecture and original design decisions are documented in
 [DESIGN.md](DESIGN.md).
@@ -115,6 +117,29 @@ if err := workspace.RegisterAll(tools, backend); err != nil {
 
 Applications can implement `workspace.Backend` to add their own persistent
 storage without introducing an ORM dependency into Loom.
+
+## Read-only workspace shell
+
+`workspacebash` exposes a constrained shell tool for agents, while `gobash`
+executes its allowlisted commands entirely in process. Filesystem access is
+confined to an `os.Root`; writes, host command fallback, command substitution,
+background jobs, and non-allowlisted commands are rejected.
+
+```go
+runner, err := gobash.New(gobash.Options{WorkspaceDir: workspaceDir})
+if err != nil {
+	return err
+}
+defer runner.Close()
+
+bashTool := workspacebash.NewTool(workspacebash.ToolOptions{
+	Runner:      runner,
+	Description: "Search and inspect files in the read-only workspace.",
+})
+```
+
+The built-in command set includes `cat`, `grep`, `jq`, `find`, `ls`, `sed`,
+`head`, `tail`, `sort`, `uniq`, `xargs`, and other read-only text utilities.
 
 ## Project status
 
