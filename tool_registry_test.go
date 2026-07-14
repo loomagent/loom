@@ -16,12 +16,12 @@ func (*registryTestTool) Invoke(context.Context, string) (string, error) {
 }
 
 func TestValidateToolName(t *testing.T) {
-	for _, name := range []string{"calculator", "web_search", "read-file", "Tool42", strings.Repeat("a", maxToolNameLength)} {
+	for _, name := range []string{"a", "calculator", "web_search", "tool42", "tool_2", strings.Repeat("a", maxToolNameLength)} {
 		if err := ValidateToolName(name); err != nil {
 			t.Errorf("ValidateToolName(%q): %v", name, err)
 		}
 	}
-	for _, name := range []string{"", " web_search", "web_search ", "web.search", "网页搜索", "name/with/slash", strings.Repeat("a", maxToolNameLength+1)} {
+	for _, name := range []string{"", " web_search", "web_search ", "web-search", "web.search", "WebSearch", "1st_tool", "_private", "网页搜索", "name/with/slash", strings.Repeat("a", maxToolNameLength+1)} {
 		if err := ValidateToolName(name); err == nil {
 			t.Errorf("ValidateToolName(%q) unexpectedly succeeded", name)
 		}

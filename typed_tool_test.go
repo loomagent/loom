@@ -65,7 +65,7 @@ func TestToolContractErrors(t *testing.T) {
 	if _, err := NewToolContract[typedToolRequest](""); err == nil || !strings.Contains(err.Error(), "name is required") {
 		t.Fatalf("empty-name error = %v", err)
 	}
-	for _, name := range []string{" invalid", "invalid.name", strings.Repeat("a", maxToolNameLength+1)} {
+	for _, name := range []string{" invalid", "invalid.name", "invalid-name", "InvalidName", "1st_tool", strings.Repeat("a", maxToolNameLength+1)} {
 		if _, err := NewToolContract[typedToolRequest](name); err == nil || !strings.Contains(err.Error(), "invalid tool name") {
 			t.Errorf("invalid name %q error = %v", name, err)
 		}

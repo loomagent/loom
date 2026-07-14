@@ -121,8 +121,9 @@ through `float64`.
 handlers remain an internal implementation detail.
 
 Tool names are normally package constants. `ValidateToolName` and
-`NewToolContract` require 1–64 ASCII letters, digits, underscores, or hyphens;
-`ToolRegistry.Register` applies the same validation and rejects duplicate names.
+`NewToolContract` require 1–64 characters matching
+`^[a-z][a-z0-9_]{0,63}$`; `ToolRegistry.Register` applies the same validation
+and rejects duplicate names.
 
 Errors expose `ToolArgumentError` metadata and render a bounded, compact
 non-JSON `expected arguments` contract for model self-correction without

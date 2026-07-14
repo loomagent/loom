@@ -10,17 +10,18 @@ import (
 
 const maxToolNameLength = 64
 
-var toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var toolNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // ValidateToolName reports whether name is portable across supported model
-// providers. Tool names contain 1 to 64 ASCII letters, digits, underscores, or
-// hyphens. Validation is exact: surrounding whitespace is not trimmed.
+// providers. Tool names contain 1 to 64 characters, start with a lowercase
+// ASCII letter, and continue with lowercase ASCII letters, digits, or
+// underscores. Validation is exact: surrounding whitespace is not trimmed.
 func ValidateToolName(name string) error {
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
 	if !toolNamePattern.MatchString(name) {
-		return fmt.Errorf("name must contain only ASCII letters, digits, underscores, or hyphens")
+		return fmt.Errorf("name must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, or underscores")
 	}
 	if len(name) > maxToolNameLength {
 		return fmt.Errorf("name exceeds %d characters", maxToolNameLength)
