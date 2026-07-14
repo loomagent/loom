@@ -57,16 +57,12 @@ type editFileRequest struct {
 //
 // LLM 用 ls(path) 列目录;"目录"是虚拟的,从已有文件 path 派生。
 func NewLs(b Backend) loom.Tool {
-	params := loom.MustSchemaFor[lsRequest]()
+	contract := loom.MustToolContract[lsRequest](ToolNameLs)
 	desc := "List files and virtual directories under the given path. " +
 		"Path must be absolute. Returns entries sorted with directories first."
-	return loom.NewTool(ToolNameLs, desc, params, func(ctx context.Context, args string) (string, error) {
+	return loom.NewTypedTool(contract, desc, func(ctx context.Context, in lsRequest) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.ls")
 		defer span.End()
-		in, err := loom.DecodeToolArgumentsWithSchemaFor[lsRequest](ToolNameLs, args, params)
-		if err != nil {
-			return failTool(span, err)
-		}
 		span.SetAttributes(attribute.String(attrWorkspacePath, in.Path))
 		infos, err := b.Ls(ctx, in.Path)
 		if err != nil {
@@ -82,18 +78,14 @@ func NewLs(b Backend) loom.Tool {
 // 默认带 cat -n 风格行号(`     1→content` 格式),跟 Claude Code 一致。
 // offset 1-based,limit=0 走 DefaultReadLimit 兜底。
 func NewReadFile(b Backend) loom.Tool {
-	params := loom.MustSchemaFor[readFileRequest]()
+	contract := loom.MustToolContract[readFileRequest](ToolNameReadFile)
 	desc := "Read a file from the workspace. Returns content with cat -n style line numbers " +
 		"(format: '     N→content'). Default reads up to 2000 lines starting from line 1; " +
 		"use offset/limit to paginate large files. ALWAYS call read_file before write_file or " +
 		"edit_file on an existing path."
-	return loom.NewTool(ToolNameReadFile, desc, params, func(ctx context.Context, args string) (string, error) {
+	return loom.NewTypedTool(contract, desc, func(ctx context.Context, in readFileRequest) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.read_file")
 		defer span.End()
-		in, err := loom.DecodeToolArgumentsWithSchemaFor[readFileRequest](ToolNameReadFile, args, params)
-		if err != nil {
-			return failTool(span, err)
-		}
 		span.SetAttributes(
 			attribute.String(attrWorkspacePath, in.Path),
 			attribute.Int64("workspace.offset", int64(in.Offset)),
@@ -114,17 +106,13 @@ func NewReadFile(b Backend) loom.Tool {
 // Output 只返元数据 {path, bytes},content 已在 loom 内核写入的 tool_call.arguments,
 // 不需要在 result 里重复(hydrate 时直接读 arguments)。
 func NewWriteFile(b Backend) loom.Tool {
-	params := loom.MustSchemaFor[writeFileRequest]()
+	contract := loom.MustToolContract[writeFileRequest](ToolNameWriteFile)
 	desc := "Write a file to the workspace, creating or overwriting it. " +
 		"For an existing path you MUST call read_file first (the tool will error otherwise) " +
 		"so you don't blindly overwrite content."
-	return loom.NewTool(ToolNameWriteFile, desc, params, func(ctx context.Context, args string) (string, error) {
+	return loom.NewTypedTool(contract, desc, func(ctx context.Context, in writeFileRequest) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.write_file")
 		defer span.End()
-		in, err := loom.DecodeToolArgumentsWithSchemaFor[writeFileRequest](ToolNameWriteFile, args, params)
-		if err != nil {
-			return failTool(span, err)
-		}
 		span.SetAttributes(
 			attribute.String(attrWorkspacePath, in.Path),
 			attribute.Int64("workspace.bytes", int64(len(in.Content))),
@@ -146,18 +134,14 @@ func NewWriteFile(b Backend) loom.Tool {
 // 要求 path 已存在 + 调用前已 read_file。
 // OldString 在文件中出现 0 次 → 报错;>1 次且 replace_all=false → 报错(LLM 必须显式提供更长上下文或开 replace_all)。
 func NewEditFile(b Backend) loom.Tool {
-	params := loom.MustSchemaFor[editFileRequest]()
+	contract := loom.MustToolContract[editFileRequest](ToolNameEditFile)
 	desc := "Perform an exact string replacement on an existing file. " +
 		"You MUST call read_file on the path first. " +
 		"If old_string is not unique, either provide more surrounding context to make it unique, " +
 		"or set replace_all=true."
-	return loom.NewTool(ToolNameEditFile, desc, params, func(ctx context.Context, args string) (string, error) {
+	return loom.NewTypedTool(contract, desc, func(ctx context.Context, in editFileRequest) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.edit_file")
 		defer span.End()
-		in, err := loom.DecodeToolArgumentsWithSchemaFor[editFileRequest](ToolNameEditFile, args, params)
-		if err != nil {
-			return failTool(span, err)
-		}
 		span.SetAttributes(
 			attribute.String(attrWorkspacePath, in.Path),
 			attribute.Bool("workspace.replace_all", in.ReplaceAll),

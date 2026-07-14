@@ -24,13 +24,9 @@ type readerRequest struct {
 }
 
 func newSearchTool(searcher web.WebSearcher) loom.Tool {
-	params := loom.MustSchemaFor[searchRequest]()
-	return loom.NewTool("web_search", "Search the web and assign stable SRC-N references to every result.", params,
-		func(ctx context.Context, arguments string) (string, error) {
-			input, err := loom.DecodeToolArgumentsWithSchemaFor[searchRequest]("web_search", arguments, params)
-			if err != nil {
-				return "", err
-			}
+	contract := loom.MustToolContract[searchRequest]("web_search")
+	return loom.NewTypedTool(contract, "Search the web and assign stable SRC-N references to every result.",
+		func(ctx context.Context, input searchRequest) (string, error) {
 			input.Query = strings.TrimSpace(input.Query)
 			if input.Limit == 0 {
 				input.Limit = 5
@@ -90,13 +86,9 @@ func newSearchTool(searcher web.WebSearcher) loom.Tool {
 }
 
 func newReaderTool(reader web.WebReader) loom.Tool {
-	params := loom.MustSchemaFor[readerRequest]()
-	return loom.NewTool("web_reader", "Read a source, save its Markdown in the workspace, and return its stable SRC-N reference.", params,
-		func(ctx context.Context, arguments string) (string, error) {
-			input, err := loom.DecodeToolArgumentsWithSchemaFor[readerRequest]("web_reader", arguments, params)
-			if err != nil {
-				return "", err
-			}
+	contract := loom.MustToolContract[readerRequest]("web_reader")
+	return loom.NewTypedTool(contract, "Read a source, save its Markdown in the workspace, and return its stable SRC-N reference.",
+		func(ctx context.Context, input readerRequest) (string, error) {
 			input.URL = strings.TrimSpace(input.URL)
 			document, err := reader.Read(ctx, web.ReadRequest{URL: input.URL})
 			if err != nil {

@@ -32,19 +32,13 @@ type response struct {
 // New constructs a calculator Loom tool.
 func New() loom.Tool {
 	description := "Evaluate a mathematical expression in a restricted Starlark environment. Supports arithmetic, parentheses, and functions from the Starlark math module."
-	return loom.NewTool(ToolName, description, loom.MustSchemaFor[request](), invoke)
+	return loom.NewTypedTool(loom.MustToolContract[request](ToolName), description, invoke)
 }
 
-func invoke(ctx context.Context, argumentsJSON string) (string, error) {
+func invoke(ctx context.Context, input request) (string, error) {
 	ctx, span := otel.Tracer("github.com/loomagent/loom/tools/calculator").Start(ctx, "calculator.evaluate")
 	defer span.End()
 
-	input, err := loom.DecodeToolArgumentsFor[request](ToolName, argumentsJSON)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return "", err
-	}
 	input.Expression = strings.TrimSpace(input.Expression)
 	span.SetAttributes(attribute.String("calculator.expression", input.Expression))
 

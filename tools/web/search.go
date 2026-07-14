@@ -74,15 +74,14 @@ func NewSearchTool(searcher WebSearcher, options SearchToolOptions) (loom.Tool, 
 	if description == "" {
 		description = "Search the web for current information and return normalized results with titles, URLs, snippets, and publication dates when available."
 	}
-	params := loom.MustSchemaFor[searchToolRequest]()
-	params.Properties["limit"].Description = fmt.Sprintf("Maximum results to return (default %d, max %d).", defaultLimit, maxLimit)
-	maximum := float64(maxLimit)
-	params.Properties["limit"].Maximum = &maximum
-	return loom.NewTool(name, description, params, func(ctx context.Context, arguments string) (string, error) {
-		input, err := loom.DecodeToolArgumentsWithSchemaFor[searchToolRequest](name, arguments, params)
-		if err != nil {
-			return "", err
-		}
+	contract, err := loom.NewToolContract[searchToolRequest](name,
+		loom.WithArgumentDescription("limit", fmt.Sprintf("Maximum results to return (default %d, max %d).", defaultLimit, maxLimit)),
+		loom.WithArgumentMaximum("limit", float64(maxLimit)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return loom.NewTypedTool(contract, description, func(ctx context.Context, input searchToolRequest) (string, error) {
 		input.Query = strings.TrimSpace(input.Query)
 		if input.Limit == 0 {
 			input.Limit = defaultLimit
@@ -96,5 +95,5 @@ func NewSearchTool(searcher WebSearcher, options SearchToolOptions) (loom.Tool, 
 			return "", fmt.Errorf("web search: marshal response: %w", err)
 		}
 		return string(data), nil
-	}), nil
+	}, loom.WithRequiresNetwork()), nil
 }

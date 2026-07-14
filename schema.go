@@ -97,35 +97,45 @@ func DecodeToolArgumentsWithSchema[T any](argumentsJSON string, schema *jsonsche
 // DecodeToolArgumentsWithSchemaFor is DecodeToolArgumentsWithSchema with a
 // tool name included in validation errors.
 func DecodeToolArgumentsWithSchemaFor[T any](toolName, argumentsJSON string, schema *jsonschema.Schema) (T, error) {
+	return decodeToolArguments[T](toolName, argumentsJSON, schema, nil, "")
+}
+
+func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonschema.Schema, resolved *jsonschema.Resolved, expected string) (T, error) {
 	var zero T
 	if schema == nil {
 		return zero, fmt.Errorf("loom: tool argument schema is nil")
+	}
+	if expected == "" {
+		expected = summarizeExpectedInput(schema)
 	}
 
 	decoder := json.NewDecoder(strings.NewReader(argumentsJSON))
 	var instance any
 	if err := decoder.Decode(&instance); err != nil {
-		return zero, newJSONToolArgumentError(toolName, schema, err)
+		return zero, newJSONToolArgumentError(toolName, expected, err)
 	}
 	if err := requireJSONEOF(decoder); err != nil {
-		return zero, newJSONToolArgumentError(toolName, schema, err)
+		return zero, newJSONToolArgumentError(toolName, expected, err)
 	}
 
-	resolved, err := schema.Resolve(nil)
-	if err != nil {
-		return zero, fmt.Errorf("loom: resolve tool argument schema: %w", err)
+	if resolved == nil {
+		var err error
+		resolved, err = schema.Resolve(nil)
+		if err != nil {
+			return zero, fmt.Errorf("loom: resolve tool argument schema: %w", err)
+		}
 	}
 	if err := resolved.Validate(instance); err != nil {
-		return zero, newSchemaToolArgumentError(toolName, schema, instance, err)
+		return zero, newSchemaToolArgumentError(toolName, schema, expected, instance, err)
 	}
 
 	var arguments T
 	decoder = json.NewDecoder(strings.NewReader(argumentsJSON))
 	if err := decoder.Decode(&arguments); err != nil {
-		return zero, newJSONToolArgumentError(toolName, schema, err)
+		return zero, newJSONToolArgumentError(toolName, expected, err)
 	}
 	if err := validateToolArgumentStruct(arguments); err != nil {
-		return zero, newStructToolArgumentError(toolName, schema, err)
+		return zero, newStructToolArgumentError(toolName, expected, err)
 	}
 	return arguments, nil
 }

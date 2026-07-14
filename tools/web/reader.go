@@ -60,12 +60,11 @@ func NewReaderTool(reader WebReader, options ReaderToolOptions) (loom.Tool, erro
 	if description == "" {
 		description = "Read an HTTP or HTTPS URL and return normalized Markdown content and document metadata."
 	}
-	params := loom.MustSchemaFor[readerToolRequest]()
-	return loom.NewTool(name, description, params, func(ctx context.Context, arguments string) (string, error) {
-		input, err := loom.DecodeToolArgumentsWithSchemaFor[readerToolRequest](name, arguments, params)
-		if err != nil {
-			return "", err
-		}
+	contract, err := loom.NewToolContract[readerToolRequest](name)
+	if err != nil {
+		return nil, err
+	}
+	return loom.NewTypedTool(contract, description, func(ctx context.Context, input readerToolRequest) (string, error) {
 		input.URL = strings.TrimSpace(input.URL)
 		parsed, err := url.ParseRequestURI(input.URL)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {

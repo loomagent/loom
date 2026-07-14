@@ -61,20 +61,8 @@ func WithRequiresNetwork() ToolOption {
 
 // NewTool 函数式构造一个 Tool。
 //
-// 适用于"工具实现就是一个函数"的常见场景,免去实现 Tool 接口的样板。
-//
-//	type calculatorRequest struct {
-//	    Expression string `json:"expression" jsonschema:"Mathematical expression to evaluate." validate:"min=1,notblank"`
-//	}
-//
-//	calc := loom.NewTool("calculator",
-//	    "Evaluate a math expression.",
-//	    loom.MustSchemaFor[calculatorRequest](),
-//	    func(ctx context.Context, args string) (string, error) {
-//	        // ... do work
-//	        return `{"result": "42"}`, nil
-//	    },
-//	)
+// 适用于无参数工具或需要直接处理原始 JSON 的低层场景。struct 参数工具优先使用
+// ToolContract + NewTypedTool,避免重复生成和解析 Schema。
 //
 // params 为 nil 表示工具不接受入参。
 func NewTool(name, description string, params *jsonschema.Schema, fn InvokeFunc, opts ...ToolOption) Tool {

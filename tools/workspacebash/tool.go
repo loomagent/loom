@@ -58,11 +58,8 @@ func NewTool(opts ToolOptions) loom.Tool {
 	if params == nil {
 		params = DefaultParameters("要执行的 shell 命令,例如 `grep -rn \"keyword\" /raw` 或 `jq -r .url /sources.jsonl | head -20`。")
 	}
-	return loom.NewTool(ToolName, opts.Description, params, func(ctx context.Context, raw string) (string, error) {
-		args, err := loom.DecodeToolArgumentsWithSchemaFor[commandRequest](ToolName, raw, params)
-		if err != nil {
-			return "", err
-		}
+	contract := loom.MustToolContract[commandRequest](ToolName, loom.WithArgumentSchema(params))
+	return loom.NewTypedTool(contract, opts.Description, func(ctx context.Context, args commandRequest) (string, error) {
 		command := strings.TrimSpace(args.Command)
 		if err := validator.Validate(command); err != nil {
 			// 校验拒绝当作工具错误返回,模型据此自我纠正。

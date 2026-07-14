@@ -65,7 +65,7 @@ func (e *ToolArgumentError) Error() string {
 
 func (e *ToolArgumentError) Unwrap() error { return e.Err }
 
-func newJSONToolArgumentError(tool string, schema *jsonschema.Schema, err error) error {
+func newJSONToolArgumentError(tool, expected string, err error) error {
 	message := "malformed JSON: " + err.Error()
 	if strings.Contains(err.Error(), "multiple JSON values") {
 		message = "input must contain exactly one JSON object"
@@ -74,27 +74,27 @@ func newJSONToolArgumentError(tool string, schema *jsonschema.Schema, err error)
 		Tool:          tool,
 		Kind:          ToolArgumentErrorMalformedJSON,
 		Issues:        []ToolArgumentIssue{{Rule: "json", Message: message}},
-		ExpectedInput: summarizeExpectedInput(schema),
+		ExpectedInput: expected,
 		Err:           err,
 	}
 }
 
-func newSchemaToolArgumentError(tool string, schema *jsonschema.Schema, instance any, err error) error {
+func newSchemaToolArgumentError(tool string, schema *jsonschema.Schema, expected string, instance any, err error) error {
 	return &ToolArgumentError{
 		Tool:          tool,
 		Kind:          ToolArgumentErrorSchema,
 		Issues:        explainSchemaError(schema, instance, err),
-		ExpectedInput: summarizeExpectedInput(schema),
+		ExpectedInput: expected,
 		Err:           err,
 	}
 }
 
-func newStructToolArgumentError(tool string, schema *jsonschema.Schema, err error) error {
+func newStructToolArgumentError(tool, expected string, err error) error {
 	return &ToolArgumentError{
 		Tool:          tool,
 		Kind:          ToolArgumentErrorStruct,
 		Issues:        explainValidatorError(err),
-		ExpectedInput: summarizeExpectedInput(schema),
+		ExpectedInput: expected,
 		Err:           err,
 	}
 }

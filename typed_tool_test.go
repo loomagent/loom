@@ -1,0 +1,74 @@
+package loom
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+)
+
+type typedToolRequest struct {
+	Query string `json:"query" jsonschema:"Search query." validate:"min=1,notblank"`
+	Limit int    `json:"limit,omitempty" validate:"omitempty,min=0"`
+}
+
+func TestNewTypedToolBindsCompiledContract(t *testing.T) {
+	contract, err := NewToolContract[typedToolRequest]("typed_search",
+		WithArgumentDescription("limit", "Maximum results."),
+		WithArgumentMaximum("limit", 5),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contract.Name() != "typed_search" {
+		t.Fatalf("name = %q", contract.Name())
+	}
+
+	tool := NewTypedTool(contract, "Search.", func(_ context.Context, input typedToolRequest) (string, error) {
+		return input.Query, nil
+	}, WithRequiresNetwork())
+	info, err := tool.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Name != contract.Name() || !info.RequiresNetwork {
+		t.Fatalf("tool info = %+v", info)
+	}
+	if got := info.Parameters.Properties["limit"].Description; got != "Maximum results." {
+		t.Fatalf("limit description = %q", got)
+	}
+
+	// The model-facing schema is a clone. Mutating it must not weaken the
+	// validator compiled into the contract.
+	maximum := float64(100)
+	info.Parameters.Properties["limit"].Maximum = &maximum
+	if _, err := tool.Invoke(context.Background(), `{"query":"loom","limit":6}`); err == nil || !strings.Contains(err.Error(), `"limit" must be at most 5`) {
+		t.Fatalf("validation error = %v", err)
+	}
+
+	output, err := tool.Invoke(context.Background(), `{"query":"loom","limit":5}`)
+	if err != nil || output != "loom" {
+		t.Fatalf("output = %q, err = %v", output, err)
+	}
+}
+
+func TestToolContractErrors(t *testing.T) {
+	if _, err := NewToolContract[typedToolRequest](""); err == nil || !strings.Contains(err.Error(), "name is required") {
+		t.Fatalf("empty-name error = %v", err)
+	}
+	if _, err := NewToolContract[typedToolRequest]("search", WithArgumentMaximum("missing", 1)); err == nil || !strings.Contains(err.Error(), `property "missing" does not exist`) {
+		t.Fatalf("missing-property error = %v", err)
+	}
+}
+
+func TestToolContractDecodeIncludesBoundName(t *testing.T) {
+	contract := MustToolContract[typedToolRequest]("typed_search", WithArgumentMaximum("limit", 5))
+	_, err := contract.Decode(`{"limit":1}`)
+	var argumentError *ToolArgumentError
+	if !errors.As(err, &argumentError) {
+		t.Fatalf("error = %T %v", err, err)
+	}
+	if argumentError.Tool != contract.Name() {
+		t.Fatalf("error tool = %q, want %q", argumentError.Tool, contract.Name())
+	}
+}
