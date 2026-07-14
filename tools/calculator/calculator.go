@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -22,7 +21,7 @@ import (
 const ToolName = "calculator"
 
 type request struct {
-	Expression string `json:"expression"`
+	Expression string `json:"expression" jsonschema:"Mathematical expression using Starlark syntax, for example '(2 + 3) * 4', 'math.sqrt(144)', or 'math.pow(2, 8)'." validate:"min=1"`
 }
 
 type response struct {
@@ -32,26 +31,16 @@ type response struct {
 
 // New constructs a calculator Loom tool.
 func New() loom.Tool {
-	params := &jsonschema.Schema{
-		Type: "object",
-		Properties: map[string]*jsonschema.Schema{
-			"expression": {
-				Type:        "string",
-				Description: "Mathematical expression using Starlark syntax, for example '(2 + 3) * 4', 'math.sqrt(144)', or 'math.pow(2, 8)'.",
-			},
-		},
-		Required: []string{"expression"},
-	}
 	description := "Evaluate a mathematical expression in a restricted Starlark environment. Supports arithmetic, parentheses, and functions from the Starlark math module."
-	return loom.NewTool(ToolName, description, params, invoke)
+	return loom.NewTool(ToolName, description, loom.MustSchemaFor[request](), invoke)
 }
 
 func invoke(ctx context.Context, argumentsJSON string) (string, error) {
 	ctx, span := otel.Tracer("github.com/loomagent/loom/tools/calculator").Start(ctx, "calculator.evaluate")
 	defer span.End()
 
-	var input request
-	if err := json.Unmarshal([]byte(argumentsJSON), &input); err != nil {
+	input, err := loom.DecodeToolArguments[request](argumentsJSON)
+	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return "", fmt.Errorf("calculator: parse arguments: %w", err)

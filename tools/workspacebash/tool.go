@@ -2,7 +2,6 @@ package workspacebash
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -36,18 +35,17 @@ type ToolOptions struct {
 	MaxStderr uint64
 }
 
+type commandRequest struct {
+	Command string `json:"command" jsonschema:"Shell command to execute." validate:"min=1"`
+}
+
 // DefaultParameters 返回默认的工具入参 schema(单 command 字段)。
 func DefaultParameters(commandDescription string) *jsonschema.Schema {
-	return &jsonschema.Schema{
-		Type: "object",
-		Properties: map[string]*jsonschema.Schema{
-			"command": {
-				Type:        "string",
-				Description: commandDescription,
-			},
-		},
-		Required: []string{"command"},
+	params := loom.MustSchemaFor[commandRequest]()
+	if description := strings.TrimSpace(commandDescription); description != "" {
+		params.Properties["command"].Description = description
 	}
+	return params
 }
 
 // NewTool 把「校验 + 执行 + 结果格式化」包成一个 loom 工具。
@@ -61,10 +59,8 @@ func NewTool(opts ToolOptions) loom.Tool {
 		params = DefaultParameters("要执行的 shell 命令,例如 `grep -rn \"keyword\" /raw` 或 `jq -r .url /sources.jsonl | head -20`。")
 	}
 	return loom.NewTool(ToolName, opts.Description, params, func(ctx context.Context, raw string) (string, error) {
-		var args struct {
-			Command string `json:"command"`
-		}
-		if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		args, err := loom.DecodeToolArgumentsWithSchema[commandRequest](raw, params)
+		if err != nil {
 			return "", fmt.Errorf("解析 bash 参数失败: %w", err)
 		}
 		command := strings.TrimSpace(args.Command)

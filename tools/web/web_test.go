@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -29,6 +31,29 @@ func TestSearchTool(t *testing.T) {
 	var response SearchResponse
 	if err := json.Unmarshal([]byte(out), &response); err != nil || len(response.Results) != 1 {
 		t.Fatalf("output = %s, err=%v", out, err)
+	}
+}
+
+func TestSearchToolSchemaComesFromRequestStruct(t *testing.T) {
+	tool, err := NewSearchTool(&fakeSearcher{}, SearchToolOptions{DefaultLimit: 3, MaxLimit: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := tool.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(info.Parameters.Required, []string{"query"}) {
+		t.Fatalf("required = %v, want [query]", info.Parameters.Required)
+	}
+	if info.Parameters.Properties["query"].Type != "string" || info.Parameters.Properties["limit"].Type != "integer" {
+		t.Fatalf("properties = %+v", info.Parameters.Properties)
+	}
+	if description := info.Parameters.Properties["limit"].Description; !strings.Contains(description, "default 3, max 7") {
+		t.Fatalf("limit description = %q", description)
+	}
+	if _, err := tool.Invoke(context.Background(), `{"query":"loom","limit":8}`); err == nil || !strings.Contains(err.Error(), "maximum") {
+		t.Fatalf("out-of-range error = %v", err)
 	}
 }
 

@@ -63,9 +63,13 @@ func WithRequiresNetwork() ToolOption {
 //
 // 适用于"工具实现就是一个函数"的常见场景,免去实现 Tool 接口的样板。
 //
+//	type calculatorRequest struct {
+//	    Expression string `json:"expression" jsonschema:"Mathematical expression to evaluate." validate:"min=1"`
+//	}
+//
 //	calc := loom.NewTool("calculator",
 //	    "Evaluate a math expression.",
-//	    &jsonschema.Schema{Type: "object", ...},
+//	    loom.MustSchemaFor[calculatorRequest](),
 //	    func(ctx context.Context, args string) (string, error) {
 //	        // ... do work
 //	        return `{"result": "42"}`, nil

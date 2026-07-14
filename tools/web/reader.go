@@ -10,10 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
-
 	"github.com/loomagent/loom"
 )
+
+type readerToolRequest struct {
+	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1"`
+}
 
 // WebReader fetches and normalizes one web document.
 type WebReader interface {
@@ -58,18 +60,10 @@ func NewReaderTool(reader WebReader, options ReaderToolOptions) (loom.Tool, erro
 	if description == "" {
 		description = "Read an HTTP or HTTPS URL and return normalized Markdown content and document metadata."
 	}
-	params := &jsonschema.Schema{
-		Type: "object",
-		Properties: map[string]*jsonschema.Schema{
-			"url": {Type: "string", Description: "Absolute HTTP or HTTPS URL to read."},
-		},
-		Required: []string{"url"},
-	}
+	params := loom.MustSchemaFor[readerToolRequest]()
 	return loom.NewTool(name, description, params, func(ctx context.Context, arguments string) (string, error) {
-		var input struct {
-			URL string `json:"url"`
-		}
-		if err := json.Unmarshal([]byte(arguments), &input); err != nil {
+		input, err := loom.DecodeToolArgumentsWithSchema[readerToolRequest](arguments, params)
+		if err != nil {
 			return "", fmt.Errorf("web reader: parse arguments: %w", err)
 		}
 		input.URL = strings.TrimSpace(input.URL)

@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -32,41 +31,40 @@ const (
 
 func workspaceTracer() trace.Tracer { return otel.Tracer(tracerName) }
 
-type writeArgs struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
+type lsRequest struct {
+	Path string `json:"path" jsonschema:"Absolute directory path to list (must start with '/'). Use '/' to list workspace root." validate:"min=1"`
 }
 
-type editArgs struct {
-	Path       string `json:"path"`
-	OldString  string `json:"old_string"`
-	NewString  string `json:"new_string"`
-	ReplaceAll bool   `json:"replace_all"`
+type readFileRequest struct {
+	Path   string `json:"path" jsonschema:"Absolute path of the file to read." validate:"min=1"`
+	Offset int    `json:"offset,omitempty" jsonschema:"1-based starting line number. Zero uses the default of 1." validate:"omitempty,min=0"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"Max lines to read. Default 2000. Zero uses the default." validate:"omitempty,min=0"`
+}
+
+type writeFileRequest struct {
+	Path    string `json:"path" jsonschema:"Absolute path of the file to write (creates or overwrites)." validate:"min=1"`
+	Content string `json:"content" jsonschema:"Full file content. UTF-8 text, max 1 MB."`
+}
+
+type editFileRequest struct {
+	Path       string `json:"path" jsonschema:"Absolute path of the file to edit." validate:"min=1"`
+	OldString  string `json:"old_string" jsonschema:"Exact string to replace (whitespace-sensitive). Must be non-empty." validate:"min=1"`
+	NewString  string `json:"new_string" jsonschema:"Replacement string. Must differ from old_string. Empty string means delete."`
+	ReplaceAll bool   `json:"replace_all,omitempty" jsonschema:"If true, replace all occurrences. If false (default), error when old_string appears multiple times."`
 }
 
 // NewLs 构造 ls 工具。
 //
 // LLM 用 ls(path) 列目录;"目录"是虚拟的,从已有文件 path 派生。
 func NewLs(b Backend) loom.Tool {
-	params := &jsonschema.Schema{
-		Type: "object",
-		Properties: map[string]*jsonschema.Schema{
-			"path": {
-				Type:        "string",
-				Description: "Absolute directory path to list (must start with '/'). Use '/' to list workspace root.",
-			},
-		},
-		Required: []string{"path"},
-	}
+	params := loom.MustSchemaFor[lsRequest]()
 	desc := "List files and virtual directories under the given path. " +
 		"Path must be absolute. Returns entries sorted with directories first."
 	return loom.NewTool(ToolNameLs, desc, params, func(ctx context.Context, args string) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.ls")
 		defer span.End()
-		var in struct {
-			Path string `json:"path"`
-		}
-		if err := json.Unmarshal([]byte(args), &in); err != nil {
+		in, err := loom.DecodeToolArgumentsWithSchema[lsRequest](args, params)
+		if err != nil {
 			return failTool(span, fmt.Errorf("解析参数: %w", err))
 		}
 		span.SetAttributes(attribute.String(attrWorkspacePath, in.Path))
@@ -84,24 +82,7 @@ func NewLs(b Backend) loom.Tool {
 // 默认带 cat -n 风格行号(`     1→content` 格式),跟 Claude Code 一致。
 // offset 1-based,limit=0 走 DefaultReadLimit 兜底。
 func NewReadFile(b Backend) loom.Tool {
-	params := &jsonschema.Schema{
-		Type: "object",
-		Properties: map[string]*jsonschema.Schema{
-			"path": {
-				Type:        "string",
-				Description: "Absolute path of the file to read.",
-			},
-			"offset": {
-				Type:        "integer",
-				Description: "1-based starting line number. Default 1.",
-			},
-			"limit": {
-				Type:        "integer",
-				Description: "Max lines to read. Default 2000. 0 = use default.",
-			},
-		},
-		Required: []string{"path"},
-	}
+	params := loom.MustSchemaFor[readFileRequest]()
 	desc := "Read a file from the workspace. Returns content with cat -n style line numbers " +
 		"(format: '     N→content'). Default reads up to 2000 lines starting from line 1; " +
 		"use offset/limit to paginate large files. ALWAYS call read_file before write_file or " +
@@ -109,12 +90,8 @@ func NewReadFile(b Backend) loom.Tool {
 	return loom.NewTool(ToolNameReadFile, desc, params, func(ctx context.Context, args string) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.read_file")
 		defer span.End()
-		var in struct {
-			Path   string `json:"path"`
-			Offset int    `json:"offset"`
-			Limit  int    `json:"limit"`
-		}
-		if err := json.Unmarshal([]byte(args), &in); err != nil {
+		in, err := loom.DecodeToolArgumentsWithSchema[readFileRequest](args, params)
+		if err != nil {
 			return failTool(span, fmt.Errorf("解析参数: %w", err))
 		}
 		span.SetAttributes(
@@ -137,28 +114,15 @@ func NewReadFile(b Backend) loom.Tool {
 // Output 只返元数据 {path, bytes},content 已在 loom 内核写入的 tool_call.arguments,
 // 不需要在 result 里重复(hydrate 时直接读 arguments)。
 func NewWriteFile(b Backend) loom.Tool {
-	params := &jsonschema.Schema{
-		Type: "object",
-		Properties: map[string]*jsonschema.Schema{
-			"path": {
-				Type:        "string",
-				Description: "Absolute path of the file to write (creates or overwrites).",
-			},
-			"content": {
-				Type:        "string",
-				Description: "Full file content. UTF-8 text, max 1 MB.",
-			},
-		},
-		Required: []string{"path", "content"},
-	}
+	params := loom.MustSchemaFor[writeFileRequest]()
 	desc := "Write a file to the workspace, creating or overwriting it. " +
 		"For an existing path you MUST call read_file first (the tool will error otherwise) " +
 		"so you don't blindly overwrite content."
 	return loom.NewTool(ToolNameWriteFile, desc, params, func(ctx context.Context, args string) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.write_file")
 		defer span.End()
-		var in writeArgs
-		if err := json.Unmarshal([]byte(args), &in); err != nil {
+		in, err := loom.DecodeToolArgumentsWithSchema[writeFileRequest](args, params)
+		if err != nil {
 			return failTool(span, fmt.Errorf("解析参数: %w", err))
 		}
 		span.SetAttributes(
@@ -182,28 +146,7 @@ func NewWriteFile(b Backend) loom.Tool {
 // 要求 path 已存在 + 调用前已 read_file。
 // OldString 在文件中出现 0 次 → 报错;>1 次且 replace_all=false → 报错(LLM 必须显式提供更长上下文或开 replace_all)。
 func NewEditFile(b Backend) loom.Tool {
-	params := &jsonschema.Schema{
-		Type: "object",
-		Properties: map[string]*jsonschema.Schema{
-			"path": {
-				Type:        "string",
-				Description: "Absolute path of the file to edit.",
-			},
-			"old_string": {
-				Type:        "string",
-				Description: "Exact string to replace (whitespace-sensitive). Must be non-empty.",
-			},
-			"new_string": {
-				Type:        "string",
-				Description: "Replacement string. Must differ from old_string. Empty string means delete.",
-			},
-			"replace_all": {
-				Type:        "boolean",
-				Description: "If true, replace all occurrences. If false (default), error when old_string appears multiple times.",
-			},
-		},
-		Required: []string{"path", "old_string", "new_string"},
-	}
+	params := loom.MustSchemaFor[editFileRequest]()
 	desc := "Perform an exact string replacement on an existing file. " +
 		"You MUST call read_file on the path first. " +
 		"If old_string is not unique, either provide more surrounding context to make it unique, " +
@@ -211,8 +154,8 @@ func NewEditFile(b Backend) loom.Tool {
 	return loom.NewTool(ToolNameEditFile, desc, params, func(ctx context.Context, args string) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.edit_file")
 		defer span.End()
-		var in editArgs
-		if err := json.Unmarshal([]byte(args), &in); err != nil {
+		in, err := loom.DecodeToolArgumentsWithSchema[editFileRequest](args, params)
+		if err != nil {
 			return failTool(span, fmt.Errorf("解析参数: %w", err))
 		}
 		span.SetAttributes(

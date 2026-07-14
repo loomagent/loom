@@ -73,6 +73,39 @@ Runnable ReAct examples are available in [`examples/react`](examples/react):
 - an interactive multi-turn research conversation that reuses `SRC-N`
   references and workspace evidence across turns.
 
+## Struct-derived tool schemas
+
+Define tool arguments once as a Go struct. `SchemaFor` and `MustSchemaFor`
+derive property types, names, required fields, descriptions, and nested shapes:
+
+```go
+type calculatorRequest struct {
+	Expression string `json:"expression" jsonschema:"Mathematical expression to evaluate." validate:"min=1"`
+	Precision  int    `json:"precision,omitempty" jsonschema:"Optional decimal precision." validate:"omitempty,min=0,max=12"`
+}
+
+tool := loom.NewTool(
+	"calculator",
+	"Evaluate a mathematical expression.",
+	loom.MustSchemaFor[calculatorRequest](),
+	func(ctx context.Context, arguments string) (string, error) {
+		request, err := loom.DecodeToolArguments[calculatorRequest](arguments)
+		if err != nil {
+			return "", err
+		}
+		// ...
+	},
+)
+```
+
+Fields without `omitempty` or `omitzero` are required. Validation tags are
+executed by `go-playground/validator`, the validator used by Gin. Rules with a
+direct schema equivalent (`required`, `min`, `max`, `len`, and `oneof`) are also
+projected into JSON Schema. `DecodeToolArguments` checks the incoming JSON
+against the generated schema and validates the decoded struct, so model
+guidance and server-side enforcement stay in sync. Derived object schemas
+reject unknown properties by default.
+
 ## Packages
 
 - `github.com/loomagent/loom`: runtime, events, writers, sinks, tools, and model abstractions

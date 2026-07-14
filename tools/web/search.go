@@ -8,10 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
-
 	"github.com/loomagent/loom"
 )
+
+type searchToolRequest struct {
+	Query string `json:"query" jsonschema:"Search query." validate:"min=1"`
+	Limit int    `json:"limit,omitempty" jsonschema:"Maximum number of results to return. Zero uses the tool's configured default." validate:"omitempty,min=0"`
+}
 
 // WebSearcher performs provider-specific web searches behind a stable interface.
 type WebSearcher interface {
@@ -71,20 +74,13 @@ func NewSearchTool(searcher WebSearcher, options SearchToolOptions) (loom.Tool, 
 	if description == "" {
 		description = "Search the web for current information and return normalized results with titles, URLs, snippets, and publication dates when available."
 	}
-	params := &jsonschema.Schema{
-		Type: "object",
-		Properties: map[string]*jsonschema.Schema{
-			"query": {Type: "string", Description: "Search query."},
-			"limit": {Type: "integer", Description: fmt.Sprintf("Maximum results to return (default %d, max %d).", defaultLimit, maxLimit)},
-		},
-		Required: []string{"query"},
-	}
+	params := loom.MustSchemaFor[searchToolRequest]()
+	params.Properties["limit"].Description = fmt.Sprintf("Maximum results to return (default %d, max %d).", defaultLimit, maxLimit)
+	maximum := float64(maxLimit)
+	params.Properties["limit"].Maximum = &maximum
 	return loom.NewTool(name, description, params, func(ctx context.Context, arguments string) (string, error) {
-		var input struct {
-			Query string `json:"query"`
-			Limit int    `json:"limit"`
-		}
-		if err := json.Unmarshal([]byte(arguments), &input); err != nil {
+		input, err := loom.DecodeToolArgumentsWithSchema[searchToolRequest](arguments, params)
+		if err != nil {
 			return "", fmt.Errorf("web search: parse arguments: %w", err)
 		}
 		input.Query = strings.TrimSpace(input.Query)
@@ -93,9 +89,6 @@ func NewSearchTool(searcher WebSearcher, options SearchToolOptions) (loom.Tool, 
 		}
 		if input.Limit == 0 {
 			input.Limit = defaultLimit
-		}
-		if input.Limit < 1 || input.Limit > maxLimit {
-			return "", fmt.Errorf("web search: limit must be between 1 and %d", maxLimit)
 		}
 		response, err := searcher.Search(ctx, SearchRequest{Query: input.Query, Limit: input.Limit})
 		if err != nil {

@@ -223,13 +223,13 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 }
 
 func probeSchema() *jsonschema.Schema {
-	trueValue := any(true)
-	return &jsonschema.Schema{
-		Type:                 "object",
-		Properties:           map[string]*jsonschema.Schema{"ok": {Type: "boolean", Const: &trueValue}},
-		Required:             []string{"ok"},
-		AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}},
+	type response struct {
+		OK bool `json:"ok" jsonschema:"Whether the probe succeeded. Must be true."`
 	}
+	schema := loom.MustSchemaFor[response]()
+	trueValue := any(true)
+	schema.Properties["ok"].Const = &trueValue
+	return schema
 }
 
 // DeriveReasoningSupport maps completed default, enable, and disable

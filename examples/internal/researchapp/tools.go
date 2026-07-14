@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
-
 	"github.com/loomagent/loom"
 	"github.com/loomagent/loom/loomfs"
 	"github.com/loomagent/loom/sourceregistry"
@@ -17,18 +15,21 @@ import (
 	"github.com/loomagent/loom/tools/web/sourcedate"
 )
 
+type searchRequest struct {
+	Query string `json:"query" jsonschema:"Focused web search query." validate:"min=1"`
+	Limit int    `json:"limit,omitempty" jsonschema:"Maximum results, from 1 to 10. Zero uses the default of 5." validate:"omitempty,min=0,max=10"`
+}
+
+type readerRequest struct {
+	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1"`
+}
+
 func newSearchTool(searcher web.WebSearcher) loom.Tool {
-	params := &jsonschema.Schema{Type: "object", Properties: map[string]*jsonschema.Schema{
-		"query": {Type: "string", Description: "Focused web search query."},
-		"limit": {Type: "integer", Description: "Maximum results, from 1 to 10."},
-	}, Required: []string{"query"}}
+	params := loom.MustSchemaFor[searchRequest]()
 	return loom.NewTool("web_search", "Search the web and assign stable SRC-N references to every result.", params,
 		func(ctx context.Context, arguments string) (string, error) {
-			var input struct {
-				Query string `json:"query"`
-				Limit int    `json:"limit"`
-			}
-			if err := json.Unmarshal([]byte(arguments), &input); err != nil {
+			input, err := loom.DecodeToolArgumentsWithSchema[searchRequest](arguments, params)
+			if err != nil {
 				return "", fmt.Errorf("parse search arguments: %w", err)
 			}
 			input.Query = strings.TrimSpace(input.Query)
@@ -37,9 +38,6 @@ func newSearchTool(searcher web.WebSearcher) loom.Tool {
 			}
 			if input.Limit == 0 {
 				input.Limit = 5
-			}
-			if input.Limit < 1 || input.Limit > 10 {
-				return "", errors.New("limit must be between 1 and 10")
 			}
 			response, err := searcher.Search(ctx, web.SearchRequest{Query: input.Query, Limit: input.Limit})
 			if err != nil {
@@ -96,15 +94,11 @@ func newSearchTool(searcher web.WebSearcher) loom.Tool {
 }
 
 func newReaderTool(reader web.WebReader) loom.Tool {
-	params := &jsonschema.Schema{Type: "object", Properties: map[string]*jsonschema.Schema{
-		"url": {Type: "string", Description: "Absolute HTTP(S) URL to read."},
-	}, Required: []string{"url"}}
+	params := loom.MustSchemaFor[readerRequest]()
 	return loom.NewTool("web_reader", "Read a source, save its Markdown in the workspace, and return its stable SRC-N reference.", params,
 		func(ctx context.Context, arguments string) (string, error) {
-			var input struct {
-				URL string `json:"url"`
-			}
-			if err := json.Unmarshal([]byte(arguments), &input); err != nil {
+			input, err := loom.DecodeToolArgumentsWithSchema[readerRequest](arguments, params)
+			if err != nil {
 				return "", fmt.Errorf("parse reader arguments: %w", err)
 			}
 			input.URL = strings.TrimSpace(input.URL)
