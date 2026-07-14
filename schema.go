@@ -17,6 +17,11 @@ var toolArgumentValidator = newToolArgumentValidator()
 
 func newToolArgumentValidator() *validator.Validate {
 	validate := validator.New(validator.WithRequiredStructEnabled())
+	if err := validate.RegisterValidation("notblank", func(field validator.FieldLevel) bool {
+		return field.Field().Kind() == reflect.String && strings.TrimSpace(field.Field().String()) != ""
+	}); err != nil {
+		panic(fmt.Sprintf("loom: register notblank validation: %v", err))
+	}
 	validate.RegisterTagNameFunc(func(field reflect.StructField) string {
 		name, _, skip := jsonFieldName(field)
 		if skip {
@@ -35,9 +40,10 @@ func newToolArgumentValidator() *validator.Validate {
 // used as the property description.
 //
 // A go-playground/validator validate tag adds runtime constraints. The min,
-// max, len, oneof, and required rules are also projected into JSON Schema;
-// other rules remain runtime-only. Min, max, and len apply to numeric values,
-// string lengths, array lengths, or map sizes according to the field type.
+// max, len, oneof, required, and Loom's notblank rule are also projected into
+// JSON Schema; other rules remain runtime-only. Min, max, and len apply to
+// numeric values, string lengths, array lengths, or map sizes according to the
+// field type.
 func SchemaFor[T any]() (*jsonschema.Schema, error) {
 	schema, err := jsonschema.For[T](nil)
 	if err != nil {
@@ -66,12 +72,18 @@ func MustSchemaFor[T any]() *jsonschema.Schema {
 // schema derived from T, then decodes it into T. This keeps model-facing JSON
 // Schema and server-side validation on the same contract.
 func DecodeToolArguments[T any](argumentsJSON string) (T, error) {
+	return DecodeToolArgumentsFor[T]("", argumentsJSON)
+}
+
+// DecodeToolArgumentsFor is DecodeToolArguments with a tool name included in
+// validation errors.
+func DecodeToolArgumentsFor[T any](toolName, argumentsJSON string) (T, error) {
 	var zero T
 	schema, err := SchemaFor[T]()
 	if err != nil {
 		return zero, err
 	}
-	return DecodeToolArgumentsWithSchema[T](argumentsJSON, schema)
+	return DecodeToolArgumentsWithSchemaFor[T](toolName, argumentsJSON, schema)
 }
 
 // DecodeToolArgumentsWithSchema is like DecodeToolArguments, but validates
@@ -79,6 +91,12 @@ func DecodeToolArguments[T any](argumentsJSON string) (T, error) {
 // configurable maximum, to a schema initially derived from T. The schema must
 // still describe T.
 func DecodeToolArgumentsWithSchema[T any](argumentsJSON string, schema *jsonschema.Schema) (T, error) {
+	return DecodeToolArgumentsWithSchemaFor[T]("", argumentsJSON, schema)
+}
+
+// DecodeToolArgumentsWithSchemaFor is DecodeToolArgumentsWithSchema with a
+// tool name included in validation errors.
+func DecodeToolArgumentsWithSchemaFor[T any](toolName, argumentsJSON string, schema *jsonschema.Schema) (T, error) {
 	var zero T
 	if schema == nil {
 		return zero, fmt.Errorf("loom: tool argument schema is nil")
@@ -87,10 +105,10 @@ func DecodeToolArgumentsWithSchema[T any](argumentsJSON string, schema *jsonsche
 	decoder := json.NewDecoder(strings.NewReader(argumentsJSON))
 	var instance any
 	if err := decoder.Decode(&instance); err != nil {
-		return zero, fmt.Errorf("loom: parse tool arguments: %w", err)
+		return zero, newJSONToolArgumentError(toolName, schema, err)
 	}
 	if err := requireJSONEOF(decoder); err != nil {
-		return zero, fmt.Errorf("loom: parse tool arguments: %w", err)
+		return zero, newJSONToolArgumentError(toolName, schema, err)
 	}
 
 	resolved, err := schema.Resolve(nil)
@@ -98,16 +116,16 @@ func DecodeToolArgumentsWithSchema[T any](argumentsJSON string, schema *jsonsche
 		return zero, fmt.Errorf("loom: resolve tool argument schema: %w", err)
 	}
 	if err := resolved.Validate(instance); err != nil {
-		return zero, fmt.Errorf("loom: validate tool arguments: %w", err)
+		return zero, newSchemaToolArgumentError(toolName, schema, instance, err)
 	}
 
 	var arguments T
 	decoder = json.NewDecoder(strings.NewReader(argumentsJSON))
 	if err := decoder.Decode(&arguments); err != nil {
-		return zero, fmt.Errorf("loom: decode tool arguments: %w", err)
+		return zero, newJSONToolArgumentError(toolName, schema, err)
 	}
 	if err := validateToolArgumentStruct(arguments); err != nil {
-		return zero, fmt.Errorf("loom: validate tool argument struct: %w", err)
+		return zero, newStructToolArgumentError(toolName, schema, err)
 	}
 	return arguments, nil
 }
@@ -236,6 +254,8 @@ func applyValidationRules(schema *jsonschema.Schema, typ reflect.Type, tag strin
 				}
 				schema.Enum[i] = parsed
 			}
+		case "notblank":
+			schema.Pattern = `\S`
 		default:
 			// go-playground/validator remains the source of truth for runtime
 			// validation. Rules without a direct JSON Schema equivalent are

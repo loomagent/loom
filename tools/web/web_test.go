@@ -52,7 +52,7 @@ func TestSearchToolSchemaComesFromRequestStruct(t *testing.T) {
 	if description := info.Parameters.Properties["limit"].Description; !strings.Contains(description, "default 3, max 7") {
 		t.Fatalf("limit description = %q", description)
 	}
-	if _, err := tool.Invoke(context.Background(), `{"query":"loom","limit":8}`); err == nil || !strings.Contains(err.Error(), "maximum") {
+	if _, err := tool.Invoke(context.Background(), `{"query":"loom","limit":8}`); err == nil || !strings.Contains(err.Error(), `"limit" must be at most 7`) {
 		t.Fatalf("out-of-range error = %v", err)
 	}
 }

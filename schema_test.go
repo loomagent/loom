@@ -1,6 +1,7 @@
 package loom
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -67,10 +68,10 @@ func TestDecodeToolArgumentsValidatesGeneratedSchema(t *testing.T) {
 		want string
 	}{
 		{"missing required", `{"mode":"fast"}`, "required"},
-		{"too large", `{"query":"loom","limit":11,"mode":"fast"}`, "maximum"},
-		{"bad enum", `{"query":"loom","mode":"slow"}`, "enum"},
-		{"unknown property", `{"query":"loom","mode":"fast","extra":true}`, "unexpected additional properties"},
-		{"multiple values", `{"query":"loom","mode":"fast"} {}`, "multiple JSON values"},
+		{"too large", `{"query":"loom","limit":11,"mode":"fast"}`, `"limit" must be at most 10`},
+		{"bad enum", `{"query":"loom","mode":"slow"}`, `"mode" must be one of ["fast","deep"]`},
+		{"unknown property", `{"query":"loom","mode":"fast","extra":true}`, `"extra" is not an accepted field`},
+		{"multiple values", `{"query":"loom","mode":"fast"} {}`, "exactly one JSON object"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := DecodeToolArguments[request](test.raw)
@@ -85,7 +86,7 @@ func TestDecodeToolArgumentsUsesGoPlaygroundValidator(t *testing.T) {
 	type request struct {
 		Value string `json:"value" validate:"contains=loom"`
 	}
-	if _, err := DecodeToolArguments[request](`{"value":"other"}`); err == nil || !strings.Contains(err.Error(), "contains") {
+	if _, err := DecodeToolArguments[request](`{"value":"other"}`); err == nil || !strings.Contains(err.Error(), `"value" must contain "loom"`) {
 		t.Fatalf("error = %v, want go-playground contains validation error", err)
 	}
 	if _, err := DecodeToolArguments[request](`{"value":"loom-agent"}`); err != nil {
@@ -97,8 +98,49 @@ func TestDecodeToolArgumentsReturnsInvalidValidatorTag(t *testing.T) {
 	type request struct {
 		Value string `json:"value" validate:"not_a_real_rule"`
 	}
-	if _, err := DecodeToolArguments[request](`{"value":"x"}`); err == nil || !strings.Contains(err.Error(), "invalid validator tag") {
+	_, err := DecodeToolArguments[request](`{"value":"x"}`)
+	if err == nil || !strings.Contains(err.Error(), "validation is misconfigured") {
 		t.Fatalf("error = %v", err)
+	}
+	if unwrapped := errors.Unwrap(err); unwrapped == nil || !strings.Contains(unwrapped.Error(), "invalid validator tag") {
+		t.Fatalf("unwrapped error = %v", unwrapped)
+	}
+}
+
+func TestDecodeToolArgumentsForIncludesToolAndExpectedInput(t *testing.T) {
+	type request struct {
+		Query string `json:"query" validate:"min=1"`
+		Limit int    `json:"limit,omitempty" validate:"omitempty,min=0,max=10"`
+	}
+
+	_, err := DecodeToolArgumentsFor[request]("web_search", `{"limit":1}`)
+	var argumentError *ToolArgumentError
+	if !errors.As(err, &argumentError) {
+		t.Fatalf("error type = %T, want *ToolArgumentError", err)
+	}
+	if argumentError.Tool != "web_search" || argumentError.Kind != ToolArgumentErrorSchema {
+		t.Fatalf("error metadata = %+v", argumentError)
+	}
+	if got, want := argumentError.ExpectedInput, `{"query":"string; required; min length 1","limit":"integer; optional; 0..10"}`; got != want {
+		t.Fatalf("expected input = %s, want %s", got, want)
+	}
+	if got := err.Error(); !strings.Contains(got, `invalid arguments for tool "web_search"`) || !strings.Contains(got, `"query" is required`) {
+		t.Fatalf("error = %s", got)
+	}
+}
+
+func TestDecodeToolArgumentsForFormatsNonBlankRule(t *testing.T) {
+	type request struct {
+		Query string `json:"query" validate:"min=1,notblank"`
+	}
+
+	_, err := DecodeToolArgumentsFor[request]("web_search", `{"query":"   "}`)
+	if err == nil || !strings.Contains(err.Error(), `"query" must not be blank`) {
+		t.Fatalf("error = %v", err)
+	}
+	var argumentError *ToolArgumentError
+	if !errors.As(err, &argumentError) || !strings.Contains(argumentError.ExpectedInput, "non-blank") {
+		t.Fatalf("argument error = %+v", argumentError)
 	}
 }
 

@@ -14,7 +14,7 @@ import (
 )
 
 type readerToolRequest struct {
-	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1"`
+	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1,notblank"`
 }
 
 // WebReader fetches and normalizes one web document.
@@ -62,9 +62,9 @@ func NewReaderTool(reader WebReader, options ReaderToolOptions) (loom.Tool, erro
 	}
 	params := loom.MustSchemaFor[readerToolRequest]()
 	return loom.NewTool(name, description, params, func(ctx context.Context, arguments string) (string, error) {
-		input, err := loom.DecodeToolArgumentsWithSchema[readerToolRequest](arguments, params)
+		input, err := loom.DecodeToolArgumentsWithSchemaFor[readerToolRequest](name, arguments, params)
 		if err != nil {
-			return "", fmt.Errorf("web reader: parse arguments: %w", err)
+			return "", err
 		}
 		input.URL = strings.TrimSpace(input.URL)
 		parsed, err := url.ParseRequestURI(input.URL)

@@ -12,7 +12,7 @@ import (
 )
 
 type searchToolRequest struct {
-	Query string `json:"query" jsonschema:"Search query." validate:"min=1"`
+	Query string `json:"query" jsonschema:"Search query." validate:"min=1,notblank"`
 	Limit int    `json:"limit,omitempty" jsonschema:"Maximum number of results to return. Zero uses the tool's configured default." validate:"omitempty,min=0"`
 }
 
@@ -79,14 +79,11 @@ func NewSearchTool(searcher WebSearcher, options SearchToolOptions) (loom.Tool, 
 	maximum := float64(maxLimit)
 	params.Properties["limit"].Maximum = &maximum
 	return loom.NewTool(name, description, params, func(ctx context.Context, arguments string) (string, error) {
-		input, err := loom.DecodeToolArgumentsWithSchema[searchToolRequest](arguments, params)
+		input, err := loom.DecodeToolArgumentsWithSchemaFor[searchToolRequest](name, arguments, params)
 		if err != nil {
-			return "", fmt.Errorf("web search: parse arguments: %w", err)
+			return "", err
 		}
 		input.Query = strings.TrimSpace(input.Query)
-		if input.Query == "" {
-			return "", errors.New("web search: query is required")
-		}
 		if input.Limit == 0 {
 			input.Limit = defaultLimit
 		}

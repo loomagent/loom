@@ -21,7 +21,7 @@ import (
 const ToolName = "calculator"
 
 type request struct {
-	Expression string `json:"expression" jsonschema:"Mathematical expression using Starlark syntax, for example '(2 + 3) * 4', 'math.sqrt(144)', or 'math.pow(2, 8)'." validate:"min=1"`
+	Expression string `json:"expression" jsonschema:"Mathematical expression using Starlark syntax, for example '(2 + 3) * 4', 'math.sqrt(144)', or 'math.pow(2, 8)'." validate:"min=1,notblank"`
 }
 
 type response struct {
@@ -39,19 +39,13 @@ func invoke(ctx context.Context, argumentsJSON string) (string, error) {
 	ctx, span := otel.Tracer("github.com/loomagent/loom/tools/calculator").Start(ctx, "calculator.evaluate")
 	defer span.End()
 
-	input, err := loom.DecodeToolArguments[request](argumentsJSON)
+	input, err := loom.DecodeToolArgumentsFor[request](ToolName, argumentsJSON)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return "", fmt.Errorf("calculator: parse arguments: %w", err)
-	}
-	input.Expression = strings.TrimSpace(input.Expression)
-	if input.Expression == "" {
-		err := fmt.Errorf("calculator: expression is required")
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return "", err
 	}
+	input.Expression = strings.TrimSpace(input.Expression)
 	span.SetAttributes(attribute.String("calculator.expression", input.Expression))
 
 	result, err := Evaluate(ctx, input.Expression)

@@ -32,22 +32,22 @@ const (
 func workspaceTracer() trace.Tracer { return otel.Tracer(tracerName) }
 
 type lsRequest struct {
-	Path string `json:"path" jsonschema:"Absolute directory path to list (must start with '/'). Use '/' to list workspace root." validate:"min=1"`
+	Path string `json:"path" jsonschema:"Absolute directory path to list (must start with '/'). Use '/' to list workspace root." validate:"min=1,notblank"`
 }
 
 type readFileRequest struct {
-	Path   string `json:"path" jsonschema:"Absolute path of the file to read." validate:"min=1"`
+	Path   string `json:"path" jsonschema:"Absolute path of the file to read." validate:"min=1,notblank"`
 	Offset int    `json:"offset,omitempty" jsonschema:"1-based starting line number. Zero uses the default of 1." validate:"omitempty,min=0"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"Max lines to read. Default 2000. Zero uses the default." validate:"omitempty,min=0"`
 }
 
 type writeFileRequest struct {
-	Path    string `json:"path" jsonschema:"Absolute path of the file to write (creates or overwrites)." validate:"min=1"`
+	Path    string `json:"path" jsonschema:"Absolute path of the file to write (creates or overwrites)." validate:"min=1,notblank"`
 	Content string `json:"content" jsonschema:"Full file content. UTF-8 text, max 1 MB."`
 }
 
 type editFileRequest struct {
-	Path       string `json:"path" jsonschema:"Absolute path of the file to edit." validate:"min=1"`
+	Path       string `json:"path" jsonschema:"Absolute path of the file to edit." validate:"min=1,notblank"`
 	OldString  string `json:"old_string" jsonschema:"Exact string to replace (whitespace-sensitive). Must be non-empty." validate:"min=1"`
 	NewString  string `json:"new_string" jsonschema:"Replacement string. Must differ from old_string. Empty string means delete."`
 	ReplaceAll bool   `json:"replace_all,omitempty" jsonschema:"If true, replace all occurrences. If false (default), error when old_string appears multiple times."`
@@ -63,9 +63,9 @@ func NewLs(b Backend) loom.Tool {
 	return loom.NewTool(ToolNameLs, desc, params, func(ctx context.Context, args string) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.ls")
 		defer span.End()
-		in, err := loom.DecodeToolArgumentsWithSchema[lsRequest](args, params)
+		in, err := loom.DecodeToolArgumentsWithSchemaFor[lsRequest](ToolNameLs, args, params)
 		if err != nil {
-			return failTool(span, fmt.Errorf("解析参数: %w", err))
+			return failTool(span, err)
 		}
 		span.SetAttributes(attribute.String(attrWorkspacePath, in.Path))
 		infos, err := b.Ls(ctx, in.Path)
@@ -90,9 +90,9 @@ func NewReadFile(b Backend) loom.Tool {
 	return loom.NewTool(ToolNameReadFile, desc, params, func(ctx context.Context, args string) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.read_file")
 		defer span.End()
-		in, err := loom.DecodeToolArgumentsWithSchema[readFileRequest](args, params)
+		in, err := loom.DecodeToolArgumentsWithSchemaFor[readFileRequest](ToolNameReadFile, args, params)
 		if err != nil {
-			return failTool(span, fmt.Errorf("解析参数: %w", err))
+			return failTool(span, err)
 		}
 		span.SetAttributes(
 			attribute.String(attrWorkspacePath, in.Path),
@@ -121,9 +121,9 @@ func NewWriteFile(b Backend) loom.Tool {
 	return loom.NewTool(ToolNameWriteFile, desc, params, func(ctx context.Context, args string) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.write_file")
 		defer span.End()
-		in, err := loom.DecodeToolArgumentsWithSchema[writeFileRequest](args, params)
+		in, err := loom.DecodeToolArgumentsWithSchemaFor[writeFileRequest](ToolNameWriteFile, args, params)
 		if err != nil {
-			return failTool(span, fmt.Errorf("解析参数: %w", err))
+			return failTool(span, err)
 		}
 		span.SetAttributes(
 			attribute.String(attrWorkspacePath, in.Path),
@@ -154,9 +154,9 @@ func NewEditFile(b Backend) loom.Tool {
 	return loom.NewTool(ToolNameEditFile, desc, params, func(ctx context.Context, args string) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.edit_file")
 		defer span.End()
-		in, err := loom.DecodeToolArgumentsWithSchema[editFileRequest](args, params)
+		in, err := loom.DecodeToolArgumentsWithSchemaFor[editFileRequest](ToolNameEditFile, args, params)
 		if err != nil {
-			return failTool(span, fmt.Errorf("解析参数: %w", err))
+			return failTool(span, err)
 		}
 		span.SetAttributes(
 			attribute.String(attrWorkspacePath, in.Path),

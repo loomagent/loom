@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -16,26 +15,23 @@ import (
 )
 
 type searchRequest struct {
-	Query string `json:"query" jsonschema:"Focused web search query." validate:"min=1"`
+	Query string `json:"query" jsonschema:"Focused web search query." validate:"min=1,notblank"`
 	Limit int    `json:"limit,omitempty" jsonschema:"Maximum results, from 1 to 10. Zero uses the default of 5." validate:"omitempty,min=0,max=10"`
 }
 
 type readerRequest struct {
-	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1"`
+	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1,notblank"`
 }
 
 func newSearchTool(searcher web.WebSearcher) loom.Tool {
 	params := loom.MustSchemaFor[searchRequest]()
 	return loom.NewTool("web_search", "Search the web and assign stable SRC-N references to every result.", params,
 		func(ctx context.Context, arguments string) (string, error) {
-			input, err := loom.DecodeToolArgumentsWithSchema[searchRequest](arguments, params)
+			input, err := loom.DecodeToolArgumentsWithSchemaFor[searchRequest]("web_search", arguments, params)
 			if err != nil {
-				return "", fmt.Errorf("parse search arguments: %w", err)
+				return "", err
 			}
 			input.Query = strings.TrimSpace(input.Query)
-			if input.Query == "" {
-				return "", errors.New("query is required")
-			}
 			if input.Limit == 0 {
 				input.Limit = 5
 			}
@@ -97,14 +93,11 @@ func newReaderTool(reader web.WebReader) loom.Tool {
 	params := loom.MustSchemaFor[readerRequest]()
 	return loom.NewTool("web_reader", "Read a source, save its Markdown in the workspace, and return its stable SRC-N reference.", params,
 		func(ctx context.Context, arguments string) (string, error) {
-			input, err := loom.DecodeToolArgumentsWithSchema[readerRequest](arguments, params)
+			input, err := loom.DecodeToolArgumentsWithSchemaFor[readerRequest]("web_reader", arguments, params)
 			if err != nil {
-				return "", fmt.Errorf("parse reader arguments: %w", err)
+				return "", err
 			}
 			input.URL = strings.TrimSpace(input.URL)
-			if input.URL == "" {
-				return "", errors.New("url is required")
-			}
 			document, err := reader.Read(ctx, web.ReadRequest{URL: input.URL})
 			if err != nil {
 				return "", err

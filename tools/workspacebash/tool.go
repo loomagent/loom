@@ -36,7 +36,7 @@ type ToolOptions struct {
 }
 
 type commandRequest struct {
-	Command string `json:"command" jsonschema:"Shell command to execute." validate:"min=1"`
+	Command string `json:"command" jsonschema:"Shell command to execute." validate:"min=1,notblank"`
 }
 
 // DefaultParameters 返回默认的工具入参 schema(单 command 字段)。
@@ -59,14 +59,11 @@ func NewTool(opts ToolOptions) loom.Tool {
 		params = DefaultParameters("要执行的 shell 命令,例如 `grep -rn \"keyword\" /raw` 或 `jq -r .url /sources.jsonl | head -20`。")
 	}
 	return loom.NewTool(ToolName, opts.Description, params, func(ctx context.Context, raw string) (string, error) {
-		args, err := loom.DecodeToolArgumentsWithSchema[commandRequest](raw, params)
+		args, err := loom.DecodeToolArgumentsWithSchemaFor[commandRequest](ToolName, raw, params)
 		if err != nil {
-			return "", fmt.Errorf("解析 bash 参数失败: %w", err)
+			return "", err
 		}
 		command := strings.TrimSpace(args.Command)
-		if command == "" {
-			return "", fmt.Errorf("command 不能为空")
-		}
 		if err := validator.Validate(command); err != nil {
 			// 校验拒绝当作工具错误返回,模型据此自我纠正。
 			return "", fmt.Errorf("命令被拒: %v", err)
