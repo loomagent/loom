@@ -101,7 +101,8 @@ func TestToolContractRejectsInvalidExample(t *testing.T) {
 	}
 
 	type validatorInvalid struct {
-		Value string `json:"value" validate:"contains=loom" example:"agent"`
+		Value   string `json:"value" validate:"eqfield=Confirm" example:"agent"`
+		Confirm string `json:"confirm" example:"loom"`
 	}
 	if _, err := NewToolContract[validatorInvalid]("invalid_validator_example"); err == nil || !strings.Contains(err.Error(), "does not satisfy struct validation") {
 		t.Fatalf("invalid validator example error = %v", err)

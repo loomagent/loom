@@ -57,11 +57,11 @@ func TestExplainSchemaErrorUsesSchemaNotCauseText(t *testing.T) {
 }
 
 func TestExplainSchemaErrorFallsBackForUnsupportedKeywords(t *testing.T) {
-	schema := &jsonschema.Schema{AnyOf: []*jsonschema.Schema{{Const: anyPointer("a")}, {Const: anyPointer("b")}}}
+	// Two empty branches make oneOf fail because both match. oneOf is not part
+	// of Loom's generated validator projection, so the generic fallback applies.
+	schema := &jsonschema.Schema{OneOf: []*jsonschema.Schema{{}, {}}}
 	issues := explainSchemaError(schema, "c", errors.New("opaque"))
 	if len(issues) != 1 || issues[0].Rule != "schema" || !strings.Contains(issues[0].Message, "expected schema") {
 		t.Fatalf("issues = %+v", issues)
 	}
 }
-
-func anyPointer(value any) *any { return &value }

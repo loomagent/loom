@@ -167,6 +167,114 @@ func TestSchemaForProjectsExamples(t *testing.T) {
 	}
 }
 
+func TestSchemaForProjectsCommonValidatorRules(t *testing.T) {
+	type request struct {
+		Name   string            `json:"name" validate:"required,gt=2,lt=8,startswith=lo,endswith=om,contains=oo,excludes=x"`
+		Score  float64           `json:"score" validate:"gt=0,lte=1"`
+		Mode   string            `json:"mode" validate:"oneof='fast mode' deep"`
+		Exact  string            `json:"exact" validate:"eq=loom"`
+		Other  string            `json:"other" validate:"ne=bad"`
+		Email  string            `json:"email" validate:"email"`
+		Tags   []string          `json:"tags,omitempty" validate:"omitempty,min=1,unique,dive,required,min=2"`
+		Labels map[string]string `json:"labels,omitempty" validate:"omitempty,dive,keys,startswith=x,endkeys,required,min=2"`
+	}
+
+	schema, err := SchemaFor[request]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := schema.Properties["name"]
+	if name.MinLength == nil || *name.MinLength != 3 || name.MaxLength == nil || *name.MaxLength != 7 {
+		t.Fatalf("name length schema = min %v max %v", name.MinLength, name.MaxLength)
+	}
+	if name.Pattern != "^lo" || len(name.AllOf) != 2 || name.Not == nil || name.Not.Pattern != "x" {
+		t.Fatalf("name pattern schema = %#v", name)
+	}
+	score := schema.Properties["score"]
+	if score.ExclusiveMinimum == nil || *score.ExclusiveMinimum != 0 || score.Maximum == nil || *score.Maximum != 1 {
+		t.Fatalf("score bounds = exclusive min %v max %v", score.ExclusiveMinimum, score.Maximum)
+	}
+	if got, want := schema.Properties["mode"].Enum, []any{"fast mode", "deep"}; !slices.Equal(got, want) {
+		t.Fatalf("mode enum = %#v, want %#v", got, want)
+	}
+	if exact := schema.Properties["exact"].Const; exact == nil || *exact != "loom" {
+		t.Fatalf("exact const = %#v", exact)
+	}
+	if other := schema.Properties["other"].Not; other == nil || other.Const == nil || *other.Const != "bad" {
+		t.Fatalf("other not = %#v", other)
+	}
+	if format := schema.Properties["email"].Format; format != "email" {
+		t.Fatalf("email format = %q", format)
+	}
+	tags := schema.Properties["tags"]
+	if !tags.UniqueItems || tags.Items.MinLength == nil || *tags.Items.MinLength != 2 {
+		t.Fatalf("tags schema = %#v", tags)
+	}
+	if slices.Contains(schema.Required, "tags") {
+		t.Fatal("required after dive must not make the optional tags property required")
+	}
+	labels := schema.Properties["labels"]
+	if labels.PropertyNames == nil || labels.PropertyNames.Pattern != "^x" || labels.AdditionalProperties.MinLength == nil || *labels.AdditionalProperties.MinLength != 2 {
+		t.Fatalf("labels schema = %#v", labels)
+	}
+	if _, err := DecodeToolArguments[request](`{"name":"looom","score":0.5,"mode":"fast mode","exact":"loom","other":"good","email":"agent@example.com","tags":["go","ai"],"labels":{"xkey":"ok"}}`); err != nil {
+		t.Fatalf("valid projected rules: %v", err)
+	}
+}
+
+func TestProjectedValidatorRulesReturnFriendlyErrors(t *testing.T) {
+	type request struct {
+		Name  string   `json:"name" validate:"gt=2,startswith=lo"`
+		Score int      `json:"score" validate:"gt=0"`
+		Tags  []string `json:"tags" validate:"unique"`
+	}
+
+	for _, test := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"starts with", `{"name":"foo","score":1,"tags":["a"]}`, `"name" must start with "lo"`},
+		{"greater than", `{"name":"loom","score":0,"tags":["a"]}`, `"score" must be greater than 0`},
+		{"unique", `{"name":"loom","score":1,"tags":["a","a"]}`, `"tags" must contain unique items`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := DecodeToolArguments[request](test.raw)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestSchemaForProjectsValidatorOrAndAnnotatesFormats(t *testing.T) {
+	type request struct {
+		Level int    `json:"level" validate:"eq=1|eq=3"`
+		Email string `json:"email" validate:"email"`
+	}
+
+	schema, err := SchemaFor[request]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	level := schema.Properties["level"]
+	if len(level.AllOf) != 1 || len(level.AllOf[0].AnyOf) != 2 {
+		t.Fatalf("level alternatives = %#v", level.AllOf)
+	}
+	if schema.Properties["email"].Format != "email" {
+		t.Fatalf("email format = %q", schema.Properties["email"].Format)
+	}
+	if _, err := DecodeToolArguments[request](`{"level":3,"email":"agent@example.com"}`); err != nil {
+		t.Fatalf("valid OR and email: %v", err)
+	}
+	if _, err := DecodeToolArguments[request](`{"level":2,"email":"agent@example.com"}`); err == nil || !strings.Contains(err.Error(), `"level" must be one of [1,3]`) {
+		t.Fatalf("OR error = %v", err)
+	}
+	if _, err := DecodeToolArguments[request](`{"level":1,"email":"not-an-email"}`); err == nil || !strings.Contains(err.Error(), `"email" must be a valid email`) {
+		t.Fatalf("email error = %v", err)
+	}
+}
+
 func TestMustSchemaForReturnsIndependentSchemas(t *testing.T) {
 	type request struct {
 		Value string `json:"value"`

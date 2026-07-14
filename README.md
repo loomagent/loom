@@ -96,11 +96,13 @@ tool := loom.NewTypedTool(
 
 Fields without `omitempty` or `omitzero` are required. Validation tags are
 executed by `go-playground/validator`, the validator used by Gin. Rules with a
-direct schema equivalent (`required`, `min`, `max`, `len`, `oneof`, and Loom's
-`notblank`) are also projected into JSON Schema. `DecodeToolArguments` checks
-the incoming JSON against the generated schema and validates the decoded
-struct, so model guidance and server-side enforcement stay in sync. Derived
-object schemas reject unknown properties by default. An `example` tag is
+direct schema equivalent—including `required`, size and comparison rules,
+`eq`/`ne`, `oneof`, string prefix/suffix/containment rules, `unique`, `dive`,
+and Loom's `notblank`—are also projected into JSON Schema. Cross-field and
+custom rules remain runtime-only. `DecodeToolArguments` checks the incoming
+JSON against the generated schema and validates the decoded struct, so model
+guidance and server-side enforcement stay in sync. Derived object schemas
+reject unknown properties by default. An `example` tag is
 projected into JSON Schema. When every required argument has an example, Loom
 also assembles a complete example call and accepts it only after both Schema
 and struct validation succeed.

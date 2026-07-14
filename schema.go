@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,11 +43,10 @@ func newToolArgumentValidator() *validator.Validate {
 // omitzero are optional; all other fields are required. The jsonschema tag is
 // used as the property description.
 //
-// A go-playground/validator validate tag adds runtime constraints. The min,
-// max, len, oneof, required, and Loom's notblank rule are also projected into
-// JSON Schema; other rules remain runtime-only. Min, max, and len apply to
-// numeric values, string lengths, array lengths, or map sizes according to the
-// field type.
+// A go-playground/validator validate tag adds runtime constraints. Rules with
+// direct JSON Schema equivalents are projected as well; cross-field, custom,
+// and other runtime-only rules remain enforced by validator. Container rules
+// after dive are projected onto item or map-value schemas.
 func SchemaFor[T any]() (*jsonschema.Schema, error) {
 	schema, err := jsonschema.For[T](nil)
 	if err != nil {
@@ -269,16 +269,42 @@ func jsonFieldName(field reflect.StructField) (name string, explicit, skip bool)
 }
 
 func applyValidationRules(schema *jsonschema.Schema, typ reflect.Type, tag string) error {
+	return applyValidationRuleList(schema, typ, splitValidationRules(tag))
+}
+
+func splitValidationRules(tag string) []string {
+	rules := strings.Split(tag, ",")
+	for index := range rules {
+		rules[index] = strings.TrimSpace(rules[index])
+	}
+	return rules
+}
+
+func applyValidationRuleList(schema *jsonschema.Schema, typ reflect.Type, rules []string) error {
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
-	for rule := range strings.SplitSeq(tag, ",") {
-		rule = strings.TrimSpace(rule)
-		if rule == "" || rule == "required" || rule == "omitempty" || rule == "omitzero" {
+	for index, rule := range rules {
+		if rule == "dive" {
+			return applyDiveValidationRules(schema, typ, rules[index+1:])
+		}
+		if rule == "keys" || rule == "endkeys" {
+			return fmt.Errorf("%q must follow dive on a map", rule)
+		}
+		if rule == "" || rule == "omitempty" || rule == "omitzero" || rule == "omitnil" || rule == "structonly" || rule == "nostructlevel" {
+			continue
+		}
+		if strings.Contains(rule, "|") {
+			if err := applyOrValidationRule(schema, typ, rule); err != nil {
+				return err
+			}
 			continue
 		}
 		name, value, ok := strings.Cut(rule, "=")
+		value = decodeValidatorParam(value)
 		switch name {
+		case "required":
+			applyRequiredValueRule(schema, typ.Kind())
 		case "min", "max", "len":
 			if !ok || value == "" {
 				return fmt.Errorf("invalid validate rule %q", rule)
@@ -286,11 +312,28 @@ func applyValidationRules(schema *jsonschema.Schema, typ reflect.Type, tag strin
 			if err := applySizeRule(schema, typ.Kind(), name, value); err != nil {
 				return err
 			}
+		case "gt", "gte", "lt", "lte":
+			if !ok || value == "" {
+				return fmt.Errorf("invalid validate rule %q", rule)
+			}
+			if err := applyComparisonRule(schema, typ.Kind(), name, value); err != nil {
+				return err
+			}
+		case "eq", "ne":
+			if !ok || value == "" {
+				return fmt.Errorf("invalid validate rule %q", rule)
+			}
+			if err := applyEqualityRule(schema, typ.Kind(), name, value); err != nil {
+				return err
+			}
 		case "oneof":
 			if !ok || value == "" {
 				return fmt.Errorf("invalid validate rule %q", rule)
 			}
-			values := strings.Fields(value)
+			if !validatorOneOfKind(typ.Kind()) {
+				return fmt.Errorf("oneof is not valid for %s fields", typ.Kind())
+			}
+			values := parseOneOfValues(value)
 			if len(values) == 0 {
 				return fmt.Errorf("oneof requires at least one value")
 			}
@@ -302,8 +345,38 @@ func applyValidationRules(schema *jsonschema.Schema, typ reflect.Type, tag strin
 				}
 				schema.Enum[i] = parsed
 			}
+		case "contains", "startswith", "endswith", "excludes":
+			if !ok || value == "" || typ.Kind() != reflect.String {
+				return fmt.Errorf("%s requires a non-empty value on a string field", name)
+			}
+			pattern := regexp.QuoteMeta(value)
+			switch name {
+			case "startswith":
+				pattern = "^" + pattern
+			case "endswith":
+				pattern += "$"
+			case "excludes":
+				addNotConstraint(schema, &jsonschema.Schema{Pattern: pattern})
+				continue
+			}
+			addPatternConstraint(schema, pattern)
+		case "unique":
+			if ok && value != "" {
+				continue // unique=Field has no direct JSON Schema equivalent.
+			}
+			if typ.Kind() == reflect.Array || typ.Kind() == reflect.Slice {
+				schema.UniqueItems = true
+			}
+		case "email", "url", "uri", "hostname", "ipv4", "ipv6", "uuid", "uuid3", "uuid4", "uuid5", "datetime":
+			if typ.Kind() != reflect.String {
+				return fmt.Errorf("%s is only valid for string fields", name)
+			}
+			schema.Format = validatorJSONSchemaFormat(name)
 		case "notblank":
-			schema.Pattern = `\S`
+			if typ.Kind() != reflect.String {
+				return fmt.Errorf("notblank is only valid for string fields")
+			}
+			addPatternConstraint(schema, `\S`)
 		default:
 			// go-playground/validator remains the source of truth for runtime
 			// validation. Rules without a direct JSON Schema equivalent are
@@ -314,9 +387,225 @@ func applyValidationRules(schema *jsonschema.Schema, typ reflect.Type, tag strin
 	return nil
 }
 
+func applyOrValidationRule(schema *jsonschema.Schema, typ reflect.Type, rule string) error {
+	alternatives := strings.Split(rule, "|")
+	branches := make([]*jsonschema.Schema, 0, len(alternatives))
+	for _, alternative := range alternatives {
+		branch := &jsonschema.Schema{}
+		if err := applyValidationRuleList(branch, typ, []string{alternative}); err != nil {
+			return fmt.Errorf("validation alternative %q: %w", alternative, err)
+		}
+		branches = append(branches, branch)
+	}
+	schema.AllOf = append(schema.AllOf, &jsonschema.Schema{AnyOf: branches})
+	return nil
+}
+
+func validatorJSONSchemaFormat(rule string) string {
+	switch rule {
+	case "url", "uri":
+		return "uri"
+	case "uuid3", "uuid4", "uuid5":
+		return "uuid"
+	case "datetime":
+		return "date-time"
+	default:
+		return rule
+	}
+}
+
+func validatorOneOfKind(kind reflect.Kind) bool {
+	switch kind {
+	case reflect.String,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return true
+	default:
+		return false
+	}
+}
+
+func applyDiveValidationRules(schema *jsonschema.Schema, typ reflect.Type, rules []string) error {
+	switch typ.Kind() {
+	case reflect.Array, reflect.Slice:
+		if schema.Items == nil {
+			return fmt.Errorf("dive requires an item schema")
+		}
+		return applyValidationRuleList(schema.Items, typ.Elem(), rules)
+	case reflect.Map:
+		if len(rules) > 0 && rules[0] == "keys" {
+			end := slices.Index(rules, "endkeys")
+			if end < 0 {
+				return fmt.Errorf("keys requires a matching endkeys")
+			}
+			if schema.PropertyNames == nil {
+				schema.PropertyNames = &jsonschema.Schema{Type: "string"}
+			}
+			if err := applyValidationRuleList(schema.PropertyNames, typ.Key(), rules[1:end]); err != nil {
+				return fmt.Errorf("map keys: %w", err)
+			}
+			rules = rules[end+1:]
+		}
+		if schema.AdditionalProperties == nil {
+			return fmt.Errorf("dive requires a map value schema")
+		}
+		return applyValidationRuleList(schema.AdditionalProperties, typ.Elem(), rules)
+	default:
+		return fmt.Errorf("dive is not valid for %s fields", typ.Kind())
+	}
+}
+
+func decodeValidatorParam(value string) string {
+	value = strings.ReplaceAll(value, "0x2C", ",")
+	return strings.ReplaceAll(value, "0x7C", "|")
+}
+
+var oneOfValuePattern = regexp.MustCompile(`'[^']*'|\S+`)
+
+func parseOneOfValues(value string) []string {
+	values := oneOfValuePattern.FindAllString(value, -1)
+	for index := range values {
+		values[index] = strings.ReplaceAll(values[index], "'", "")
+	}
+	return values
+}
+
+func applyRequiredValueRule(schema *jsonschema.Schema, kind reflect.Kind) {
+	one := 1
+	switch kind {
+	case reflect.String:
+		setStrongestMinimum(&schema.MinLength, one)
+	case reflect.Array, reflect.Slice:
+		setStrongestMinimum(&schema.MinItems, one)
+	case reflect.Map:
+		setStrongestMinimum(&schema.MinProperties, one)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64:
+		zero := any(float64(0))
+		addNotConstraint(schema, &jsonschema.Schema{Const: &zero})
+	case reflect.Bool:
+		value := any(true)
+		schema.Const = &value
+	}
+}
+
+func applyComparisonRule(schema *jsonschema.Schema, kind reflect.Kind, rule, raw string) error {
+	switch kind {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64:
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return fmt.Errorf("%s=%q is not numeric", rule, raw)
+		}
+		switch rule {
+		case "gt":
+			schema.ExclusiveMinimum = strongestLowerBound(schema.ExclusiveMinimum, value)
+		case "gte":
+			schema.Minimum = strongestLowerBound(schema.Minimum, value)
+		case "lt":
+			schema.ExclusiveMaximum = strongestUpperBound(schema.ExclusiveMaximum, value)
+		case "lte":
+			schema.Maximum = strongestUpperBound(schema.Maximum, value)
+		}
+	case reflect.String, reflect.Array, reflect.Slice, reflect.Map:
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return fmt.Errorf("%s=%q must be a non-negative integer", rule, raw)
+		}
+		switch rule {
+		case "gt":
+			value++
+			setLengthRule(schema, kind, "min", value)
+		case "gte":
+			setLengthRule(schema, kind, "min", value)
+		case "lt":
+			if value == 0 {
+				return fmt.Errorf("lt=0 cannot be satisfied by a %s", kind)
+			}
+			value--
+			setLengthRule(schema, kind, "max", value)
+		case "lte":
+			setLengthRule(schema, kind, "max", value)
+		}
+	default:
+		return fmt.Errorf("%s is not valid for %s fields", rule, kind)
+	}
+	return nil
+}
+
+func applyEqualityRule(schema *jsonschema.Schema, kind reflect.Kind, rule, raw string) error {
+	if kind == reflect.Array || kind == reflect.Slice || kind == reflect.Map {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return fmt.Errorf("%s=%q must be a non-negative integer", rule, raw)
+		}
+		if rule == "eq" {
+			setLengthRule(schema, kind, "len", value)
+		}
+		return nil // ne=<length> cannot be represented by one JSON Schema bound.
+	}
+	value, err := parseEnumValue(kind, raw)
+	if err != nil {
+		return fmt.Errorf("%s value %q: %w", rule, raw, err)
+	}
+	if rule == "eq" {
+		schema.Const = &value
+	} else {
+		addNotConstraint(schema, &jsonschema.Schema{Const: &value})
+	}
+	return nil
+}
+
+func addPatternConstraint(schema *jsonschema.Schema, pattern string) {
+	if schema.Pattern == "" {
+		schema.Pattern = pattern
+		return
+	}
+	schema.AllOf = append(schema.AllOf, &jsonschema.Schema{Pattern: pattern})
+}
+
+func addNotConstraint(schema *jsonschema.Schema, constraint *jsonschema.Schema) {
+	if schema.Not == nil {
+		schema.Not = constraint
+		return
+	}
+	schema.AllOf = append(schema.AllOf, &jsonschema.Schema{Not: constraint})
+}
+
+func strongestLowerBound(current *float64, value float64) *float64 {
+	if current == nil || value > *current {
+		return &value
+	}
+	return current
+}
+
+func strongestUpperBound(current *float64, value float64) *float64 {
+	if current == nil || value < *current {
+		return &value
+	}
+	return current
+}
+
+func setStrongestMinimum(current **int, value int) {
+	if *current == nil || value > **current {
+		*current = &value
+	}
+}
+
+func setStrongestMaximum(current **int, value int) {
+	if *current == nil || value < **current {
+		*current = &value
+	}
+}
+
 func hasValidationRule(tag, want string) bool {
 	for rule := range strings.SplitSeq(tag, ",") {
 		name, _, _ := strings.Cut(strings.TrimSpace(rule), "=")
+		if name == "dive" {
+			return false
+		}
 		if name == want {
 			return true
 		}
@@ -335,9 +624,9 @@ func applySizeRule(schema *jsonschema.Schema, kind reflect.Kind, rule, raw strin
 		}
 		switch rule {
 		case "min":
-			schema.Minimum = &value
+			schema.Minimum = strongestLowerBound(schema.Minimum, value)
 		case "max":
-			schema.Maximum = &value
+			schema.Maximum = strongestUpperBound(schema.Maximum, value)
 		default:
 			return fmt.Errorf("len is not valid for numeric fields")
 		}
@@ -357,9 +646,9 @@ func setLengthRule(schema *jsonschema.Schema, kind reflect.Kind, rule string, va
 	set := func(minimum, maximum **int) {
 		switch rule {
 		case "min":
-			*minimum = &value
+			setStrongestMinimum(minimum, value)
 		case "max":
-			*maximum = &value
+			setStrongestMaximum(maximum, value)
 		case "len":
 			*minimum, *maximum = &value, &value
 		}
