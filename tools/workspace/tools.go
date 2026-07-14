@@ -60,7 +60,7 @@ func NewLs(b Backend) loom.Tool {
 	contract := loom.MustToolContract[lsRequest](ToolNameLs)
 	desc := "List files and virtual directories under the given path. " +
 		"Path must be absolute. Returns entries sorted with directories first."
-	return loom.NewTypedTool(contract, desc, func(ctx context.Context, in lsRequest) (string, error) {
+	return loom.NewTool(contract, desc, func(ctx context.Context, in lsRequest) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.ls")
 		defer span.End()
 		span.SetAttributes(attribute.String(attrWorkspacePath, in.Path))
@@ -83,7 +83,7 @@ func NewReadFile(b Backend) loom.Tool {
 		"(format: '     N→content'). Default reads up to 2000 lines starting from line 1; " +
 		"use offset/limit to paginate large files. ALWAYS call read_file before write_file or " +
 		"edit_file on an existing path."
-	return loom.NewTypedTool(contract, desc, func(ctx context.Context, in readFileRequest) (string, error) {
+	return loom.NewTool(contract, desc, func(ctx context.Context, in readFileRequest) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.read_file")
 		defer span.End()
 		span.SetAttributes(
@@ -110,7 +110,7 @@ func NewWriteFile(b Backend) loom.Tool {
 	desc := "Write a file to the workspace, creating or overwriting it. " +
 		"For an existing path you MUST call read_file first (the tool will error otherwise) " +
 		"so you don't blindly overwrite content."
-	return loom.NewTypedTool(contract, desc, func(ctx context.Context, in writeFileRequest) (string, error) {
+	return loom.NewTool(contract, desc, func(ctx context.Context, in writeFileRequest) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.write_file")
 		defer span.End()
 		span.SetAttributes(
@@ -139,7 +139,7 @@ func NewEditFile(b Backend) loom.Tool {
 		"You MUST call read_file on the path first. " +
 		"If old_string is not unique, either provide more surrounding context to make it unique, " +
 		"or set replace_all=true."
-	return loom.NewTypedTool(contract, desc, func(ctx context.Context, in editFileRequest) (string, error) {
+	return loom.NewTool(contract, desc, func(ctx context.Context, in editFileRequest) (string, error) {
 		ctx, span := workspaceTracer().Start(ctx, "workspace.edit_file")
 		defer span.End()
 		span.SetAttributes(

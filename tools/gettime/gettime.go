@@ -28,10 +28,11 @@ type Response struct {
 // no arguments so a model cannot silently change the application's timezone.
 func New() loom.Tool {
 	description := "Get the current date and time. Local time is fixed to Asia/Shanghai (UTC+08:00). Returns UTC and local time in ISO 8601 format plus the weekday in English and Chinese."
-	return loom.NewTool(ToolName, description, nil, invoke)
+	contract := loom.MustToolContract[loom.NoArguments](ToolName)
+	return loom.NewTool(contract, description, invoke)
 }
 
-func invoke(ctx context.Context, _ string) (string, error) {
+func invoke(ctx context.Context, _ loom.NoArguments) (string, error) {
 	_, span := otel.Tracer("github.com/loomagent/loom/tools/gettime").Start(ctx, "get_time.now")
 	defer span.End()
 

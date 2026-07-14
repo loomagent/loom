@@ -2,6 +2,7 @@ package react
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"testing"
@@ -12,6 +13,14 @@ import (
 type scriptedModel struct {
 	responses []*loom.ChatResponse
 	requests  []loom.ChatRequest
+}
+
+type echoTextArguments struct {
+	Text string `json:"text"`
+}
+
+type echoNumberArguments struct {
+	N int `json:"n"`
 }
 
 func (m *scriptedModel) Name() string { return "test/model" }
@@ -60,7 +69,10 @@ func TestRunExecutesToolsAndFinishes(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "call-1", Name: "echo", Arguments: `{"text":"hello"}`}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "done", FinishReason: loom.FinishReasonStop},
 	}}
-	tools := loom.NewToolRegistry(loom.NewTool("echo", "echo", nil, func(_ context.Context, args string) (string, error) { return args, nil }))
+	tools := loom.NewToolRegistry(loom.NewTool(loom.MustToolContract[echoTextArguments]("echo"), "echo", func(_ context.Context, args echoTextArguments) (string, error) {
+		data, err := json.Marshal(args)
+		return string(data), err
+	}))
 
 	var result *Result
 	turn, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
@@ -87,7 +99,7 @@ func TestRunSoftLandingDisablesTools(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "call-1", Name: "echo", Arguments: `{}`}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "landed", FinishReason: loom.FinishReasonStop},
 	}}
-	tools := loom.NewToolRegistry(loom.NewTool("echo", "echo", nil, func(context.Context, string) (string, error) { return "ok", nil }))
+	tools := loom.NewToolRegistry(loom.NewTool(loom.MustToolContract[loom.NoArguments]("echo"), "echo", func(context.Context, loom.NoArguments) (string, error) { return "ok", nil }))
 
 	var result *Result
 	_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
@@ -152,7 +164,7 @@ func TestRunEnforcesPerToolLimitWithinOneResponse(t *testing.T) {
 		{Content: "done", FinishReason: loom.FinishReasonStop},
 	}}
 	invocations := 0
-	tools := loom.NewToolRegistry(loom.NewTool("echo", "echo", nil, func(context.Context, string) (string, error) {
+	tools := loom.NewToolRegistry(loom.NewTool(loom.MustToolContract[echoNumberArguments]("echo"), "echo", func(context.Context, echoNumberArguments) (string, error) {
 		invocations++
 		return "ok", nil
 	}))

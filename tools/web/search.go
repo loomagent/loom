@@ -81,7 +81,7 @@ func NewSearchTool(searcher WebSearcher, options SearchToolOptions) (loom.Tool, 
 	if err != nil {
 		return nil, err
 	}
-	return loom.NewTypedTool(contract, description, func(ctx context.Context, input searchToolRequest) (string, error) {
+	return loom.NewTool(contract, description, func(ctx context.Context, input searchToolRequest) (string, error) {
 		input.Query = strings.TrimSpace(input.Query)
 		if input.Limit == 0 {
 			input.Limit = defaultLimit

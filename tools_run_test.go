@@ -2,25 +2,30 @@ package loom
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
-
-	"github.com/google/jsonschema-go/jsonschema"
 )
 
+type echoToolArguments struct {
+	Value string `json:"value"`
+}
+
+type queryToolArguments struct {
+	Query string `json:"query"`
+}
+
 func newEchoTool() Tool {
-	return NewTool("echo", "echo back",
-		&jsonschema.Schema{Type: "object"},
-		func(ctx context.Context, args string) (string, error) {
-			return `{"got":"` + args + `"}`, nil
+	return NewTool(MustToolContract[echoToolArguments]("echo"), "echo back",
+		func(_ context.Context, args echoToolArguments) (string, error) {
+			return `{"got":"` + args.Value + `"}`, nil
 		},
 	)
 }
 
 func newFailingTool() Tool {
-	return NewTool("bad", "always fail",
-		&jsonschema.Schema{Type: "object"},
-		func(ctx context.Context, args string) (string, error) {
+	return NewTool(MustToolContract[NoArguments]("bad"), "always fail",
+		func(context.Context, NoArguments) (string, error) {
 			return "", errors.New("boom")
 		},
 	)
@@ -35,8 +40,8 @@ func TestExecuteToolCalls_Success(t *testing.T) {
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
 		// 模拟 LLM 返了两个 tool_calls
 		calls := []ToolCall{
-			{ID: "llm_c1", Name: "echo", Arguments: `a`},
-			{ID: "llm_c2", Name: "echo", Arguments: `b`},
+			{ID: "llm_c1", Name: "echo", Arguments: `{"value":"a"}`},
+			{ID: "llm_c2", Name: "echo", Arguments: `{"value":"b"}`},
 		}
 		results, err := ExecuteToolCalls(ctx, w, reg, calls)
 		if err != nil {
@@ -95,19 +100,15 @@ func TestExecuteToolCalls_ToolFails(t *testing.T) {
 
 func TestRunToolByName_Success(t *testing.T) {
 	reg := NewToolRegistry()
-	_ = reg.Register(NewTool("query", "q",
-		&jsonschema.Schema{Type: "object"},
-		func(ctx context.Context, args string) (string, error) {
-			return args, nil // echo args back
+	_ = reg.Register(NewTool(MustToolContract[queryToolArguments]("query"), "q",
+		func(_ context.Context, args queryToolArguments) (string, error) {
+			data, err := json.Marshal(args)
+			return string(data), err
 		},
 	))
 
-	type QueryArgs struct {
-		Query string `json:"query"`
-	}
-
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
-		output, err := RunToolByName(ctx, w, "查询 1", reg, "query", QueryArgs{Query: "ai"})
+		output, err := RunToolByName(ctx, w, "查询 1", reg, "query", queryToolArguments{Query: "ai"})
 		if err != nil {
 			return err
 		}
@@ -115,7 +116,7 @@ func TestRunToolByName_Success(t *testing.T) {
 			t.Errorf("output: %s", output)
 		}
 		// 再调一次,验证 callID 递增
-		output2, _ := RunToolByName(ctx, w, "查询 2", reg, "query", QueryArgs{Query: "ml"})
+		output2, _ := RunToolByName(ctx, w, "查询 2", reg, "query", queryToolArguments{Query: "ml"})
 		if output2 != `{"query":"ml"}` {
 			t.Errorf("output2: %s", output2)
 		}

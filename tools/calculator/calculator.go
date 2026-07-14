@@ -32,7 +32,7 @@ type response struct {
 // New constructs a calculator Loom tool.
 func New() loom.Tool {
 	description := "Evaluate a mathematical expression in a restricted Starlark environment. Supports arithmetic, parentheses, and functions from the Starlark math module."
-	return loom.NewTypedTool(loom.MustToolContract[request](ToolName), description, invoke)
+	return loom.NewTool(loom.MustToolContract[request](ToolName), description, invoke)
 }
 
 func invoke(ctx context.Context, input request) (string, error) {

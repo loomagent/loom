@@ -25,7 +25,7 @@ type readerRequest struct {
 
 func newSearchTool(searcher web.WebSearcher) loom.Tool {
 	contract := loom.MustToolContract[searchRequest]("web_search")
-	return loom.NewTypedTool(contract, "Search the web and assign stable SRC-N references to every result.",
+	return loom.NewTool(contract, "Search the web and assign stable SRC-N references to every result.",
 		func(ctx context.Context, input searchRequest) (string, error) {
 			input.Query = strings.TrimSpace(input.Query)
 			if input.Limit == 0 {
@@ -87,7 +87,7 @@ func newSearchTool(searcher web.WebSearcher) loom.Tool {
 
 func newReaderTool(reader web.WebReader) loom.Tool {
 	contract := loom.MustToolContract[readerRequest]("web_reader")
-	return loom.NewTypedTool(contract, "Read a source, save its Markdown in the workspace, and return its stable SRC-N reference.",
+	return loom.NewTool(contract, "Read a source, save its Markdown in the workspace, and return its stable SRC-N reference.",
 		func(ctx context.Context, input readerRequest) (string, error) {
 			input.URL = strings.TrimSpace(input.URL)
 			document, err := reader.Read(ctx, web.ReadRequest{URL: input.URL})

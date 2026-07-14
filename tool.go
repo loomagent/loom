@@ -48,8 +48,7 @@ type Tool interface {
 	Invoke(ctx context.Context, argumentsJSON string) (string, error)
 }
 
-// InvokeFunc Tool.Invoke 的函数签名,用于 NewTool 构造。
-type InvokeFunc func(ctx context.Context, argumentsJSON string) (string, error)
+type invokeFunc func(ctx context.Context, argumentsJSON string) (string, error)
 
 type ToolOption func(*ToolInfo)
 
@@ -59,13 +58,7 @@ func WithRequiresNetwork() ToolOption {
 	}
 }
 
-// NewTool 函数式构造一个 Tool。
-//
-// 适用于无参数工具或需要直接处理原始 JSON 的低层场景。struct 参数工具优先使用
-// ToolContract + NewTypedTool,避免重复生成和解析 Schema。
-//
-// params 为 nil 表示工具不接受入参。
-func NewTool(name, description string, params *jsonschema.Schema, fn InvokeFunc, opts ...ToolOption) Tool {
+func newTool(name, description string, params *jsonschema.Schema, fn invokeFunc, opts ...ToolOption) Tool {
 	info := &ToolInfo{Name: name, Description: description, Parameters: params}
 	for _, opt := range opts {
 		if opt != nil {
@@ -80,7 +73,7 @@ func NewTool(name, description string, params *jsonschema.Schema, fn InvokeFunc,
 
 type funcTool struct {
 	info *ToolInfo
-	fn   InvokeFunc
+	fn   invokeFunc
 }
 
 func (t *funcTool) Info(context.Context) (*ToolInfo, error) {

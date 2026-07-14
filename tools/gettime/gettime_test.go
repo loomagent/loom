@@ -3,8 +3,11 @@ package gettime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/loomagent/loom"
 )
 
 func TestAt(t *testing.T) {
@@ -20,8 +23,16 @@ func TestAt(t *testing.T) {
 	}
 }
 
-func TestToolIgnoresTimezoneArgument(t *testing.T) {
-	out, err := New().Invoke(context.Background(), `{"timezone":"UTC"}`)
+func TestToolUsesEmptyArgumentContract(t *testing.T) {
+	tool := New()
+	info, err := tool.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Parameters == nil || info.Parameters.Type != "object" || len(info.Parameters.Properties) != 0 {
+		t.Fatalf("argument schema = %#v", info.Parameters)
+	}
+	out, err := tool.Invoke(context.Background(), `{}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,5 +42,13 @@ func TestToolIgnoresTimezoneArgument(t *testing.T) {
 	}
 	if got.Timezone != "Asia/Shanghai" {
 		t.Fatalf("Timezone = %q", got.Timezone)
+	}
+	_, err = tool.Invoke(context.Background(), `{"timezone":"UTC"}`)
+	if err == nil {
+		t.Fatal("unexpected timezone argument should be rejected")
+	}
+	var argumentError *loom.ToolArgumentError
+	if !errors.As(err, &argumentError) || argumentError.Tool != ToolName || argumentError.ExampleArguments != `{}` {
+		t.Fatalf("argument error = %#v, err = %v", argumentError, err)
 	}
 }

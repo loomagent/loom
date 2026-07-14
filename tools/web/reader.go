@@ -64,7 +64,7 @@ func NewReaderTool(reader WebReader, options ReaderToolOptions) (loom.Tool, erro
 	if err != nil {
 		return nil, err
 	}
-	return loom.NewTypedTool(contract, description, func(ctx context.Context, input readerToolRequest) (string, error) {
+	return loom.NewTool(contract, description, func(ctx context.Context, input readerToolRequest) (string, error) {
 		input.URL = strings.TrimSpace(input.URL)
 		parsed, err := url.ParseRequestURI(input.URL)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {

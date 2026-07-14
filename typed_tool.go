@@ -8,9 +8,13 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
-// TypedInvokeFunc is a tool implementation whose arguments have already been
+// InvokeFunc is a tool implementation whose arguments have already been
 // parsed and validated against a ToolContract.
-type TypedInvokeFunc[T any] func(ctx context.Context, arguments T) (string, error)
+type InvokeFunc[T any] func(ctx context.Context, arguments T) (string, error)
+
+// NoArguments is the standard contract for tools that accept no arguments.
+// Such tools still require the model to send the empty JSON object {}.
+type NoArguments struct{}
 
 // ToolContract binds one public tool name to a Go argument type and its compiled
 // JSON Schema. A contract is immutable after construction and safe for
@@ -139,17 +143,17 @@ func (c *ToolContract[T]) Decode(argumentsJSON string) (T, error) {
 	return decodeToolArguments[T](c.name, argumentsJSON, c.schema, c.resolved, c.guidance)
 }
 
-// NewTypedTool exposes a typed handler using contract. The model-facing schema
+// NewTool exposes a typed handler using contract. The model-facing schema
 // is cloned from the immutable contract; changing ToolInfo cannot change the
 // validator used by Decode.
-func NewTypedTool[T any](contract *ToolContract[T], description string, fn TypedInvokeFunc[T], options ...ToolOption) Tool {
+func NewTool[T any](contract *ToolContract[T], description string, fn InvokeFunc[T], options ...ToolOption) Tool {
 	if contract == nil {
 		panic("loom: typed tool contract is nil")
 	}
 	if fn == nil {
 		panic(fmt.Sprintf("loom: typed tool %q invoke function is nil", contract.name))
 	}
-	return NewTool(contract.name, description, contract.Schema(), func(ctx context.Context, argumentsJSON string) (string, error) {
+	return newTool(contract.name, description, contract.Schema(), func(ctx context.Context, argumentsJSON string) (string, error) {
 		arguments, err := contract.Decode(argumentsJSON)
 		if err != nil {
 			return "", err

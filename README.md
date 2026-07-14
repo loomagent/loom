@@ -85,7 +85,7 @@ type calculatorRequest struct {
 }
 
 contract := loom.MustToolContract[calculatorRequest]("calculator")
-tool := loom.NewTypedTool(
+tool := loom.NewTool(
 	contract,
 	"Evaluate a mathematical expression.",
 	func(ctx context.Context, request calculatorRequest) (string, error) {
@@ -108,11 +108,15 @@ also assembles a complete example call and accepts it only after both Schema
 and struct validation succeed.
 
 `ToolContract` binds the tool name, generated Schema, compiled validator, and
-error contract once. `NewTypedTool` then passes already validated arguments to
+error contract once. `NewTool` then passes already validated arguments to
 the handler. Contracts are immutable and safe for concurrent calls; compiling
 once avoids rebuilding and resolving the Schema for every invocation. Argument
 decoding preserves the full `int64`/`uint64` range instead of routing integers
 through `float64`.
+
+`NewTool` is the only public tool constructor. Tools without parameters use
+`ToolContract[loom.NoArguments]` and accept the empty JSON object `{}`; raw JSON
+handlers remain an internal implementation detail.
 
 Errors expose `ToolArgumentError` metadata and render a bounded, compact
 non-JSON `expected arguments` contract for model self-correction without

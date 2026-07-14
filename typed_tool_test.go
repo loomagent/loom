@@ -13,7 +13,7 @@ type typedToolRequest struct {
 	Limit int    `json:"limit,omitempty" validate:"omitempty,min=0"`
 }
 
-func TestNewTypedToolBindsCompiledContract(t *testing.T) {
+func TestNewToolBindsCompiledContract(t *testing.T) {
 	contract, err := NewToolContract[typedToolRequest]("typed_search",
 		WithArgumentDescription("limit", "Maximum results."),
 		WithArgumentMaximum("limit", 5),
@@ -25,7 +25,7 @@ func TestNewTypedToolBindsCompiledContract(t *testing.T) {
 		t.Fatalf("name = %q", contract.Name())
 	}
 
-	tool := NewTypedTool(contract, "Search.", func(_ context.Context, input typedToolRequest) (string, error) {
+	tool := NewTool(contract, "Search.", func(_ context.Context, input typedToolRequest) (string, error) {
 		return input.Query, nil
 	}, WithRequiresNetwork())
 	info, err := tool.Info(context.Background())
