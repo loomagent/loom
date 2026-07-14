@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
+	"math/big"
 	"reflect"
 	"regexp"
 	"slices"
@@ -76,6 +76,11 @@ func newJSONToolArgumentError(tool string, guidance argumentGuidance, err error)
 	message := "malformed JSON: " + err.Error()
 	if errors.Is(err, errMultipleJSONValues) {
 		message = "input must contain exactly one JSON object"
+	} else {
+		var numberError *unsupportedJSONNumberError
+		if errors.As(err, &numberError) {
+			message = "unsupported numeric value: " + err.Error()
+		}
 	}
 	return &ToolArgumentError{
 		Tool:              tool,
@@ -269,15 +274,17 @@ func diagnoseSchema(schema *jsonschema.Schema, value any, field string) []ToolAr
 	}
 	issues = append(issues, diagnoseNotSchema(schema.Not, value, field)...)
 
-	switch typed := value.(type) {
-	case string:
-		issues = append(issues, diagnoseStringSchema(schema, typed, field)...)
-	case float64:
-		issues = append(issues, diagnoseNumberSchema(schema, typed, field)...)
-	case []any:
-		issues = append(issues, diagnoseArraySchema(schema, typed, field)...)
-	case map[string]any:
-		issues = append(issues, diagnoseObjectSchema(schema, typed, field)...)
+	if number, ok := jsonNumericValue(value); ok {
+		issues = append(issues, diagnoseNumberSchema(schema, number, field)...)
+	} else {
+		switch typed := value.(type) {
+		case string:
+			issues = append(issues, diagnoseStringSchema(schema, typed, field)...)
+		case []any:
+			issues = append(issues, diagnoseArraySchema(schema, typed, field)...)
+		case map[string]any:
+			issues = append(issues, diagnoseObjectSchema(schema, typed, field)...)
+		}
 	}
 	for _, constraint := range schema.AllOf {
 		issues = append(issues, diagnoseSchema(constraint, value, field)...)
@@ -347,18 +354,19 @@ func matchesSchemaType(schema *jsonschema.Schema, value any) (bool, string) {
 }
 
 func jsonValueType(value any) string {
-	switch value := value.(type) {
+	if number, ok := jsonNumericValue(value); ok {
+		if number.IsInt() {
+			return "integer"
+		}
+		return "number"
+	}
+	switch value.(type) {
 	case nil:
 		return "null"
 	case bool:
 		return "boolean"
 	case string:
 		return "string"
-	case float64:
-		if math.Trunc(value) == value {
-			return "integer"
-		}
-		return "number"
 	case []any:
 		return "array"
 	case map[string]any:
@@ -431,24 +439,25 @@ func unquoteRegexpLiteral(pattern string) string {
 	return b.String()
 }
 
-func diagnoseNumberSchema(schema *jsonschema.Schema, value float64, field string) []ToolArgumentIssue {
+func diagnoseNumberSchema(schema *jsonschema.Schema, value *big.Rat, field string) []ToolArgumentIssue {
 	label := quoteField(field)
 	var issues []ToolArgumentIssue
-	if schema.Minimum != nil && value < *schema.Minimum {
+	compare := func(bound float64) int { return value.Cmp(new(big.Rat).SetFloat64(bound)) }
+	if schema.Minimum != nil && compare(*schema.Minimum) < 0 {
 		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "min", Message: label + " must be at least " + formatNumber(*schema.Minimum)})
 	}
-	if schema.Maximum != nil && value > *schema.Maximum {
+	if schema.Maximum != nil && compare(*schema.Maximum) > 0 {
 		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "max", Message: label + " must be at most " + formatNumber(*schema.Maximum)})
 	}
-	if schema.ExclusiveMinimum != nil && value <= *schema.ExclusiveMinimum {
+	if schema.ExclusiveMinimum != nil && compare(*schema.ExclusiveMinimum) <= 0 {
 		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "gt", Message: label + " must be greater than " + formatNumber(*schema.ExclusiveMinimum)})
 	}
-	if schema.ExclusiveMaximum != nil && value >= *schema.ExclusiveMaximum {
+	if schema.ExclusiveMaximum != nil && compare(*schema.ExclusiveMaximum) >= 0 {
 		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "lt", Message: label + " must be less than " + formatNumber(*schema.ExclusiveMaximum)})
 	}
 	if schema.MultipleOf != nil && *schema.MultipleOf != 0 {
-		quotient := value / *schema.MultipleOf
-		if math.Abs(quotient-math.Round(quotient)) > 1e-9 {
+		divisor := new(big.Rat).SetFloat64(*schema.MultipleOf)
+		if quotient := new(big.Rat).Quo(value, divisor); !quotient.IsInt() {
 			issues = append(issues, ToolArgumentIssue{Field: field, Rule: "multipleof", Message: label + " must be a multiple of " + formatNumber(*schema.MultipleOf)})
 		}
 	}
@@ -558,39 +567,45 @@ func equalJSONValue(left, right any) bool {
 	leftNumber, leftOK := jsonNumericValue(left)
 	rightNumber, rightOK := jsonNumericValue(right)
 	if leftOK && rightOK {
-		return leftNumber == rightNumber
+		return leftNumber.Cmp(rightNumber) == 0
 	}
 	return reflect.DeepEqual(left, right)
 }
 
-func jsonNumericValue(value any) (float64, bool) {
+func jsonNumericValue(value any) (*big.Rat, bool) {
+	rational := new(big.Rat)
 	switch value := value.(type) {
+	case json.Number:
+		if _, ok := rational.SetString(value.String()); !ok {
+			return nil, false
+		}
+		return rational, true
 	case float64:
-		return value, true
+		return rational.SetFloat64(value), true
 	case float32:
-		return float64(value), true
+		return rational.SetFloat64(float64(value)), true
 	case int:
-		return float64(value), true
+		return rational.SetInt64(int64(value)), true
 	case int8:
-		return float64(value), true
+		return rational.SetInt64(int64(value)), true
 	case int16:
-		return float64(value), true
+		return rational.SetInt64(int64(value)), true
 	case int32:
-		return float64(value), true
+		return rational.SetInt64(int64(value)), true
 	case int64:
-		return float64(value), true
+		return rational.SetInt64(value), true
 	case uint:
-		return float64(value), true
+		return rational.SetUint64(uint64(value)), true
 	case uint8:
-		return float64(value), true
+		return rational.SetUint64(uint64(value)), true
 	case uint16:
-		return float64(value), true
+		return rational.SetUint64(uint64(value)), true
 	case uint32:
-		return float64(value), true
+		return rational.SetUint64(uint64(value)), true
 	case uint64:
-		return float64(value), true
+		return rational.SetUint64(value), true
 	default:
-		return 0, false
+		return nil, false
 	}
 }
 

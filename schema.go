@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"math/big"
 	"reflect"
 	"regexp"
 	"slices"
@@ -16,6 +18,15 @@ import (
 )
 
 var errMultipleJSONValues = errors.New("multiple JSON values")
+
+type unsupportedJSONNumberError struct {
+	number string
+	reason string
+}
+
+func (e *unsupportedJSONNumberError) Error() string {
+	return fmt.Sprintf("JSON number %q %s", e.number, e.reason)
+}
 
 var toolArgumentValidator = newToolArgumentValidator()
 
@@ -125,6 +136,7 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 	}
 
 	decoder := json.NewDecoder(strings.NewReader(argumentsJSON))
+	decoder.UseNumber()
 	var instance any
 	if err := decoder.Decode(&instance); err != nil {
 		return zero, newJSONToolArgumentError(toolName, guidance, err)
@@ -132,12 +144,20 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 	if err := requireJSONEOF(decoder); err != nil {
 		return zero, newJSONToolArgumentError(toolName, guidance, err)
 	}
+	instance, err := normalizeJSONNumbers(instance)
+	if err != nil {
+		return zero, newJSONToolArgumentError(toolName, guidance, err)
+	}
 	if err := resolved.Validate(instance); err != nil {
 		return zero, newSchemaToolArgumentError(toolName, schema, guidance, instance, err)
 	}
 
 	var arguments T
-	decoder = json.NewDecoder(strings.NewReader(argumentsJSON))
+	normalizedJSON, err := json.Marshal(instance)
+	if err != nil {
+		return zero, newJSONToolArgumentError(toolName, guidance, err)
+	}
+	decoder = json.NewDecoder(strings.NewReader(string(normalizedJSON)))
 	if err := decoder.Decode(&arguments); err != nil {
 		return zero, newJSONToolArgumentError(toolName, guidance, err)
 	}
@@ -145,6 +165,55 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 		return zero, newStructToolArgumentError(toolName, guidance, err)
 	}
 	return arguments, nil
+}
+
+func normalizeJSONNumbers(value any) (any, error) {
+	switch value := value.(type) {
+	case json.Number:
+		return normalizeJSONNumber(value)
+	case []any:
+		for index := range value {
+			normalized, err := normalizeJSONNumbers(value[index])
+			if err != nil {
+				return nil, fmt.Errorf("array item %d: %w", index, err)
+			}
+			value[index] = normalized
+		}
+		return value, nil
+	case map[string]any:
+		for name, item := range value {
+			normalized, err := normalizeJSONNumbers(item)
+			if err != nil {
+				return nil, fmt.Errorf("field %q: %w", name, err)
+			}
+			value[name] = normalized
+		}
+		return value, nil
+	default:
+		return value, nil
+	}
+}
+
+func normalizeJSONNumber(number json.Number) (any, error) {
+	rational, ok := new(big.Rat).SetString(number.String())
+	if !ok {
+		return nil, &unsupportedJSONNumberError{number: number.String(), reason: "cannot be represented"}
+	}
+	if rational.IsInt() {
+		integer := rational.Num()
+		if integer.IsInt64() {
+			return integer.Int64(), nil
+		}
+		if integer.Sign() >= 0 && integer.BitLen() <= 64 {
+			return integer.Uint64(), nil
+		}
+		return nil, &unsupportedJSONNumberError{number: number.String(), reason: "is outside the supported 64-bit integer range"}
+	}
+	floating, _ := rational.Float64()
+	if math.IsInf(floating, 0) {
+		return nil, &unsupportedJSONNumberError{number: number.String(), reason: "is outside the supported floating-point range"}
+	}
+	return floating, nil
 }
 
 func validateToolArgumentStruct(value any) (err error) {

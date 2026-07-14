@@ -275,6 +275,53 @@ func TestSchemaForProjectsValidatorOrAndAnnotatesFormats(t *testing.T) {
 	}
 }
 
+func TestDecodeToolArgumentsPreservesLargeIntegerPrecision(t *testing.T) {
+	const id = uint64(9007199254740993) // First integer not exactly representable by float64.
+	type request struct {
+		ID       uint64   `json:"id"`
+		Unsigned uint64   `json:"unsigned"`
+		Signed   int64    `json:"signed"`
+		Values   []uint64 `json:"values" validate:"unique"`
+	}
+
+	schema := MustSchemaFor[request]()
+	expectedID := any(id)
+	schema.Properties["id"].Const = &expectedID
+	raw := `{"id":9007199254740993,"unsigned":18446744073709551615,"signed":-9223372036854775808,"values":[9007199254740992,9007199254740993]}`
+	got, err := DecodeToolArgumentsWithSchema[request](raw, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != id || got.Unsigned != ^uint64(0) || got.Signed != -1<<63 {
+		t.Fatalf("decoded integers = %+v", got)
+	}
+	if !slices.Equal(got.Values, []uint64{9007199254740992, 9007199254740993}) {
+		t.Fatalf("decoded values = %v", got.Values)
+	}
+
+	wrong := strings.Replace(raw, `"id":9007199254740993`, `"id":9007199254740992`, 1)
+	if _, err := DecodeToolArgumentsWithSchema[request](wrong, schema); err == nil || !strings.Contains(err.Error(), `"id" must equal 9007199254740993`) {
+		t.Fatalf("adjacent integer error = %v", err)
+	}
+	tooLarge := strings.Replace(raw, `"unsigned":18446744073709551615`, `"unsigned":18446744073709551616`, 1)
+	if _, err := DecodeToolArgumentsWithSchema[request](tooLarge, schema); err == nil || !strings.Contains(err.Error(), "outside the supported 64-bit integer range") {
+		t.Fatalf("out-of-range integer error = %v", err)
+	}
+}
+
+func TestDecodeToolArgumentsNormalizesIntegralExponent(t *testing.T) {
+	type request struct {
+		Value int64 `json:"value"`
+	}
+	got, err := DecodeToolArguments[request](`{"value":1e3}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Value != 1000 {
+		t.Fatalf("value = %d, want 1000", got.Value)
+	}
+}
+
 func TestMustSchemaForReturnsIndependentSchemas(t *testing.T) {
 	type request struct {
 		Value string `json:"value"`
