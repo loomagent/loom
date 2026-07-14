@@ -34,14 +34,16 @@ type ToolArgumentIssue struct {
 
 // ToolArgumentError is the normalized error returned for invalid tool input.
 // Err retains the original parser, JSON Schema, or validator error for logs and
-// errors.Is/errors.As. ExpectedInput is a compact JSON object describing the
-// accepted shape; it deliberately omits long field descriptions.
+// errors.Is/errors.As. ExpectedArguments describes the accepted shape without
+// looking like callable JSON. ExampleArguments is present only when declared
+// examples form a complete, validated call.
 type ToolArgumentError struct {
-	Tool          string
-	Kind          ToolArgumentErrorKind
-	Issues        []ToolArgumentIssue
-	ExpectedInput string
-	Err           error
+	Tool              string
+	Kind              ToolArgumentErrorKind
+	Issues            []ToolArgumentIssue
+	ExpectedArguments string
+	ExampleArguments  string
+	Err               error
 }
 
 func (e *ToolArgumentError) Error() string {
@@ -59,45 +61,51 @@ func (e *ToolArgumentError) Error() string {
 		messages = append(messages, "input does not match the tool contract")
 	}
 	message := prefix + ": " + strings.Join(messages, "; ")
-	if e.ExpectedInput != "" {
-		message += ". expected input: " + e.ExpectedInput
+	if e.ExpectedArguments != "" {
+		message += ". expected arguments: " + e.ExpectedArguments
+	}
+	if e.ExampleArguments != "" {
+		message += ". example arguments: " + e.ExampleArguments
 	}
 	return message
 }
 
 func (e *ToolArgumentError) Unwrap() error { return e.Err }
 
-func newJSONToolArgumentError(tool, expected string, err error) error {
+func newJSONToolArgumentError(tool string, guidance argumentGuidance, err error) error {
 	message := "malformed JSON: " + err.Error()
 	if errors.Is(err, errMultipleJSONValues) {
 		message = "input must contain exactly one JSON object"
 	}
 	return &ToolArgumentError{
-		Tool:          tool,
-		Kind:          ToolArgumentErrorMalformedJSON,
-		Issues:        []ToolArgumentIssue{{Rule: "json", Message: message}},
-		ExpectedInput: expected,
-		Err:           err,
+		Tool:              tool,
+		Kind:              ToolArgumentErrorMalformedJSON,
+		Issues:            []ToolArgumentIssue{{Rule: "json", Message: message}},
+		ExpectedArguments: guidance.expected,
+		ExampleArguments:  guidance.example,
+		Err:               err,
 	}
 }
 
-func newSchemaToolArgumentError(tool string, schema *jsonschema.Schema, expected string, instance any, err error) error {
+func newSchemaToolArgumentError(tool string, schema *jsonschema.Schema, guidance argumentGuidance, instance any, err error) error {
 	return &ToolArgumentError{
-		Tool:          tool,
-		Kind:          ToolArgumentErrorSchema,
-		Issues:        explainSchemaError(schema, instance, err),
-		ExpectedInput: expected,
-		Err:           err,
+		Tool:              tool,
+		Kind:              ToolArgumentErrorSchema,
+		Issues:            explainSchemaError(schema, instance, err),
+		ExpectedArguments: guidance.expected,
+		ExampleArguments:  guidance.example,
+		Err:               err,
 	}
 }
 
-func newStructToolArgumentError(tool, expected string, err error) error {
+func newStructToolArgumentError(tool string, guidance argumentGuidance, err error) error {
 	return &ToolArgumentError{
-		Tool:          tool,
-		Kind:          ToolArgumentErrorStruct,
-		Issues:        explainValidatorError(err),
-		ExpectedInput: expected,
-		Err:           err,
+		Tool:              tool,
+		Kind:              ToolArgumentErrorStruct,
+		Issues:            explainValidatorError(err),
+		ExpectedArguments: guidance.expected,
+		ExampleArguments:  guidance.example,
+		Err:               err,
 	}
 }
 
@@ -475,7 +483,7 @@ func quoteField(field string) string {
 	return strconv.Quote(field)
 }
 
-func summarizeExpectedInput(schema *jsonschema.Schema) string {
+func summarizeExpectedArguments(schema *jsonschema.Schema) string {
 	if schema == nil || !schemaHasType(schema, "object") {
 		return ""
 	}
@@ -494,16 +502,15 @@ func summarizeExpectedInput(schema *jsonschema.Schema) string {
 	names = append(names, remaining...)
 
 	var b strings.Builder
-	b.WriteByte('{')
 	for i, name := range names {
 		if i > 0 {
-			b.WriteByte(',')
+			b.WriteString("; ")
 		}
-		b.WriteString(strconv.Quote(name))
-		b.WriteByte(':')
-		b.WriteString(strconv.Quote(summarizeProperty(schema.Properties[name], slices.Contains(schema.Required, name))))
+		b.WriteString(name)
+		b.WriteString("=<")
+		b.WriteString(summarizeProperty(schema.Properties[name], slices.Contains(schema.Required, name)))
+		b.WriteByte('>')
 	}
-	b.WriteByte('}')
 	return b.String()
 }
 
@@ -515,7 +522,7 @@ func summarizeProperty(schema *jsonschema.Schema, required bool) string {
 		parts = append(parts, "optional")
 	}
 	if schema == nil {
-		return strings.Join(parts, "; ")
+		return strings.Join(parts, ", ")
 	}
 	if schema.Enum != nil {
 		parts = append(parts, "one of "+compactJSON(schema.Enum))
@@ -545,7 +552,7 @@ func summarizeProperty(schema *jsonschema.Schema, required bool) string {
 	if schema.MaxItems != nil {
 		parts = append(parts, "max items "+strconv.Itoa(*schema.MaxItems))
 	}
-	return strings.Join(parts, "; ")
+	return strings.Join(parts, ", ")
 }
 
 func schemaTypeName(schema *jsonschema.Schema) string {

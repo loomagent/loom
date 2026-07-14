@@ -80,7 +80,7 @@ derive property types, names, required fields, descriptions, and nested shapes:
 
 ```go
 type calculatorRequest struct {
-	Expression string `json:"expression" jsonschema:"Mathematical expression to evaluate." validate:"min=1,notblank"`
+	Expression string `json:"expression" jsonschema:"Mathematical expression to evaluate." validate:"min=1,notblank" example:"(2 + 3) * 4"`
 	Precision  int    `json:"precision,omitempty" jsonschema:"Optional decimal precision." validate:"omitempty,min=0,max=12"`
 }
 
@@ -100,12 +100,17 @@ direct schema equivalent (`required`, `min`, `max`, `len`, `oneof`, and Loom's
 `notblank`) are also projected into JSON Schema. `DecodeToolArguments` checks
 the incoming JSON against the generated schema and validates the decoded
 struct, so model guidance and server-side enforcement stay in sync. Derived
-object schemas reject unknown properties by default.
+object schemas reject unknown properties by default. An `example` tag is
+projected into JSON Schema. When every required argument has an example, Loom
+also assembles a complete example call and accepts it only after both Schema
+and struct validation succeed.
 
 `ToolContract` binds the tool name, generated Schema, compiled validator, and
 error contract once. `NewTypedTool` then passes already validated arguments to
 the handler. Errors expose `ToolArgumentError` metadata and render a compact
-expected-input object for model self-correction without dumping the full schema.
+non-JSON `expected arguments` contract for model self-correction without
+dumping the full schema. A validated `example arguments` JSON object is included
+when the struct declares a complete example.
 
 ## Packages
 

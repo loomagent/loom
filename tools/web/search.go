@@ -12,7 +12,7 @@ import (
 )
 
 type searchToolRequest struct {
-	Query string `json:"query" jsonschema:"Search query." validate:"min=1,notblank"`
+	Query string `json:"query" jsonschema:"Search query." validate:"min=1,notblank" example:"latest Go agent runtime research"`
 	Limit int    `json:"limit,omitempty" jsonschema:"Maximum number of results to return. Zero uses the tool's configured default." validate:"omitempty,min=0"`
 }
 

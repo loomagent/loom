@@ -32,24 +32,24 @@ const (
 func workspaceTracer() trace.Tracer { return otel.Tracer(tracerName) }
 
 type lsRequest struct {
-	Path string `json:"path" jsonschema:"Absolute directory path to list (must start with '/'). Use '/' to list workspace root." validate:"min=1,notblank"`
+	Path string `json:"path" jsonschema:"Absolute directory path to list (must start with '/'). Use '/' to list workspace root." validate:"min=1,notblank" example:"/"`
 }
 
 type readFileRequest struct {
-	Path   string `json:"path" jsonschema:"Absolute path of the file to read." validate:"min=1,notblank"`
+	Path   string `json:"path" jsonschema:"Absolute path of the file to read." validate:"min=1,notblank" example:"/notes.md"`
 	Offset int    `json:"offset,omitempty" jsonschema:"1-based starting line number. Zero uses the default of 1." validate:"omitempty,min=0"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"Max lines to read. Default 2000. Zero uses the default." validate:"omitempty,min=0"`
 }
 
 type writeFileRequest struct {
-	Path    string `json:"path" jsonschema:"Absolute path of the file to write (creates or overwrites)." validate:"min=1,notblank"`
-	Content string `json:"content" jsonschema:"Full file content. UTF-8 text, max 1 MB."`
+	Path    string `json:"path" jsonschema:"Absolute path of the file to write (creates or overwrites)." validate:"min=1,notblank" example:"/notes.md"`
+	Content string `json:"content" jsonschema:"Full file content. UTF-8 text, max 1 MB." example:"hello"`
 }
 
 type editFileRequest struct {
-	Path       string `json:"path" jsonschema:"Absolute path of the file to edit." validate:"min=1,notblank"`
-	OldString  string `json:"old_string" jsonschema:"Exact string to replace (whitespace-sensitive). Must be non-empty." validate:"min=1"`
-	NewString  string `json:"new_string" jsonschema:"Replacement string. Must differ from old_string. Empty string means delete."`
+	Path       string `json:"path" jsonschema:"Absolute path of the file to edit." validate:"min=1,notblank" example:"/notes.md"`
+	OldString  string `json:"old_string" jsonschema:"Exact string to replace (whitespace-sensitive). Must be non-empty." validate:"min=1" example:"hello"`
+	NewString  string `json:"new_string" jsonschema:"Replacement string. Must differ from old_string. Empty string means delete." example:"hello world"`
 	ReplaceAll bool   `json:"replace_all,omitempty" jsonschema:"If true, replace all occurrences. If false (default), error when old_string appears multiple times."`
 }
 

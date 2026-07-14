@@ -100,25 +100,13 @@ func DecodeToolArgumentsWithSchema[T any](argumentsJSON string, schema *jsonsche
 // DecodeToolArgumentsWithSchemaFor is DecodeToolArgumentsWithSchema with a
 // tool name included in validation errors.
 func DecodeToolArgumentsWithSchemaFor[T any](toolName, argumentsJSON string, schema *jsonschema.Schema) (T, error) {
-	return decodeToolArguments[T](toolName, argumentsJSON, schema, nil, "")
+	return decodeToolArguments[T](toolName, argumentsJSON, schema, nil, argumentGuidance{})
 }
 
-func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonschema.Schema, resolved *jsonschema.Resolved, expected string) (T, error) {
+func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonschema.Schema, resolved *jsonschema.Resolved, guidance argumentGuidance) (T, error) {
 	var zero T
 	if schema == nil {
 		return zero, fmt.Errorf("loom: tool argument schema is nil")
-	}
-	if expected == "" {
-		expected = summarizeExpectedInput(schema)
-	}
-
-	decoder := json.NewDecoder(strings.NewReader(argumentsJSON))
-	var instance any
-	if err := decoder.Decode(&instance); err != nil {
-		return zero, newJSONToolArgumentError(toolName, expected, err)
-	}
-	if err := requireJSONEOF(decoder); err != nil {
-		return zero, newJSONToolArgumentError(toolName, expected, err)
 	}
 
 	if resolved == nil {
@@ -128,17 +116,33 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 			return zero, fmt.Errorf("loom: resolve tool argument schema: %w", err)
 		}
 	}
+	if guidance.expected == "" {
+		var err error
+		guidance, err = buildArgumentGuidance[T](schema, resolved)
+		if err != nil {
+			return zero, fmt.Errorf("loom: build tool argument guidance: %w", err)
+		}
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(argumentsJSON))
+	var instance any
+	if err := decoder.Decode(&instance); err != nil {
+		return zero, newJSONToolArgumentError(toolName, guidance, err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return zero, newJSONToolArgumentError(toolName, guidance, err)
+	}
 	if err := resolved.Validate(instance); err != nil {
-		return zero, newSchemaToolArgumentError(toolName, schema, expected, instance, err)
+		return zero, newSchemaToolArgumentError(toolName, schema, guidance, instance, err)
 	}
 
 	var arguments T
 	decoder = json.NewDecoder(strings.NewReader(argumentsJSON))
 	if err := decoder.Decode(&arguments); err != nil {
-		return zero, newJSONToolArgumentError(toolName, expected, err)
+		return zero, newJSONToolArgumentError(toolName, guidance, err)
 	}
 	if err := validateToolArgumentStruct(arguments); err != nil {
-		return zero, newStructToolArgumentError(toolName, expected, err)
+		return zero, newStructToolArgumentError(toolName, guidance, err)
 	}
 	return arguments, nil
 }
@@ -191,6 +195,13 @@ func applyValidationTags(schema *jsonschema.Schema, typ reflect.Type) error {
 			if property == nil {
 				continue
 			}
+			if raw, ok := field.Tag.Lookup("example"); ok {
+				example, err := parseExampleValue(field.Type, raw)
+				if err != nil {
+					return fmt.Errorf("field %s example: %w", field.Name, err)
+				}
+				property.Examples = []any{example}
+			}
 			if tag, ok := field.Tag.Lookup("validate"); ok {
 				if err := applyValidationRules(property, field.Type, tag); err != nil {
 					return fmt.Errorf("field %s: %w", field.Name, err)
@@ -213,6 +224,30 @@ func applyValidationTags(schema *jsonschema.Schema, typ reflect.Type) error {
 		}
 	}
 	return nil
+}
+
+func parseExampleValue(typ reflect.Type, raw string) (any, error) {
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	switch typ.Kind() {
+	case reflect.String:
+		return raw, nil
+	case reflect.Bool:
+		return strconv.ParseBool(raw)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.ParseInt(raw, 10, typ.Bits())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return strconv.ParseUint(raw, 10, typ.Bits())
+	case reflect.Float32, reflect.Float64:
+		return strconv.ParseFloat(raw, typ.Bits())
+	default:
+		var value any
+		if err := json.Unmarshal([]byte(raw), &value); err != nil {
+			return nil, fmt.Errorf("must be valid JSON for %s: %w", typ, err)
+		}
+		return value, nil
+	}
 }
 
 func schemaHasType(schema *jsonschema.Schema, want string) bool {

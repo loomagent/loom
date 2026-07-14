@@ -15,12 +15,12 @@ import (
 )
 
 type searchRequest struct {
-	Query string `json:"query" jsonschema:"Focused web search query." validate:"min=1,notblank"`
+	Query string `json:"query" jsonschema:"Focused web search query." validate:"min=1,notblank" example:"latest Go agent runtime research"`
 	Limit int    `json:"limit,omitempty" jsonschema:"Maximum results, from 1 to 10. Zero uses the default of 5." validate:"omitempty,min=0,max=10"`
 }
 
 type readerRequest struct {
-	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1,notblank"`
+	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1,notblank" example:"https://example.com/article"`
 }
 
 func newSearchTool(searcher web.WebSearcher) loom.Tool {

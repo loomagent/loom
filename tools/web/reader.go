@@ -14,7 +14,7 @@ import (
 )
 
 type readerToolRequest struct {
-	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1,notblank"`
+	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1,notblank" example:"https://example.com/article"`
 }
 
 // WebReader fetches and normalizes one web document.

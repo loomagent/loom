@@ -107,7 +107,7 @@ func TestDecodeToolArgumentsReturnsInvalidValidatorTag(t *testing.T) {
 	}
 }
 
-func TestDecodeToolArgumentsForIncludesToolAndExpectedInput(t *testing.T) {
+func TestDecodeToolArgumentsForIncludesToolAndExpectedArguments(t *testing.T) {
 	type request struct {
 		Query string `json:"query" validate:"min=1"`
 		Limit int    `json:"limit,omitempty" validate:"omitempty,min=0,max=10"`
@@ -121,8 +121,8 @@ func TestDecodeToolArgumentsForIncludesToolAndExpectedInput(t *testing.T) {
 	if argumentError.Tool != "web_search" || argumentError.Kind != ToolArgumentErrorSchema {
 		t.Fatalf("error metadata = %+v", argumentError)
 	}
-	if got, want := argumentError.ExpectedInput, `{"query":"string; required; min length 1","limit":"integer; optional; 0..10"}`; got != want {
-		t.Fatalf("expected input = %s, want %s", got, want)
+	if got, want := argumentError.ExpectedArguments, `query=<string, required, min length 1>; limit=<integer, optional, 0..10>`; got != want {
+		t.Fatalf("expected arguments = %s, want %s", got, want)
 	}
 	if got := err.Error(); !strings.Contains(got, `invalid arguments for tool "web_search"`) || !strings.Contains(got, `"query" is required`) {
 		t.Fatalf("error = %s", got)
@@ -139,8 +139,31 @@ func TestDecodeToolArgumentsForFormatsNonBlankRule(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 	var argumentError *ToolArgumentError
-	if !errors.As(err, &argumentError) || !strings.Contains(argumentError.ExpectedInput, "non-blank") {
+	if !errors.As(err, &argumentError) || !strings.Contains(argumentError.ExpectedArguments, "non-blank") {
 		t.Fatalf("argument error = %+v", argumentError)
+	}
+}
+
+func TestSchemaForProjectsExamples(t *testing.T) {
+	type request struct {
+		Query   string   `json:"query" validate:"min=1,notblank" example:"loom agent runtime"`
+		Limit   int      `json:"limit,omitempty" validate:"omitempty,min=1,max=10" example:"5"`
+		Enabled bool     `json:"enabled,omitempty" example:"true"`
+		Tags    []string `json:"tags,omitempty" example:"[\"go\",\"agents\"]"`
+	}
+
+	schema, err := SchemaFor[request]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := schema.Properties["query"].Examples, []any{"loom agent runtime"}; !slices.Equal(got, want) {
+		t.Fatalf("query examples = %#v, want %#v", got, want)
+	}
+	if got := schema.Properties["limit"].Examples; len(got) != 1 || got[0] != int64(5) {
+		t.Fatalf("limit examples = %#v", got)
+	}
+	if got := schema.Properties["tags"].Examples; len(got) != 1 {
+		t.Fatalf("tags examples = %#v", got)
 	}
 }
 

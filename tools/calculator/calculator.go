@@ -21,7 +21,7 @@ import (
 const ToolName = "calculator"
 
 type request struct {
-	Expression string `json:"expression" jsonschema:"Mathematical expression using Starlark syntax, for example '(2 + 3) * 4', 'math.sqrt(144)', or 'math.pow(2, 8)'." validate:"min=1,notblank"`
+	Expression string `json:"expression" jsonschema:"Mathematical expression using Starlark syntax, for example '(2 + 3) * 4', 'math.sqrt(144)', or 'math.pow(2, 8)'." validate:"min=1,notblank" example:"(2 + 3) * 4"`
 }
 
 type response struct {

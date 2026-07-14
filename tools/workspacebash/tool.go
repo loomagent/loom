@@ -36,7 +36,7 @@ type ToolOptions struct {
 }
 
 type commandRequest struct {
-	Command string `json:"command" jsonschema:"Shell command to execute." validate:"min=1,notblank"`
+	Command string `json:"command" jsonschema:"Shell command to execute." validate:"min=1,notblank" example:"grep -n \"keyword\" /notes.md"`
 }
 
 // DefaultParameters 返回默认的工具入参 schema(单 command 字段)。

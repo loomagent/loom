@@ -19,7 +19,7 @@ type ToolContract[T any] struct {
 	name     string
 	schema   *jsonschema.Schema
 	resolved *jsonschema.Resolved
-	expected string
+	guidance argumentGuidance
 }
 
 type toolContractConfig struct {
@@ -107,11 +107,15 @@ func NewToolContract[T any](toolName string, options ...ToolContractOption) (*To
 	if err != nil {
 		return nil, fmt.Errorf("loom: resolve argument schema for tool %q: %w", toolName, err)
 	}
+	guidance, err := buildArgumentGuidance[T](config.schema, resolved)
+	if err != nil {
+		return nil, fmt.Errorf("loom: build argument guidance for tool %q: %w", toolName, err)
+	}
 	return &ToolContract[T]{
 		name:     toolName,
 		schema:   config.schema,
 		resolved: resolved,
-		expected: summarizeExpectedInput(config.schema),
+		guidance: guidance,
 	}, nil
 }
 
@@ -132,7 +136,7 @@ func (c *ToolContract[T]) Schema() *jsonschema.Schema { return c.schema.CloneSch
 
 // Decode parses and validates one tool call using the precompiled contract.
 func (c *ToolContract[T]) Decode(argumentsJSON string) (T, error) {
-	return decodeToolArguments[T](c.name, argumentsJSON, c.schema, c.resolved, c.expected)
+	return decodeToolArguments[T](c.name, argumentsJSON, c.schema, c.resolved, c.guidance)
 }
 
 // NewTypedTool exposes a typed handler using contract. The model-facing schema

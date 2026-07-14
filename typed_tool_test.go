@@ -8,7 +8,7 @@ import (
 )
 
 type typedToolRequest struct {
-	Query string `json:"query" jsonschema:"Search query." validate:"min=1,notblank"`
+	Query string `json:"query" jsonschema:"Search query." validate:"min=1,notblank" example:"loom agent runtime"`
 	Limit int    `json:"limit,omitempty" validate:"omitempty,min=0"`
 }
 
@@ -70,5 +70,40 @@ func TestToolContractDecodeIncludesBoundName(t *testing.T) {
 	}
 	if argumentError.Tool != contract.Name() {
 		t.Fatalf("error tool = %q, want %q", argumentError.Tool, contract.Name())
+	}
+	if got, want := argumentError.ExampleArguments, `{"query":"loom agent runtime"}`; got != want {
+		t.Fatalf("example arguments = %q, want %q", got, want)
+	}
+}
+
+func TestToolContractOmitsIncompleteExample(t *testing.T) {
+	type request struct {
+		Query string `json:"query" example:"loom"`
+		Mode  string `json:"mode"`
+	}
+	contract := MustToolContract[request]("incomplete")
+	_, err := contract.Decode(`{}`)
+	var argumentError *ToolArgumentError
+	if !errors.As(err, &argumentError) {
+		t.Fatal(err)
+	}
+	if argumentError.ExampleArguments != "" {
+		t.Fatalf("incomplete example should be omitted: %q", argumentError.ExampleArguments)
+	}
+}
+
+func TestToolContractRejectsInvalidExample(t *testing.T) {
+	type schemaInvalid struct {
+		Limit int `json:"limit" validate:"min=1,max=5" example:"9"`
+	}
+	if _, err := NewToolContract[schemaInvalid]("invalid_schema_example"); err == nil || !strings.Contains(err.Error(), "does not satisfy JSON Schema") {
+		t.Fatalf("invalid schema example error = %v", err)
+	}
+
+	type validatorInvalid struct {
+		Value string `json:"value" validate:"contains=loom" example:"agent"`
+	}
+	if _, err := NewToolContract[validatorInvalid]("invalid_validator_example"); err == nil || !strings.Contains(err.Error(), "does not satisfy struct validation") {
+		t.Fatalf("invalid validator example error = %v", err)
 	}
 }
