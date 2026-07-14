@@ -2,6 +2,7 @@ package loom
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -12,6 +13,8 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/google/jsonschema-go/jsonschema"
 )
+
+var errMultipleJSONValues = errors.New("multiple JSON values")
 
 var toolArgumentValidator = newToolArgumentValidator()
 
@@ -153,7 +156,7 @@ func requireJSONEOF(decoder *json.Decoder) error {
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("multiple JSON values")
+			return errMultipleJSONValues
 		}
 		return err
 	}

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -67,7 +69,7 @@ func (e *ToolArgumentError) Unwrap() error { return e.Err }
 
 func newJSONToolArgumentError(tool, expected string, err error) error {
 	message := "malformed JSON: " + err.Error()
-	if strings.Contains(err.Error(), "multiple JSON values") {
+	if errors.Is(err, errMultipleJSONValues) {
 		message = "input must contain exactly one JSON object"
 	}
 	return &ToolArgumentError{
@@ -186,113 +188,268 @@ func lengthMessage(kind reflect.Kind, param string) string {
 }
 
 func explainSchemaError(schema *jsonschema.Schema, instance any, err error) []ToolArgumentIssue {
-	raw := err.Error()
-	path := schemaErrorPath(raw)
-	field := strings.Join(path, ".")
-	label := quoteField(field)
-	targetSchema := schemaAtPath(schema, path)
-	targetValue := valueAtPath(instance, path)
-
-	switch {
-	case strings.Contains(raw, "required: missing properties"):
-		issues := missingRequiredIssues(targetSchema, targetValue, field)
-		if len(issues) > 0 {
-			return issues
-		}
-	case strings.Contains(raw, "unexpected additional properties"):
-		issues := additionalPropertyIssues(targetSchema, targetValue, field)
-		if len(issues) > 0 {
-			return issues
-		}
-	case strings.Contains(raw, "maximum:") && targetSchema != nil && targetSchema.Maximum != nil:
-		return []ToolArgumentIssue{{Field: field, Rule: "max", Message: label + " must be at most " + formatNumber(*targetSchema.Maximum)}}
-	case strings.Contains(raw, "minimum:") && targetSchema != nil && targetSchema.Minimum != nil:
-		return []ToolArgumentIssue{{Field: field, Rule: "min", Message: label + " must be at least " + formatNumber(*targetSchema.Minimum)}}
-	case strings.Contains(raw, "maxLength:") && targetSchema != nil && targetSchema.MaxLength != nil:
-		return []ToolArgumentIssue{{Field: field, Rule: "max", Message: label + " must contain at most " + strconv.Itoa(*targetSchema.MaxLength) + " characters"}}
-	case strings.Contains(raw, "minLength:") && targetSchema != nil && targetSchema.MinLength != nil:
-		return []ToolArgumentIssue{{Field: field, Rule: "min", Message: label + " must contain at least " + strconv.Itoa(*targetSchema.MinLength) + " characters"}}
-	case strings.Contains(raw, "enum:") && targetSchema != nil:
-		return []ToolArgumentIssue{{Field: field, Rule: "oneof", Message: label + " must be one of " + compactJSON(targetSchema.Enum)}}
-	case strings.Contains(raw, "type:") && targetSchema != nil:
-		return []ToolArgumentIssue{{Field: field, Rule: "type", Message: label + " must be " + schemaTypeName(targetSchema)}}
-	case strings.Contains(raw, "pattern:") && targetSchema != nil && targetSchema.Pattern == `\S`:
-		return []ToolArgumentIssue{{Field: field, Rule: "notblank", Message: label + " must not be blank"}}
-	}
-	return []ToolArgumentIssue{{Field: field, Rule: "schema", Message: label + " does not match the expected schema"}}
-}
-
-func schemaErrorPath(raw string) []string {
-	const marker = "/properties/"
-	var path []string
-	for {
-		_, rest, ok := strings.Cut(raw, marker)
-		if !ok {
-			return path
-		}
-		name := rest
-		if i := strings.IndexAny(name, "/:"); i >= 0 {
-			name = name[:i]
-		}
-		name = strings.ReplaceAll(strings.ReplaceAll(name, "~1", "/"), "~0", "~")
-		path = append(path, name)
-		raw = rest
-	}
-}
-
-func schemaAtPath(schema *jsonschema.Schema, path []string) *jsonschema.Schema {
-	for _, part := range path {
-		if schema == nil {
-			return nil
-		}
-		schema = schema.Properties[part]
-	}
-	return schema
-}
-
-func valueAtPath(value any, path []string) any {
-	for _, part := range path {
-		object, ok := value.(map[string]any)
-		if !ok {
-			return nil
-		}
-		value = object[part]
-	}
-	return value
-}
-
-func missingRequiredIssues(schema *jsonschema.Schema, value any, prefix string) []ToolArgumentIssue {
-	object, ok := value.(map[string]any)
-	if !ok || schema == nil {
-		return nil
-	}
-	var issues []ToolArgumentIssue
-	for _, name := range schema.Required {
-		if _, exists := object[name]; exists {
-			continue
-		}
-		field := joinFieldPath(prefix, name)
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "required", Message: quoteField(field) + " is required"})
+	issues := diagnoseSchema(schema, instance, "")
+	if len(issues) == 0 {
+		issues = []ToolArgumentIssue{{Rule: "schema", Message: "input does not match the expected schema"}}
 	}
 	sortIssues(issues)
 	return issues
 }
 
-func additionalPropertyIssues(schema *jsonschema.Schema, value any, prefix string) []ToolArgumentIssue {
-	object, ok := value.(map[string]any)
-	if !ok || schema == nil {
+func diagnoseSchema(schema *jsonschema.Schema, value any, field string) []ToolArgumentIssue {
+	if schema == nil {
 		return nil
 	}
+	label := quoteField(field)
+	if matches, want := matchesSchemaType(schema, value); !matches {
+		return []ToolArgumentIssue{{Field: field, Rule: "type", Message: label + " must be " + want}}
+	}
+
 	var issues []ToolArgumentIssue
-	for name := range object {
+	if schema.Const != nil && !equalJSONValue(value, *schema.Const) {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "const", Message: label + " must equal " + compactJSON(*schema.Const)})
+	}
+	if schema.Enum != nil && !containsJSONValue(schema.Enum, value) {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "oneof", Message: label + " must be one of " + compactJSON(schema.Enum)})
+	}
+
+	switch typed := value.(type) {
+	case string:
+		issues = append(issues, diagnoseStringSchema(schema, typed, field)...)
+	case float64:
+		issues = append(issues, diagnoseNumberSchema(schema, typed, field)...)
+	case []any:
+		issues = append(issues, diagnoseArraySchema(schema, typed, field)...)
+	case map[string]any:
+		issues = append(issues, diagnoseObjectSchema(schema, typed, field)...)
+	}
+	return issues
+}
+
+func matchesSchemaType(schema *jsonschema.Schema, value any) (bool, string) {
+	allowed := slices.Clone(schema.Types)
+	if schema.Type != "" {
+		allowed = []string{schema.Type}
+	}
+	if len(allowed) == 0 {
+		return true, "value"
+	}
+	actual := jsonValueType(value)
+	for _, want := range allowed {
+		if actual == want || (actual == "integer" && want == "number") {
+			return true, schemaTypeName(schema)
+		}
+	}
+	return false, schemaTypeName(schema)
+}
+
+func jsonValueType(value any) string {
+	switch value := value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case string:
+		return "string"
+	case float64:
+		if math.Trunc(value) == value {
+			return "integer"
+		}
+		return "number"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	default:
+		return "unknown"
+	}
+}
+
+func diagnoseStringSchema(schema *jsonschema.Schema, value, field string) []ToolArgumentIssue {
+	label := quoteField(field)
+	length := len([]rune(value))
+	var issues []ToolArgumentIssue
+	if schema.MinLength != nil && length < *schema.MinLength {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "min", Message: label + " must contain at least " + strconv.Itoa(*schema.MinLength) + " characters"})
+	}
+	if schema.MaxLength != nil && length > *schema.MaxLength {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "max", Message: label + " must contain at most " + strconv.Itoa(*schema.MaxLength) + " characters"})
+	}
+	if schema.Pattern != "" {
+		pattern, err := regexp.Compile(schema.Pattern)
+		if err == nil && !pattern.MatchString(value) {
+			if schema.Pattern == `\S` {
+				issues = append(issues, ToolArgumentIssue{Field: field, Rule: "notblank", Message: label + " must not be blank"})
+			} else {
+				issues = append(issues, ToolArgumentIssue{Field: field, Rule: "pattern", Message: label + " must match pattern " + strconv.Quote(schema.Pattern)})
+			}
+		}
+	}
+	return issues
+}
+
+func diagnoseNumberSchema(schema *jsonschema.Schema, value float64, field string) []ToolArgumentIssue {
+	label := quoteField(field)
+	var issues []ToolArgumentIssue
+	if schema.Minimum != nil && value < *schema.Minimum {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "min", Message: label + " must be at least " + formatNumber(*schema.Minimum)})
+	}
+	if schema.Maximum != nil && value > *schema.Maximum {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "max", Message: label + " must be at most " + formatNumber(*schema.Maximum)})
+	}
+	if schema.ExclusiveMinimum != nil && value <= *schema.ExclusiveMinimum {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "gt", Message: label + " must be greater than " + formatNumber(*schema.ExclusiveMinimum)})
+	}
+	if schema.ExclusiveMaximum != nil && value >= *schema.ExclusiveMaximum {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "lt", Message: label + " must be less than " + formatNumber(*schema.ExclusiveMaximum)})
+	}
+	if schema.MultipleOf != nil && *schema.MultipleOf != 0 {
+		quotient := value / *schema.MultipleOf
+		if math.Abs(quotient-math.Round(quotient)) > 1e-9 {
+			issues = append(issues, ToolArgumentIssue{Field: field, Rule: "multipleof", Message: label + " must be a multiple of " + formatNumber(*schema.MultipleOf)})
+		}
+	}
+	return issues
+}
+
+func diagnoseArraySchema(schema *jsonschema.Schema, value []any, field string) []ToolArgumentIssue {
+	label := quoteField(field)
+	var issues []ToolArgumentIssue
+	if schema.MinItems != nil && len(value) < *schema.MinItems {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "min", Message: label + " must contain at least " + strconv.Itoa(*schema.MinItems) + " items"})
+	}
+	if schema.MaxItems != nil && len(value) > *schema.MaxItems {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "max", Message: label + " must contain at most " + strconv.Itoa(*schema.MaxItems) + " items"})
+	}
+	if schema.UniqueItems {
+		duplicate := false
+		for i := range value {
+			for j := 0; j < i; j++ {
+				if equalJSONValue(value[i], value[j]) {
+					issues = append(issues, ToolArgumentIssue{Field: field, Rule: "unique", Message: label + " must contain unique items"})
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				break
+			}
+		}
+	}
+	if schema.Items != nil {
+		for index, item := range value {
+			issues = append(issues, diagnoseSchema(schema.Items, item, indexFieldPath(field, index))...)
+		}
+	}
+	return issues
+}
+
+func diagnoseObjectSchema(schema *jsonschema.Schema, value map[string]any, field string) []ToolArgumentIssue {
+	label := quoteField(field)
+	var issues []ToolArgumentIssue
+	if schema.MinProperties != nil && len(value) < *schema.MinProperties {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "min", Message: label + " must contain at least " + strconv.Itoa(*schema.MinProperties) + " fields"})
+	}
+	if schema.MaxProperties != nil && len(value) > *schema.MaxProperties {
+		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "max", Message: label + " must contain at most " + strconv.Itoa(*schema.MaxProperties) + " fields"})
+	}
+	for _, name := range schema.Required {
+		if _, exists := value[name]; !exists {
+			path := joinFieldPath(field, name)
+			issues = append(issues, ToolArgumentIssue{Field: path, Rule: "required", Message: quoteField(path) + " is required"})
+		}
+	}
+	for _, name := range orderedPropertyNames(schema) {
+		if propertyValue, exists := value[name]; exists {
+			issues = append(issues, diagnoseSchema(schema.Properties[name], propertyValue, joinFieldPath(field, name))...)
+		}
+	}
+	for name, propertyValue := range value {
 		if _, exists := schema.Properties[name]; exists {
 			continue
 		}
-		field := joinFieldPath(prefix, name)
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "unknown", Message: quoteField(field) + " is not an accepted field"})
+		path := joinFieldPath(field, name)
+		switch {
+		case isFalseSchema(schema.AdditionalProperties):
+			issues = append(issues, ToolArgumentIssue{Field: path, Rule: "unknown", Message: quoteField(path) + " is not an accepted field"})
+		case schema.AdditionalProperties != nil:
+			issues = append(issues, diagnoseSchema(schema.AdditionalProperties, propertyValue, path)...)
+		}
 	}
-	sortIssues(issues)
 	return issues
+}
+
+func orderedPropertyNames(schema *jsonschema.Schema) []string {
+	names := slices.Clone(schema.PropertyOrder)
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		seen[name] = true
+	}
+	var remaining []string
+	for name := range schema.Properties {
+		if !seen[name] {
+			remaining = append(remaining, name)
+		}
+	}
+	sort.Strings(remaining)
+	return append(names, remaining...)
+}
+
+func isFalseSchema(schema *jsonschema.Schema) bool {
+	return schema != nil && schema.Not != nil && reflect.ValueOf(*schema.Not).IsZero()
+}
+
+func containsJSONValue(values []any, target any) bool {
+	for _, value := range values {
+		if equalJSONValue(value, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalJSONValue(left, right any) bool {
+	leftNumber, leftOK := jsonNumericValue(left)
+	rightNumber, rightOK := jsonNumericValue(right)
+	if leftOK && rightOK {
+		return leftNumber == rightNumber
+	}
+	return reflect.DeepEqual(left, right)
+}
+
+func jsonNumericValue(value any) (float64, bool) {
+	switch value := value.(type) {
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	case int8:
+		return float64(value), true
+	case int16:
+		return float64(value), true
+	case int32:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case uint:
+		return float64(value), true
+	case uint8:
+		return float64(value), true
+	case uint16:
+		return float64(value), true
+	case uint32:
+		return float64(value), true
+	case uint64:
+		return float64(value), true
+	default:
+		return 0, false
+	}
+}
+
+func indexFieldPath(prefix string, index int) string {
+	return prefix + "[" + strconv.Itoa(index) + "]"
 }
 
 func joinFieldPath(prefix, field string) string {
