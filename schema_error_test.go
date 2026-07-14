@@ -65,3 +65,24 @@ func TestExplainSchemaErrorFallsBackForUnsupportedKeywords(t *testing.T) {
 		t.Fatalf("issues = %+v", issues)
 	}
 }
+
+func TestToolArgumentErrorBoundsModelFacingOutput(t *testing.T) {
+	issues := make([]ToolArgumentIssue, 12)
+	for index := range issues {
+		issues[index] = ToolArgumentIssue{Message: strings.Repeat("问题", maxToolArgumentMessageRunes)}
+	}
+	err := (&ToolArgumentError{
+		Issues:            issues,
+		ExpectedArguments: strings.Repeat("参", maxExpectedArgumentRunes+10),
+		ExampleArguments:  strings.Repeat("例", maxExampleArgumentRunes+1),
+	}).Error()
+	if !strings.Contains(err, "and 4 more validation issues") {
+		t.Fatalf("missing issue summary: %s", err)
+	}
+	if !strings.Contains(err, "example arguments omitted") {
+		t.Fatalf("oversized example was not omitted: %s", err)
+	}
+	if len([]rune(err)) > maxToolArgumentMessages*(maxToolArgumentMessageRunes+2)+maxExpectedArgumentRunes+300 {
+		t.Fatalf("model-facing error is unexpectedly large: %d runes", len([]rune(err)))
+	}
+}

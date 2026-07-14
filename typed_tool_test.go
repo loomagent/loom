@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -107,4 +108,80 @@ func TestToolContractRejectsInvalidExample(t *testing.T) {
 	if _, err := NewToolContract[validatorInvalid]("invalid_validator_example"); err == nil || !strings.Contains(err.Error(), "does not satisfy struct validation") {
 		t.Fatalf("invalid validator example error = %v", err)
 	}
+}
+
+func TestToolContractDecodeIsConcurrentSafe(t *testing.T) {
+	contract := MustToolContract[typedToolRequest]("concurrent_search", WithArgumentMaximum("limit", 5))
+	const workers = 32
+	const iterations = 100
+	errorsFound := make(chan error, workers)
+	var wait sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for range iterations {
+				got, err := contract.Decode(`{"query":"loom","limit":5}`)
+				if err != nil {
+					errorsFound <- err
+					return
+				}
+				if got.Query != "loom" || got.Limit != 5 {
+					errorsFound <- errors.New("decoded arguments changed during concurrent use")
+					return
+				}
+			}
+		}()
+	}
+	wait.Wait()
+	close(errorsFound)
+	for err := range errorsFound {
+		t.Fatal(err)
+	}
+}
+
+func FuzzToolContractDecode(f *testing.F) {
+	contract := MustToolContract[typedToolRequest]("fuzz_search", WithArgumentMaximum("limit", 5))
+	for _, seed := range []string{
+		`{"query":"loom","limit":5}`,
+		`{"query":""}`,
+		`{"limit":1}`,
+		`{"query":"loom","limit":9007199254740993}`,
+		`{"query":`,
+		`null`,
+		``,
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		_, err := contract.Decode(raw)
+		if err == nil {
+			return
+		}
+		var argumentError *ToolArgumentError
+		if !errors.As(err, &argumentError) {
+			t.Fatalf("Decode returned unnormalized error %T: %v", err, err)
+		}
+	})
+}
+
+func BenchmarkToolArgumentDecode(b *testing.B) {
+	contract := MustToolContract[typedToolRequest]("benchmark_search", WithArgumentMaximum("limit", 5))
+	const raw = `{"query":"loom","limit":5}`
+	b.Run("compiled_contract", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := contract.Decode(raw); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("derive_per_call", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := DecodeToolArguments[typedToolRequest](raw); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }

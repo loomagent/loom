@@ -43,7 +43,9 @@ func buildArgumentGuidance[T any](schema *jsonschema.Schema, resolved *jsonschem
 	if err != nil {
 		return argumentGuidance{}, fmt.Errorf("marshal validated argument example: %w", err)
 	}
-	guidance.example = string(data)
+	if len([]rune(string(data))) <= maxExampleArgumentRunes {
+		guidance.example = string(data)
+	}
 	return guidance, nil
 }
 

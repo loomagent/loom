@@ -109,7 +109,12 @@ and struct validation succeed.
 
 `ToolContract` binds the tool name, generated Schema, compiled validator, and
 error contract once. `NewTypedTool` then passes already validated arguments to
-the handler. Errors expose `ToolArgumentError` metadata and render a compact
+the handler. Contracts are immutable and safe for concurrent calls; compiling
+once avoids rebuilding and resolving the Schema for every invocation. Argument
+decoding preserves the full `int64`/`uint64` range instead of routing integers
+through `float64`.
+
+Errors expose `ToolArgumentError` metadata and render a bounded, compact
 non-JSON `expected arguments` contract for model self-correction without
 dumping the full schema. A validated `example arguments` JSON object is included
 when the struct declares a complete example.

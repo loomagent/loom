@@ -23,6 +23,11 @@ const (
 	ToolArgumentErrorMalformedJSON ToolArgumentErrorKind = "malformed_json"
 	ToolArgumentErrorSchema        ToolArgumentErrorKind = "schema_validation"
 	ToolArgumentErrorStruct        ToolArgumentErrorKind = "struct_validation"
+
+	maxToolArgumentMessages     = 8
+	maxToolArgumentMessageRunes = 512
+	maxExpectedArgumentRunes    = 4096
+	maxExampleArgumentRunes     = 4096
 )
 
 // ToolArgumentIssue is one model-facing validation problem.
@@ -51,23 +56,41 @@ func (e *ToolArgumentError) Error() string {
 	if e.Tool != "" {
 		prefix = fmt.Sprintf("invalid arguments for tool %q", e.Tool)
 	}
-	messages := make([]string, 0, len(e.Issues))
+	messages := make([]string, 0, min(len(e.Issues), maxToolArgumentMessages)+1)
 	for _, issue := range e.Issues {
 		if issue.Message != "" {
-			messages = append(messages, issue.Message)
+			messages = append(messages, truncateDiagnostic(issue.Message, maxToolArgumentMessageRunes))
+			if len(messages) == maxToolArgumentMessages {
+				break
+			}
 		}
+	}
+	if remaining := len(e.Issues) - len(messages); remaining > 0 {
+		messages = append(messages, fmt.Sprintf("and %d more validation issues", remaining))
 	}
 	if len(messages) == 0 {
 		messages = append(messages, "input does not match the tool contract")
 	}
 	message := prefix + ": " + strings.Join(messages, "; ")
 	if e.ExpectedArguments != "" {
-		message += ". expected arguments: " + e.ExpectedArguments
+		message += ". expected arguments: " + truncateDiagnostic(e.ExpectedArguments, maxExpectedArgumentRunes)
 	}
 	if e.ExampleArguments != "" {
-		message += ". example arguments: " + e.ExampleArguments
+		if len([]rune(e.ExampleArguments)) <= maxExampleArgumentRunes {
+			message += ". example arguments: " + e.ExampleArguments
+		} else {
+			message += ". example arguments omitted because the validated example is too large"
+		}
 	}
 	return message
+}
+
+func truncateDiagnostic(value string, maximum int) string {
+	runes := []rune(value)
+	if len(runes) <= maximum {
+		return value
+	}
+	return string(runes[:maximum-1]) + "…"
 }
 
 func (e *ToolArgumentError) Unwrap() error { return e.Err }
