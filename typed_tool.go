@@ -90,9 +90,8 @@ func configureArgumentProperty(name string, configure func(*jsonschema.Schema)) 
 // toolName. Tool names are required so every validation error can identify the
 // tool that rejected the call.
 func NewToolContract[T any](toolName string, options ...ToolContractOption) (*ToolContract[T], error) {
-	toolName = strings.TrimSpace(toolName)
-	if toolName == "" {
-		return nil, fmt.Errorf("loom: tool contract name is required")
+	if err := ValidateToolName(toolName); err != nil {
+		return nil, fmt.Errorf("loom: invalid tool name %q: %w", toolName, err)
 	}
 	schema, err := SchemaFor[T]()
 	if err != nil {

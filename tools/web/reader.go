@@ -13,6 +13,9 @@ import (
 	"github.com/loomagent/loom"
 )
 
+// ToolNameReader is the default name exposed by the web reader tool.
+const ToolNameReader = "web_reader"
+
 type readerToolRequest struct {
 	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1,notblank" example:"https://example.com/article"`
 }
@@ -52,9 +55,9 @@ func NewReaderTool(reader WebReader, options ReaderToolOptions) (loom.Tool, erro
 	if reader == nil {
 		return nil, errors.New("web: WebReader is required")
 	}
-	name := strings.TrimSpace(options.Name)
+	name := options.Name
 	if name == "" {
-		name = "web_reader"
+		name = ToolNameReader
 	}
 	description := strings.TrimSpace(options.Description)
 	if description == "" {

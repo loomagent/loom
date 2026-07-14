@@ -11,6 +11,9 @@ import (
 	"github.com/loomagent/loom"
 )
 
+// ToolNameSearch is the default name exposed by the web search tool.
+const ToolNameSearch = "web_search"
+
 type searchToolRequest struct {
 	Query string `json:"query" jsonschema:"Search query." validate:"min=1,notblank" example:"latest Go agent runtime research"`
 	Limit int    `json:"limit,omitempty" jsonschema:"Maximum number of results to return. Zero uses the tool's configured default." validate:"omitempty,min=0"`
@@ -55,9 +58,9 @@ func NewSearchTool(searcher WebSearcher, options SearchToolOptions) (loom.Tool, 
 	if searcher == nil {
 		return nil, errors.New("web: WebSearcher is required")
 	}
-	name := strings.TrimSpace(options.Name)
+	name := options.Name
 	if name == "" {
-		name = "web_search"
+		name = ToolNameSearch
 	}
 	defaultLimit := options.DefaultLimit
 	if defaultLimit <= 0 {

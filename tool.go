@@ -3,9 +3,30 @@ package loom
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/google/jsonschema-go/jsonschema"
 )
+
+const maxToolNameLength = 64
+
+var toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// ValidateToolName reports whether name is portable across supported model
+// providers. Tool names contain 1 to 64 ASCII letters, digits, underscores, or
+// hyphens. Validation is exact: surrounding whitespace is not trimmed.
+func ValidateToolName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if !toolNamePattern.MatchString(name) {
+		return fmt.Errorf("name must contain only ASCII letters, digits, underscores, or hyphens")
+	}
+	if len(name) > maxToolNameLength {
+		return fmt.Errorf("name exceeds %d characters", maxToolNameLength)
+	}
+	return nil
+}
 
 // ToolInfo 一个工具的元数据,供 LLM 决定何时 / 如何调用。
 //
@@ -77,7 +98,14 @@ type funcTool struct {
 }
 
 func (t *funcTool) Info(context.Context) (*ToolInfo, error) {
-	return t.info, nil
+	if t.info == nil {
+		return nil, nil
+	}
+	info := *t.info
+	if info.Parameters != nil {
+		info.Parameters = info.Parameters.CloneSchemas()
+	}
+	return &info, nil
 }
 
 func (t *funcTool) Invoke(ctx context.Context, argumentsJSON string) (string, error) {
@@ -177,8 +205,14 @@ func (r *ToolRegistry) Register(t Tool) error {
 	if err != nil {
 		return fmt.Errorf("loom: Tool.Info 失败: %w", err)
 	}
-	if info == nil || info.Name == "" {
-		return fmt.Errorf("loom: 工具 Name 不能为空")
+	if info == nil {
+		return fmt.Errorf("loom: Tool.Info 返回 nil")
+	}
+	if err := ValidateToolName(info.Name); err != nil {
+		return fmt.Errorf("loom: 工具名称 %q 无效: %w", info.Name, err)
+	}
+	if r.tools == nil {
+		r.tools = make(map[string]Tool)
 	}
 	if _, exists := r.tools[info.Name]; exists {
 		return fmt.Errorf("loom: 工具 %q 已注册", info.Name)
@@ -206,6 +240,12 @@ func (r *ToolRegistry) InfoList(ctx context.Context) ([]*ToolInfo, error) {
 		info, err := t.Info(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("loom: 工具 %q Info: %w", name, err)
+		}
+		if info == nil {
+			return nil, fmt.Errorf("loom: 工具 %q Info 返回 nil", name)
+		}
+		if info.Name != name {
+			return nil, fmt.Errorf("loom: 工具注册名 %q 在注册后变为 %q", name, info.Name)
 		}
 		out = append(out, info)
 	}

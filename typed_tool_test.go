@@ -42,7 +42,15 @@ func TestNewToolBindsCompiledContract(t *testing.T) {
 	// The model-facing schema is a clone. Mutating it must not weaken the
 	// validator compiled into the contract.
 	maximum := float64(100)
+	info.Name = "changed"
 	info.Parameters.Properties["limit"].Maximum = &maximum
+	freshInfo, err := tool.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freshInfo.Name != contract.Name() || freshInfo.Parameters.Properties["limit"].Maximum == nil || *freshInfo.Parameters.Properties["limit"].Maximum != 5 {
+		t.Fatalf("tool info mutation leaked: %+v", freshInfo)
+	}
 	if _, err := tool.Invoke(context.Background(), `{"query":"loom","limit":6}`); err == nil || !strings.Contains(err.Error(), `"limit" must be at most 5`) {
 		t.Fatalf("validation error = %v", err)
 	}
@@ -56,6 +64,11 @@ func TestNewToolBindsCompiledContract(t *testing.T) {
 func TestToolContractErrors(t *testing.T) {
 	if _, err := NewToolContract[typedToolRequest](""); err == nil || !strings.Contains(err.Error(), "name is required") {
 		t.Fatalf("empty-name error = %v", err)
+	}
+	for _, name := range []string{" invalid", "invalid.name", strings.Repeat("a", maxToolNameLength+1)} {
+		if _, err := NewToolContract[typedToolRequest](name); err == nil || !strings.Contains(err.Error(), "invalid tool name") {
+			t.Errorf("invalid name %q error = %v", name, err)
+		}
 	}
 	if _, err := NewToolContract[typedToolRequest]("search", WithArgumentMaximum("missing", 1)); err == nil || !strings.Contains(err.Error(), `property "missing" does not exist`) {
 		t.Fatalf("missing-property error = %v", err)

@@ -24,7 +24,7 @@ type readerRequest struct {
 }
 
 func newSearchTool(searcher web.WebSearcher) loom.Tool {
-	contract := loom.MustToolContract[searchRequest]("web_search")
+	contract := loom.MustToolContract[searchRequest](web.ToolNameSearch)
 	return loom.NewTool(contract, "Search the web and assign stable SRC-N references to every result.",
 		func(ctx context.Context, input searchRequest) (string, error) {
 			input.Query = strings.TrimSpace(input.Query)
@@ -44,9 +44,9 @@ func newSearchTool(searcher web.WebSearcher) loom.Tool {
 			}
 			items := make([]sourceregistry.Input, len(response.Results))
 			for i, result := range response.Results {
-				items[i] = sourceregistry.Input{URL: result.URL, Origin: "web_search", Title: result.Title, Snippet: result.Snippet,
+				items[i] = sourceregistry.Input{URL: result.URL, Origin: web.ToolNameSearch, Title: result.Title, Snippet: result.Snippet,
 					SearchDate:    sourceregistry.DateEvidence{Text: result.Metadata["date"], Source: result.Metadata["date_source"]},
-					PublishedDate: sourceregistry.PublishedDate{At: result.PublishedAt}, Discovery: sourceregistry.Discovery{Tool: "web_search", Phase: "tool"}}
+					PublishedDate: sourceregistry.PublishedDate{At: result.PublishedAt}, Discovery: sourceregistry.Discovery{Tool: web.ToolNameSearch, Phase: "tool"}}
 			}
 			refs, err := registry.EnsureBatch(ctx, items)
 			if err != nil {
@@ -71,7 +71,7 @@ func newSearchTool(searcher web.WebSearcher) loom.Tool {
 					DateSource: result.Metadata["date_source"], Relevant: true, SrcID: refs[i].ID}
 				out[i] = resultWithRef{SrcID: refs[i].ID, Title: result.Title, URL: result.URL, Snippet: result.Snippet, Date: date}
 			}
-			if _, err := session.ObserveSearch(ctx, loomfs.SearchObservation{Tool: "web_search", Phase: "tool", Query: input.Query, Hits: hits}); err != nil {
+			if _, err := session.ObserveSearch(ctx, loomfs.SearchObservation{Tool: web.ToolNameSearch, Phase: "tool", Query: input.Query, Hits: hits}); err != nil {
 				return "", err
 			}
 			if err := session.Checkpoint(ctx); err != nil {
@@ -86,7 +86,7 @@ func newSearchTool(searcher web.WebSearcher) loom.Tool {
 }
 
 func newReaderTool(reader web.WebReader) loom.Tool {
-	contract := loom.MustToolContract[readerRequest]("web_reader")
+	contract := loom.MustToolContract[readerRequest](web.ToolNameReader)
 	return loom.NewTool(contract, "Read a source, save its Markdown in the workspace, and return its stable SRC-N reference.",
 		func(ctx context.Context, input readerRequest) (string, error) {
 			input.URL = strings.TrimSpace(input.URL)
@@ -99,8 +99,8 @@ func newReaderTool(reader web.WebReader) loom.Tool {
 				return "", errors.New("source registry missing from context")
 			}
 			published := publicationEvidence(document)
-			refs, err := registry.EnsureBatch(ctx, []sourceregistry.Input{{URL: input.URL, Origin: "web_reader", Title: document.Title,
-				PublishedDate: published, Discovery: sourceregistry.Discovery{Tool: "web_reader", Phase: "tool"}, HasContent: true}})
+			refs, err := registry.EnsureBatch(ctx, []sourceregistry.Input{{URL: input.URL, Origin: web.ToolNameReader, Title: document.Title,
+				PublishedDate: published, Discovery: sourceregistry.Discovery{Tool: web.ToolNameReader, Phase: "tool"}, HasContent: true}})
 			if err != nil {
 				return "", err
 			}
@@ -108,7 +108,7 @@ func newReaderTool(reader web.WebReader) loom.Tool {
 			if err != nil {
 				return "", err
 			}
-			obs := loomfs.SourceObservation{Tool: "web_reader", Phase: "tool", URL: input.URL, Title: document.Title,
+			obs := loomfs.SourceObservation{Tool: web.ToolNameReader, Phase: "tool", URL: input.URL, Title: document.Title,
 				Markdown: document.Markdown, SrcID: refs[0].ID, PublishedAt: published.At, PublishedDateText: published.Text,
 				PublishedDateSource: published.Source, PublishedDateConfidence: published.Confidence}
 			entry, _, err := session.SaveSource(ctx, obs)

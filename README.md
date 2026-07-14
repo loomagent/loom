@@ -84,7 +84,9 @@ type calculatorRequest struct {
 	Precision  int    `json:"precision,omitempty" jsonschema:"Optional decimal precision." validate:"omitempty,min=0,max=12"`
 }
 
-contract := loom.MustToolContract[calculatorRequest]("calculator")
+const ToolName = "calculator"
+
+contract := loom.MustToolContract[calculatorRequest](ToolName)
 tool := loom.NewTool(
 	contract,
 	"Evaluate a mathematical expression.",
@@ -117,6 +119,10 @@ through `float64`.
 `NewTool` is the only public tool constructor. Tools without parameters use
 `ToolContract[loom.NoArguments]` and accept the empty JSON object `{}`; raw JSON
 handlers remain an internal implementation detail.
+
+Tool names are normally package constants. `ValidateToolName` and
+`NewToolContract` require 1–64 ASCII letters, digits, underscores, or hyphens;
+`ToolRegistry.Register` applies the same validation and rejects duplicate names.
 
 Errors expose `ToolArgumentError` metadata and render a bounded, compact
 non-JSON `expected arguments` contract for model self-correction without

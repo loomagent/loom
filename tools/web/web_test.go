@@ -28,6 +28,10 @@ func TestSearchTool(t *testing.T) {
 	if provider.request.Query != "loom agents" || provider.request.Limit != 10 {
 		t.Fatalf("request = %+v", provider.request)
 	}
+	info, err := tool.Info(context.Background())
+	if err != nil || info.Name != ToolNameSearch {
+		t.Fatalf("tool name = %q, err = %v", info.Name, err)
+	}
 	var response SearchResponse
 	if err := json.Unmarshal([]byte(out), &response); err != nil || len(response.Results) != 1 {
 		t.Fatalf("output = %s, err=%v", out, err)
@@ -77,12 +81,25 @@ func TestReaderTool(t *testing.T) {
 	if provider.request.URL != "https://example.com/page" {
 		t.Fatalf("request = %+v", provider.request)
 	}
+	info, err := tool.Info(context.Background())
+	if err != nil || info.Name != ToolNameReader {
+		t.Fatalf("tool name = %q, err = %v", info.Name, err)
+	}
 	var document Document
 	if err := json.Unmarshal([]byte(out), &document); err != nil {
 		t.Fatal(err)
 	}
 	if document.URL != provider.request.URL || document.Markdown != "# Page" {
 		t.Fatalf("document = %+v", document)
+	}
+}
+
+func TestWebToolRejectsInvalidConfiguredNames(t *testing.T) {
+	if _, err := NewSearchTool(&fakeSearcher{}, SearchToolOptions{Name: " web_search"}); err == nil {
+		t.Fatal("search tool accepted a name with leading whitespace")
+	}
+	if _, err := NewReaderTool(&fakeReader{}, ReaderToolOptions{Name: "web.reader"}); err == nil {
+		t.Fatal("reader tool accepted a name with punctuation")
 	}
 }
 

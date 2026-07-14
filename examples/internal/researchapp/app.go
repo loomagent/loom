@@ -140,7 +140,7 @@ func (a *App) RunTurn(ctx context.Context, userText string) (*loom.Turn, error) 
 			Reasoning:         loom.Reasoning{Mode: loom.ReasoningModeEnabled},
 			MaxSteps:          a.maxSteps,
 			MaxToolCalls:      a.maxToolCalls,
-			ToolCallLimits:    map[string]uint64{"web_search": 8, "web_reader": 8, "bash": 6},
+			ToolCallLimits:    map[string]uint64{web.ToolNameSearch: 8, web.ToolNameReader: 8, workspacebash.ToolName: 6},
 			SoftLandingPrompt: "Stop using tools. Give the best supported answer now, cite only registered [SRC-N] references, and clearly state remaining uncertainty.",
 			Purpose:           "deep_research",
 		})
