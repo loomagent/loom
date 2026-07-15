@@ -100,12 +100,27 @@ func writeLsEntry(w *bufio.Writer, info fs.FileInfo, long bool) {
 
 // cmdFind 遍历目录树。-name GLOB(匹配 basename)、-type f/d、-maxdepth N。-exec 明确拒绝(用 xargs)。
 func cmdFind(ctx context.Context, env CmdEnv, args []string) int {
-	set, vals, pos := scanFlags(args, "", []string{"name", "type", "maxdepth"})
+	// find 的谓词按惯例使用单横线长名称；先归一化，避免通用 flag 解析器
+	// 把 -name/-type 等误解为组合短选项。
+	findArgs := append([]string(nil), args...)
+	for i, arg := range findArgs {
+		switch arg {
+		case "-name", "-type", "-maxdepth", "-exec", "-delete":
+			findArgs[i] = "-" + arg
+		}
+	}
+	set, vals, pos := scanFlags(findArgs, "", []string{"name", "type", "maxdepth"})
 	if anySet(set, "exec", "delete") {
 		io.WriteString(env.Stderr, "find: -exec/-delete 不支持(只读;用 xargs 组合只读命令)\n")
 		return exitUsageError
 	}
 	namePat, hasName := firstVal(vals, "name")
+	if hasName {
+		if _, err := path.Match(namePat, ""); err != nil {
+			io.WriteString(env.Stderr, "find: invalid -name pattern "+strconv.Quote(namePat)+": "+err.Error()+"\n")
+			return exitUsageError
+		}
+	}
 	typeFilter, hasType := firstVal(vals, "type")
 	maxDepth := -1
 	if v, ok := firstVal(vals, "maxdepth"); ok {

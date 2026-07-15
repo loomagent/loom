@@ -133,12 +133,31 @@ func TestSortUniqCut(t *testing.T) {
 }
 
 func TestFind_NameType(t *testing.T) {
-	r := newTestRunner(t, sampleWorkspace)
+	r := newTestRunner(t, map[string]string{
+		"raw/SRC-1.md":             "source",
+		"raw/notes.txt":            "notes",
+		"raw/SRC-directory.md/doc": "nested",
+	})
 	res := run(t, r, `find raw -type f -name SRC-*.md`)
-	for _, want := range []string{"raw/SRC-1.md", "raw/SRC-2.md", "raw/SRC-3.md"} {
-		if !strings.Contains(res.Stdout, want) {
-			t.Fatalf("find missing %q in:\n%s", want, res.Stdout)
-		}
+	if res.ExitCode != 0 {
+		t.Fatalf("find exit=%d stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if res.Stdout != "raw/SRC-1.md\n" {
+		t.Fatalf("find stdout=%q want %q", res.Stdout, "raw/SRC-1.md\n")
+	}
+}
+
+func TestFind_InvalidNamePattern(t *testing.T) {
+	r := newTestRunner(t, sampleWorkspace)
+	res := run(t, r, `find raw -name '['`)
+	if res.ExitCode != exitUsageError {
+		t.Fatalf("find invalid pattern exit=%d want %d", res.ExitCode, exitUsageError)
+	}
+	if res.Stdout != "" {
+		t.Fatalf("find invalid pattern stdout=%q want empty", res.Stdout)
+	}
+	if !strings.Contains(res.Stderr, `find: invalid -name pattern "[":`) {
+		t.Fatalf("find invalid pattern stderr=%q", res.Stderr)
 	}
 }
 
