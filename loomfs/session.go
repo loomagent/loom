@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,6 +184,7 @@ func (s *TurnSession) ObserveSearch(_ context.Context, obs SearchObservation) (Q
 		Round:          obs.Round,
 		Text:           query,
 		Why:            strings.TrimSpace(obs.Why),
+		Metadata:       maps.Clone(obs.Metadata),
 		Hits:           make([]QueryHit, 0, len(obs.Hits)),
 		At:             time.Now(),
 	}
@@ -190,8 +192,12 @@ func (s *TurnSession) ObserveSearch(_ context.Context, obs SearchObservation) (Q
 	s.seenQueryText[NormalizeQuery(query)] = struct{}{}
 
 	for i, hit := range obs.Hits {
+		position := uint64(i + 1)
+		if hit.Position > 0 {
+			position = uint64(hit.Position)
+		}
 		qh := QueryHit{
-			Pos:        uint64(i + 1),
+			Pos:        position,
 			URL:        strings.TrimSpace(hit.URL),
 			Title:      strings.TrimSpace(hit.Title),
 			Snippet:    strings.TrimSpace(hit.Snippet),

@@ -46,7 +46,9 @@ type SearchObservation struct {
 	Round uint64
 	Query string
 	Why   string
-	Hits  []SearchHit
+	// Metadata carries optional executor-defined attribution into QueryRecord.
+	Metadata map[string]string
+	Hits     []SearchHit
 }
 
 type SearchHit struct {
@@ -55,6 +57,7 @@ type SearchHit struct {
 	Snippet    string
 	Date       string
 	DateSource string
+	Position   int
 	Relevant   bool
 	// SrcID is an optional stable source reference assigned before the search
 	// observation is persisted. When empty, TurnSession falls back to a source
@@ -132,21 +135,24 @@ type QueryHit struct {
 }
 
 type QueryRecord struct {
-	QueryID        string     `json:"query_id"`
-	TurnIndex      uint64     `json:"turn_index,omitempty"`
-	ExecutionID    string     `json:"execution_id,omitempty"`
-	TurnQueryIndex uint64     `json:"turn_query_index,omitempty"`
-	Executor       string     `json:"executor,omitempty"`
-	Tool           string     `json:"tool,omitempty"`
-	Phase          string     `json:"phase,omitempty"`
-	Round          uint64     `json:"round,omitempty"`
-	Text           string     `json:"text"`
-	Why            string     `json:"why,omitempty"`
-	Hits           []QueryHit `json:"hits,omitempty"`
-	NumResults     uint64     `json:"num_results"`
-	NumRelevant    uint64     `json:"num_relevant"`
-	NumSaved       uint64     `json:"num_saved"`
-	At             time.Time  `json:"at"`
+	QueryID        string `json:"query_id"`
+	TurnIndex      uint64 `json:"turn_index,omitempty"`
+	ExecutionID    string `json:"execution_id,omitempty"`
+	TurnQueryIndex uint64 `json:"turn_query_index,omitempty"`
+	Executor       string `json:"executor,omitempty"`
+	Tool           string `json:"tool,omitempty"`
+	Phase          string `json:"phase,omitempty"`
+	Round          uint64 `json:"round,omitempty"`
+	Text           string `json:"text"`
+	Why            string `json:"why,omitempty"`
+	// Metadata carries executor-defined search attribution without coupling
+	// loomfs to an application's planning or business schema.
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	Hits        []QueryHit        `json:"hits,omitempty"`
+	NumResults  uint64            `json:"num_results"`
+	NumRelevant uint64            `json:"num_relevant"`
+	NumSaved    uint64            `json:"num_saved"`
+	At          time.Time         `json:"at"`
 }
 
 type SourceEntry struct {

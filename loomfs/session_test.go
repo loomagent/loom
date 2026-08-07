@@ -33,6 +33,63 @@ func TestObserveSearchPreservesExplicitSourceID(t *testing.T) {
 	}
 }
 
+func TestObserveSearchPreservesExplicitResultPosition(t *testing.T) {
+	ws, err := OpenWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := ws.BeginTurn(TurnMeta{ConversationID: "conv", TurnIndex: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := session.ObserveSearch(context.Background(), SearchObservation{
+		Query: "query",
+		Hits: []SearchHit{
+			{URL: "https://example.com/explicit", Position: 7},
+			{URL: "https://example.com/fallback"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Hits[0].Pos != 7 || record.Hits[1].Pos != 2 {
+		t.Fatalf("positions = (%d, %d), want (7, 2)", record.Hits[0].Pos, record.Hits[1].Pos)
+	}
+}
+
+func TestObserveSearchPreservesOpaqueExecutorMetadata(t *testing.T) {
+	root := t.TempDir()
+	ws, err := OpenWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := ws.BeginTurn(TurnMeta{ConversationID: "conv", TurnIndex: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := map[string]string{"planning.primary_aspect_id": "ASP-7"}
+	record, err := session.ObserveSearch(context.Background(), SearchObservation{
+		Query: "query", Metadata: metadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata["planning.primary_aspect_id"] = "mutated"
+	if got := record.Metadata["planning.primary_aspect_id"]; got != "ASP-7" {
+		t.Fatalf("record metadata = %q, want ASP-7", got)
+	}
+	if err := session.Checkpoint(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := ws.LoadSnapshot(context.Background(), SnapshotOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Queries) != 1 || snapshot.Queries[0].Metadata["planning.primary_aspect_id"] != "ASP-7" {
+		t.Fatalf("snapshot queries = %+v", snapshot.Queries)
+	}
+}
+
 func TestTurnSessionMaterializesSearchSourceLinks(t *testing.T) {
 	root := t.TempDir()
 	ws, err := OpenWorkspace(root)
