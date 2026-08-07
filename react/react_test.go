@@ -8,6 +8,7 @@ import (
 	"io"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/loomagent/loom"
 )
@@ -219,6 +220,39 @@ func TestRunSoftLandingDisablesTools(t *testing.T) {
 	}
 	if len(model.requests) != 2 || len(model.requests[1].Tools) != 0 || model.requests[1].ToolChoice == nil || model.requests[1].ToolChoice.Mode != loom.ToolChoiceNone {
 		t.Fatalf("final request = %+v", model.requests[1])
+	}
+}
+
+func TestRunSoftLandsBeforeDeadlineReserve(t *testing.T) {
+	model := &scriptedModel{responses: []*loom.ChatResponse{{Content: "landed", FinishReason: loom.FinishReasonStop}}}
+	tools := loom.NewToolRegistry(loom.NewTool(loom.MustToolContract[loom.NoArguments]("echo"), "echo", func(context.Context, loom.NoArguments) (string, error) { return "ok", nil }))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	var result *Result
+	_, err := loom.Run(ctx, func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+		var runErr error
+		result, runErr = Run(ctx, w, Config{
+			Model:                     model,
+			Tools:                     tools,
+			SoftLandingReserve:        2 * time.Minute,
+			SoftLandingPrompt:         "loop limit",
+			DeadlineSoftLandingPrompt: "deadline near",
+		})
+		if runErr != nil {
+			return runErr
+		}
+		return w.FinalAnswer(ctx, result.FinalContent)
+	}, loom.RunOptions{ConversationID: "deadline-reserve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.SoftLanded || len(model.requests) != 1 || len(model.requests[0].Tools) != 0 {
+		t.Fatalf("result=%+v request=%+v", result, model.requests)
+	}
+	messages := model.requests[0].Messages
+	if len(messages) != 1 || messages[0].Content != "deadline near" {
+		t.Fatalf("deadline prompt=%+v", messages)
 	}
 }
 

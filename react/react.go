@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/loomagent/loom"
 )
@@ -30,6 +31,12 @@ type Config struct {
 	ToolCallLimits map[string]uint64
 	// SoftLandingPrompt is appended as a system message before the final call.
 	SoftLandingPrompt string
+	// SoftLandingReserve forces the final tool-free call when the context
+	// deadline is this close. Zero disables deadline-based soft landing.
+	SoftLandingReserve time.Duration
+	// DeadlineSoftLandingPrompt overrides SoftLandingPrompt only when the
+	// deadline reserve triggers. Empty reuses SoftLandingPrompt.
+	DeadlineSoftLandingPrompt string
 	// Purpose prefixes model call span names and errors.
 	Purpose string
 
@@ -162,11 +169,20 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 			Messages: append([]loom.Message(nil), msgs...),
 			Tools:    availableTools(allTools, cfg, totalUses, uses),
 		}
-		if cfg.MaxSteps > 0 && step >= cfg.MaxSteps {
+		loopLimitReached := cfg.MaxSteps > 0 && step >= cfg.MaxSteps
+		deadlineNear := false
+		if deadline, ok := ctx.Deadline(); ok && cfg.SoftLandingReserve > 0 {
+			deadlineNear = time.Until(deadline) <= cfg.SoftLandingReserve
+		}
+		if loopLimitReached || deadlineNear {
 			plan.IsFinalStep = true
 			plan.Tools = nil
 			plan.ToolChoice = &loom.ToolChoice{Mode: loom.ToolChoiceNone}
-			if prompt := strings.TrimSpace(cfg.SoftLandingPrompt); prompt != "" {
+			prompt := cfg.SoftLandingPrompt
+			if deadlineNear && strings.TrimSpace(cfg.DeadlineSoftLandingPrompt) != "" {
+				prompt = cfg.DeadlineSoftLandingPrompt
+			}
+			if prompt = strings.TrimSpace(prompt); prompt != "" {
 				plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Content: prompt})
 			}
 		}
