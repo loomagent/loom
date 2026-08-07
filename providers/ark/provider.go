@@ -30,6 +30,10 @@ import (
 	"github.com/loomagent/loom"
 )
 
+// DefaultBaseURL is the public Ark chat-completions endpoint used when Config
+// does not provide an override.
+const DefaultBaseURL = "https://ark.cn-beijing.volces.com/api/v3"
+
 // Config ark provider 构造参数。
 type Config struct {
 	// APIKey 必填(走 BearerToken 鉴权)。
@@ -68,10 +72,11 @@ func New(cfg Config) (*Model, error) {
 	if strings.TrimSpace(cfg.ModelName) == "" {
 		return nil, fmt.Errorf("loom/ark: ModelName(endpoint id)不能为空")
 	}
-	var opts []arkruntime.ConfigOption
-	if cfg.BaseURL != "" {
-		opts = append(opts, arkruntime.WithBaseUrl(cfg.BaseURL))
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	if baseURL == "" {
+		baseURL = DefaultBaseURL
 	}
+	opts := []arkruntime.ConfigOption{arkruntime.WithBaseUrl(baseURL)}
 	client := arkruntime.NewClientWithApiKey(cfg.APIKey, opts...)
 	retryCfg := cfg.Retry
 	if retryCfg == nil {

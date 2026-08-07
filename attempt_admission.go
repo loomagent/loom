@@ -7,7 +7,8 @@ import (
 
 // AttemptMeta identifies the real supplier quota consumed by one physical LLM
 // request. QuotaKey is an internal credential fingerprint and must never be
-// exported as a metric label; QuotaLabel is the stable, non-secret provider ID.
+// exported as a metric label. QuotaLabel is a host-defined, stable, non-secret,
+// low-cardinality label suitable for metrics (for example, an API authority).
 type AttemptMeta struct {
 	QuotaKey   string
 	QuotaLabel string
