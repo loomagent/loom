@@ -2,10 +2,18 @@ package loom
 
 import "errors"
 
-// ErrUnsupported provider 不支持请求中某个字段的语义。
-// 通常 provider 应静默忽略不支持的字段(forward-compat),
-// 仅在调用方明确要求且 provider 完全无法替代时返回此错。
-var ErrUnsupported = errors.New("loom: provider 不支持此请求")
+// ErrUnsupportedCapability means a provider cannot honor an explicitly
+// requested model capability. Callers may use it as negative capability
+// evidence; authentication, quota, transport, and server failures must not
+// wrap this sentinel.
+var ErrUnsupportedCapability = errors.New("loom: provider 不支持此请求")
+
+// ErrUnsupported is kept as a compatibility alias. New code should use
+// ErrUnsupportedCapability so the error cannot be confused with unsupported
+// host operations or storage features.
+//
+// Deprecated: use ErrUnsupportedCapability.
+var ErrUnsupported = ErrUnsupportedCapability
 
 // ErrTurnClosed Turn 已封口或被外部终结,写入被拒。
 // 触发场景:
