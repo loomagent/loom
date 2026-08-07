@@ -14,6 +14,15 @@ import (
 // ToolNameSearch is the default name exposed by the web search tool.
 const ToolNameSearch = "web_search"
 
+// Search-result metadata keys preserve provider hints without coupling callers
+// to a concrete search SDK.
+const (
+	SearchMetadataDate       = "date"
+	SearchMetadataDateSource = "date_source"
+	SearchMetadataPosition   = "position"
+	MetadataProvider         = "provider"
+)
+
 type searchToolRequest struct {
 	Query string `json:"query" jsonschema:"Search query." validate:"min=1,notblank" example:"latest Go agent runtime research"`
 	Limit int    `json:"limit,omitempty" jsonschema:"Maximum number of results to return. Zero uses the tool's configured default." validate:"omitempty,min=0"`

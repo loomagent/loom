@@ -16,6 +16,14 @@ import (
 // ToolNameReader is the default name exposed by the web reader tool.
 const ToolNameReader = "web_reader"
 
+// Document metadata keys preserve publication-date provenance when a reader
+// can extract more than a normalized timestamp.
+const (
+	DocumentMetadataPublishedDateText       = "published_date_text"
+	DocumentMetadataPublishedDateSource     = "published_date_source"
+	DocumentMetadataPublishedDateConfidence = "published_date_confidence"
+)
+
 type readerToolRequest struct {
 	URL string `json:"url" jsonschema:"Absolute HTTP or HTTPS URL to read." validate:"min=1,notblank" example:"https://example.com/article"`
 }

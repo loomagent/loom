@@ -155,15 +155,15 @@ func (c *Client) Read(ctx context.Context, request web.ReadRequest) (web.Documen
 	document := web.Document{
 		URL: request.URL, Markdown: markdown, ContentType: "text/markdown",
 		Metadata: map[string]string{
-			"provider": "unifuncs", "attempts": strconv.Itoa(stats.Attempts),
+			web.MetadataProvider: "unifuncs", "attempts": strconv.Itoa(stats.Attempts),
 			"duration_ms": strconv.FormatInt(stats.Duration.Milliseconds(), 10),
 		},
 	}
 	if published, ok := sourcedate.ExtractPublishedDateFromMarkdown(markdown, time.Now()); ok {
 		document.PublishedAt = &published.At
-		document.Metadata["published_date_text"] = published.Text
-		document.Metadata["published_date_source"] = published.Source
-		document.Metadata["published_date_confidence"] = published.Confidence
+		document.Metadata[web.DocumentMetadataPublishedDateText] = published.Text
+		document.Metadata[web.DocumentMetadataPublishedDateSource] = published.Source
+		document.Metadata[web.DocumentMetadataPublishedDateConfidence] = published.Confidence
 	}
 	return document, nil
 }

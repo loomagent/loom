@@ -131,18 +131,18 @@ func (c *Client) Search(ctx context.Context, request web.SearchRequest) (web.Sea
 	for _, item := range parsed.Organic {
 		metadata := map[string]string{}
 		if item.Date != "" {
-			metadata["date"] = item.Date
-			metadata["date_source"] = "serper.organic.date"
+			metadata[web.SearchMetadataDate] = item.Date
+			metadata[web.SearchMetadataDateSource] = "serper.organic.date"
 		}
 		if item.Position > 0 {
-			metadata["position"] = fmt.Sprint(item.Position)
+			metadata[web.SearchMetadataPosition] = fmt.Sprint(item.Position)
 		}
 		if len(metadata) == 0 {
 			metadata = nil
 		}
 		results = append(results, web.SearchResult{Title: item.Title, URL: item.Link, Snippet: item.Snippet, Metadata: metadata})
 	}
-	return web.SearchResponse{Results: results, Metadata: map[string]string{"provider": "serper"}}, nil
+	return web.SearchResponse{Results: results, Metadata: map[string]string{web.MetadataProvider: "serper"}}, nil
 }
 
 func truncate(value string, limit int) string {
