@@ -456,6 +456,7 @@ func (w *writerScope) Step(ctx context.Context, label string, fn func(context.Co
 		indices:  childIndices,
 		counters: map[ItemKind]uint64{},
 	}
+	stepCtx = withUsageScope(stepCtx, childScope)
 	fnErr := fn(stepCtx, &step{writerScope: childScope})
 
 	// 5. OTel:闭包返回后收尾 span(放在 Item 状态更新之前 — span End 不阻塞同步路径)

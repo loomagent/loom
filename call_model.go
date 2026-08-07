@@ -133,6 +133,15 @@ func callModelOnce(ctx context.Context, purpose string, model ChatModel, req Cha
 	llmCtx, span := startLLMSpan(ctx, model, req, purpose, captureContent)
 	resp, err := model.Chat(llmCtx, req)
 	finalizeLLMSpan(span, resp, captureContent, err)
+	if resp != nil && nonZeroUsage(resp.Usage) {
+		if scope := usageScopeFromContext(ctx); scope != nil {
+			modelID := resp.Model
+			if modelID == "" {
+				modelID = model.Name()
+			}
+			scope.state.emitLLMCalled(ctx, scope, modelID, purpose, resp.Usage)
+		}
+	}
 	return resp, err
 }
 
