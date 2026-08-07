@@ -3,6 +3,10 @@ package deepseek
 import (
 	"context"
 	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	goseek "github.com/storynap/goseek"
 
@@ -20,7 +24,8 @@ var _ loom.ErrorClassifier = classifier{}
 //
 // 错误来源 + 映射:
 //   - *goseek.APIError(HTTP 非 2xx):
-//   - 429 / 503             → RateLimit(无限 retry)
+//   - 429                   → RateLimit(受共享 cooldown 和 elapsed budget 约束)
+//   - 503 / 其它 5xx         → Transient(有限 retry)
 //   - 401 / 402 / 403 / 400 → Permanent(auth / 余额不足 / bad request)
 //   - 5xx (其它)             → Transient(有限 retry)
 //   - 4xx (其它)             → Permanent(参数错 / 模型不存在等)
@@ -40,7 +45,7 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 	var apiErr *goseek.APIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.StatusCode {
-		case 429, 503:
+		case http.StatusTooManyRequests:
 			return loom.ErrorClassRateLimit
 		case 400, 401, 402, 403, 404:
 			return loom.ErrorClassPermanent
@@ -55,4 +60,30 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 	}
 	// 默认网络层错误归为 Transient(connection reset / DNS / TLS 握手 等)
 	return loom.ErrorClassTransient
+}
+
+// RetryAfter extracts DeepSeek's response header for shared credential-level
+// cooldown. Both delta-seconds and HTTP-date forms are accepted per RFC 9110.
+func (classifier) RetryAfter(err error) time.Duration {
+	var apiErr *goseek.APIError
+	if !errors.As(err, &apiErr) {
+		return 0
+	}
+	value := strings.TrimSpace(apiErr.Header.Get("Retry-After"))
+	if value == "" {
+		return 0
+	}
+	if seconds, parseErr := strconv.ParseInt(value, 10, 64); parseErr == nil {
+		return max(time.Duration(0), time.Duration(seconds)*time.Second)
+	}
+	when, parseErr := http.ParseTime(value)
+	if parseErr != nil {
+		return 0
+	}
+	return max(time.Duration(0), time.Until(when))
+}
+
+func (classifier) IsServiceUnavailable(err error) bool {
+	var apiErr *goseek.APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusServiceUnavailable
 }

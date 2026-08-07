@@ -3,7 +3,9 @@ package loom
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 )
@@ -103,7 +105,7 @@ func TestChatWithRetry_PermanentImmediateGiveUp(t *testing.T) {
 	}
 }
 
-func TestChatWithRetry_RateLimitInfiniteUntilSuccess(t *testing.T) {
+func TestChatWithRetry_RateLimitDoesNotConsumeTransientRetryCount(t *testing.T) {
 	attempts := 0
 	rl := errors.New("429")
 	c := mockClassifier{classify: func(err error) ErrorClass {
@@ -112,7 +114,7 @@ func TestChatWithRetry_RateLimitInfiniteUntilSuccess(t *testing.T) {
 		}
 		return ErrorClassUnknown
 	}}
-	// MaxRetries=1 但 RateLimit 不计数,跑到第 10 次返回成功
+	// MaxRetries=1 但 RateLimit 不计次数,在 elapsed budget 内第 10 次返回成功。
 	_, err := ChatWithRetry(context.Background(), c, fastConfig(1), func(context.Context) (*ChatResponse, error) {
 		attempts++
 		if attempts < 10 {
@@ -143,6 +145,222 @@ func TestChatWithRetry_RateLimitCancelledByCtx(t *testing.T) {
 	}
 	if attempts < 2 {
 		t.Errorf("attempts = %d, want >=2 (some retries before ctx timeout)", attempts)
+	}
+}
+
+func TestChatWithRetry_RateLimitElapsedBudget(t *testing.T) {
+	attempts := 0
+	rl := errors.New("429")
+	c := mockClassifier{classify: func(error) ErrorClass { return ErrorClassRateLimit }}
+	cfg := fastConfig(1)
+	cfg.RateLimitMaxElapsed = 3 * time.Millisecond
+	_, err := ChatWithRetry(context.Background(), c, cfg, func(context.Context) (*ChatResponse, error) {
+		attempts++
+		return nil, rl
+	})
+	if err == nil || !errors.Is(err, rl) {
+		t.Fatalf("err = %v, want exhausted rate-limit error", err)
+	}
+	if attempts < 2 {
+		t.Fatalf("attempts = %d, want retries before elapsed budget", attempts)
+	}
+}
+
+func TestChatWithRetryAttemptPermitCoversOnlyPhysicalAttempt(t *testing.T) {
+	limiter := &recordingAttemptLimiter{}
+	cfg := fastConfig(2)
+	cfg.AttemptLimiter = limiter
+	cfg.AttemptMeta = AttemptMeta{QuotaKey: "key", QuotaLabel: "provider", Model: "model"}
+	attempts := 0
+	c := mockClassifier{classify: func(error) ErrorClass { return ErrorClassTransient }}
+	_, err := ChatWithRetry(context.Background(), c, cfg, func(context.Context) (*ChatResponse, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("temporary")
+		}
+		return &ChatResponse{Content: "ok"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if limiter.active != 0 || limiter.maxActive != 1 || limiter.acquires != 2 || limiter.finishes != 2 {
+		t.Fatalf("limiter state = %+v", limiter)
+	}
+}
+
+func TestChatWithRetryPassesServiceUnavailableSignalToLimiter(t *testing.T) {
+	limiter := &recordingAttemptLimiter{}
+	cfg := fastConfig(1)
+	cfg.Mode = RetryModeDisabled
+	cfg.AttemptLimiter = limiter
+	cfg.AttemptMeta = AttemptMeta{QuotaKey: "key", QuotaLabel: "provider", Model: "model"}
+	sentinel := errors.New("503")
+	_, err := ChatWithRetry(context.Background(), unavailableClassifier{}, cfg, func(context.Context) (*ChatResponse, error) {
+		return nil, sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, want sentinel", err)
+	}
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if len(limiter.results) != 1 || !limiter.results[0].ServiceUnavailable || limiter.results[0].ErrorClass != ErrorClassTransient {
+		t.Fatalf("attempt results = %+v", limiter.results)
+	}
+}
+
+func TestStreamWithRetryHoldsPermitUntilEOFAndCloseIsIdempotent(t *testing.T) {
+	limiter := &recordingAttemptLimiter{}
+	cfg := fastConfig(1)
+	cfg.AttemptLimiter = limiter
+	cfg.AttemptMeta = AttemptMeta{QuotaKey: "key", QuotaLabel: "provider", Model: "model"}
+	c := mockClassifier{classify: func(error) ErrorClass { return ErrorClassTransient }}
+	stream, err := StreamWithRetry(context.Background(), c, cfg, func(context.Context) (Stream, error) {
+		return &fakeStream{chunks: []*Chunk{{ContentDelta: "hello"}}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limiter.currentActive() != 1 {
+		t.Fatalf("active after StreamWithRetry = %d, want 1", limiter.currentActive())
+	}
+	chunk, err := stream.Recv()
+	if err != nil || chunk.ContentDelta != "hello" || limiter.currentActive() != 1 {
+		t.Fatalf("first Recv = (%+v,%v), active=%d", chunk, err, limiter.currentActive())
+	}
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		t.Fatalf("second Recv err = %v, want EOF", err)
+	}
+	if limiter.currentActive() != 0 {
+		t.Fatalf("active after EOF = %d, want 0", limiter.currentActive())
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if limiter.finishes != 1 || limiter.active != 0 {
+		t.Fatalf("finish state after EOF+Close = %+v", limiter)
+	}
+}
+
+func TestChatWithRetry_AttemptTimeoutRetriesWhileParentAlive(t *testing.T) {
+	attempts := 0
+	c := mockClassifier{classify: func(error) ErrorClass { return ErrorClassPermanent }}
+	cfg := &RetryConfig{
+		Mode:           RetryModeUntilContext,
+		InitialBackoff: time.Millisecond,
+		MaxBackoff:     time.Millisecond,
+		PerCallTimeout: 5 * time.Millisecond,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	resp, err := ChatWithRetry(ctx, c, cfg, func(callCtx context.Context) (*ChatResponse, error) {
+		attempts++
+		if attempts == 1 {
+			<-callCtx.Done()
+			return nil, fmt.Errorf("decode response: %w", callCtx.Err())
+		}
+		return &ChatResponse{Content: "ok"}, nil
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if resp.Content != "ok" {
+		t.Fatalf("content = %q, want ok", resp.Content)
+	}
+}
+
+func TestChatWithRetry_UntilContextIgnoresFiniteRetryCount(t *testing.T) {
+	attempts := 0
+	transient := errors.New("temporary upstream failure")
+	c := mockClassifier{classify: func(error) ErrorClass { return ErrorClassTransient }}
+	cfg := fastConfig(1)
+	cfg.Mode = RetryModeUntilContext
+
+	_, err := ChatWithRetry(context.Background(), c, cfg, func(context.Context) (*ChatResponse, error) {
+		attempts++
+		if attempts < 6 {
+			return nil, transient
+		}
+		return &ChatResponse{Content: "recovered"}, nil
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if attempts != 6 {
+		t.Fatalf("attempts = %d, want 6", attempts)
+	}
+}
+
+func TestChatWithRetry_ParentDeadlineStopsAttemptRetry(t *testing.T) {
+	attempts := 0
+	c := mockClassifier{classify: func(error) ErrorClass { return ErrorClassTransient }}
+	cfg := &RetryConfig{
+		Mode:           RetryModeUntilContext,
+		InitialBackoff: time.Millisecond,
+		MaxBackoff:     time.Millisecond,
+		PerCallTimeout: 5 * time.Millisecond,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	_, err := ChatWithRetry(ctx, c, cfg, func(callCtx context.Context) (*ChatResponse, error) {
+		attempts++
+		<-callCtx.Done()
+		return nil, callCtx.Err()
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want parent DeadlineExceeded", err)
+	}
+	if attempts < 2 {
+		t.Fatalf("attempts = %d, want retries before parent deadline", attempts)
+	}
+}
+
+func TestChatWithRetry_DisabledAttemptsOnce(t *testing.T) {
+	attempts := 0
+	transient := errors.New("temporary")
+	c := mockClassifier{classify: func(error) ErrorClass { return ErrorClassTransient }}
+	cfg := fastConfig(5)
+	cfg.Mode = RetryModeDisabled
+
+	_, err := ChatWithRetry(context.Background(), c, cfg, func(context.Context) (*ChatResponse, error) {
+		attempts++
+		return nil, transient
+	})
+	if !errors.Is(err, transient) {
+		t.Fatalf("err = %v, want transient", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+	class, ok := ErrorClassOf(err)
+	if !ok || class != ErrorClassTransient {
+		t.Fatalf("ErrorClassOf = (%v, %v), want transient,true", class, ok)
+	}
+}
+
+func TestChatWithRetry_AttemptTimeoutReturnsTypedTransientWhenFiniteExhausted(t *testing.T) {
+	c := mockClassifier{classify: func(error) ErrorClass { return ErrorClassPermanent }}
+	cfg := fastConfig(1)
+	cfg.PerCallTimeout = time.Millisecond
+
+	_, err := ChatWithRetry(context.Background(), c, cfg, func(callCtx context.Context) (*ChatResponse, error) {
+		<-callCtx.Done()
+		return nil, callCtx.Err()
+	})
+	if !errors.Is(err, ErrAttemptTimeout) {
+		t.Fatalf("err = %v, want ErrAttemptTimeout", err)
+	}
+	class, ok := ErrorClassOf(err)
+	if !ok || class != ErrorClassTransient {
+		t.Fatalf("ErrorClassOf = (%v, %v), want transient,true", class, ok)
 	}
 }
 
@@ -288,3 +506,47 @@ func (s *fakeStream) Close() error {
 	s.closed = true
 	return nil
 }
+
+type recordingAttemptLimiter struct {
+	mu        sync.Mutex
+	active    int
+	maxActive int
+	acquires  int
+	finishes  int
+	results   []AttemptResult
+}
+
+func (l *recordingAttemptLimiter) Acquire(context.Context, AttemptMeta) (AttemptPermit, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.active++
+	l.acquires++
+	l.maxActive = max(l.maxActive, l.active)
+	return &recordingAttemptPermit{limiter: l}, nil
+}
+
+func (l *recordingAttemptLimiter) currentActive() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.active
+}
+
+type recordingAttemptPermit struct {
+	once    sync.Once
+	limiter *recordingAttemptLimiter
+}
+
+func (p *recordingAttemptPermit) Finish(result AttemptResult) {
+	p.once.Do(func() {
+		p.limiter.mu.Lock()
+		defer p.limiter.mu.Unlock()
+		p.limiter.active--
+		p.limiter.finishes++
+		p.limiter.results = append(p.limiter.results, result)
+	})
+}
+
+type unavailableClassifier struct{}
+
+func (unavailableClassifier) ClassifyError(error) ErrorClass  { return ErrorClassTransient }
+func (unavailableClassifier) IsServiceUnavailable(error) bool { return true }

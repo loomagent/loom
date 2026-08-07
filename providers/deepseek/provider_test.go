@@ -2,13 +2,35 @@ package deepseek
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	goseek "github.com/storynap/goseek"
 
 	"github.com/loomagent/loom"
 )
+
+func TestClassifierTreats503AsTransientAndReadsRetryAfter(t *testing.T) {
+	serviceUnavailable := &goseek.APIError{StatusCode: http.StatusServiceUnavailable}
+	if got := (classifier{}).ClassifyError(serviceUnavailable); got != loom.ErrorClassTransient {
+		t.Fatalf("503 class = %s, want transient", got)
+	}
+	if !(classifier{}).IsServiceUnavailable(serviceUnavailable) {
+		t.Fatal("503 must open the shared service-unavailable circuit")
+	}
+	rateLimited := &goseek.APIError{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Retry-After": []string{"7"}},
+	}
+	if got := (classifier{}).ClassifyError(rateLimited); got != loom.ErrorClassRateLimit {
+		t.Fatalf("429 class = %s, want rate_limit", got)
+	}
+	if got := (classifier{}).RetryAfter(rateLimited); got != 7*time.Second {
+		t.Fatalf("RetryAfter = %s, want 7s", got)
+	}
+}
 
 // TestBuildRequestReasoningModeRequired 必传契约的 provider 级兜底:
 // 调用方忘传 Reasoning.Mode 时,请求在构造阶段就报错,绝不发出去。

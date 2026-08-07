@@ -16,8 +16,10 @@ var _ loom.ErrorClassifier = classifier{}
 
 // ClassifyError 实现 loom.ErrorClassifier。
 //
-// 错误来源 + 映射(跟 deepseek classifier 同语义,但用 ark 的 *model.RequestError):
-//   - HTTP 429 / 503             → RateLimit(无限 retry)
+// 错误来源 + 映射(跟 deepseek classifier 同语义,覆盖 ark 的
+// *model.APIError / *model.RequestError):
+//   - HTTP 429                   → RateLimit(共享额度退避)
+//   - HTTP 503 / 其它 5xx         → Transient(有限 retry)
 //   - HTTP 401 / 402 / 403 / 400 / 404 → Permanent
 //   - HTTP 5xx (其它)              → Transient
 //   - HTTP 4xx (其它)              → Permanent
@@ -30,20 +32,37 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return loom.ErrorClassPermanent
 	}
+	if apiErr, ok := errors.AsType[*arkmodel.APIError](err); ok {
+		return classifyHTTPStatus(apiErr.HTTPStatusCode)
+	}
 	var reqErr *arkmodel.RequestError
 	if errors.As(err, &reqErr) {
-		switch reqErr.HTTPStatusCode {
-		case 429, 503:
-			return loom.ErrorClassRateLimit
-		case 400, 401, 402, 403, 404:
-			return loom.ErrorClassPermanent
-		}
-		if reqErr.HTTPStatusCode >= 500 {
-			return loom.ErrorClassTransient
-		}
-		if reqErr.HTTPStatusCode >= 400 {
-			return loom.ErrorClassPermanent
-		}
+		return classifyHTTPStatus(reqErr.HTTPStatusCode)
 	}
 	return loom.ErrorClassTransient
+}
+
+func classifyHTTPStatus(status int) loom.ErrorClass {
+	switch status {
+	case 429:
+		return loom.ErrorClassRateLimit
+	case 400, 401, 402, 403, 404:
+		return loom.ErrorClassPermanent
+	default:
+		if status >= 500 {
+			return loom.ErrorClassTransient
+		}
+		if status >= 400 {
+			return loom.ErrorClassPermanent
+		}
+		return loom.ErrorClassTransient
+	}
+}
+
+func (classifier) IsServiceUnavailable(err error) bool {
+	if apiErr, ok := errors.AsType[*arkmodel.APIError](err); ok {
+		return apiErr.HTTPStatusCode == 503
+	}
+	var reqErr *arkmodel.RequestError
+	return errors.As(err, &reqErr) && reqErr.HTTPStatusCode == 503
 }

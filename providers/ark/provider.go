@@ -43,6 +43,10 @@ type Config struct {
 	// Capabilities 模型能力,由调用方或 modelfactory 按实际模型配置填充。
 	// nil = 零值"未声明"(能力校验跳过、纯透传)。
 	Capabilities *loom.ModelCapabilities
+	// RequestHeaders adds provider-specific headers to every chat and stream
+	// request. The map is snapshotted by New. Callers should use this only for
+	// endpoint policy negotiated with their Ark account, never for per-user data.
+	RequestHeaders map[string]string
 }
 
 // Model 一个 ark 模型实例,实现 loom.ChatModel。
@@ -51,6 +55,7 @@ type Model struct {
 	name         string
 	retryCfg     *loom.RetryConfig
 	capabilities loom.ModelCapabilities
+	requestOpts  []arkruntime.RequestOption
 }
 
 var _ loom.ChatModel = (*Model)(nil)
@@ -78,7 +83,17 @@ func New(cfg Config) (*Model, error) {
 	if cfg.Capabilities != nil {
 		capabilities = *cfg.Capabilities
 	}
-	return &Model{client: client, name: cfg.ModelName, retryCfg: retryCfg, capabilities: capabilities}, nil
+	requestOpts := make([]arkruntime.RequestOption, 0, len(cfg.RequestHeaders))
+	for key, value := range cfg.RequestHeaders {
+		if strings.TrimSpace(key) == "" {
+			return nil, fmt.Errorf("loom/ark: RequestHeaders contains an empty key")
+		}
+		requestOpts = append(requestOpts, arkruntime.WithCustomHeader(key, value))
+	}
+	return &Model{
+		client: client, name: cfg.ModelName, retryCfg: retryCfg,
+		capabilities: capabilities, requestOpts: requestOpts,
+	}, nil
 }
 
 // Name 返回 "ark/<endpoint>" 形式标识。
@@ -103,7 +118,7 @@ func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatRespo
 }
 
 func (m *Model) chatRaw(ctx context.Context, req arkmodel.CreateChatCompletionRequest) (*loom.ChatResponse, error) {
-	out, err := m.client.CreateChatCompletion(ctx, req)
+	out, err := m.client.CreateChatCompletion(ctx, req, m.requestOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("loom/ark: chat: %w", err)
 	}
@@ -140,7 +155,7 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 }
 
 func (m *Model) streamRaw(ctx context.Context, req arkmodel.CreateChatCompletionRequest) (loom.Stream, error) {
-	stream, err := m.client.CreateChatCompletionStream(ctx, req)
+	stream, err := m.client.CreateChatCompletionStream(ctx, req, m.requestOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("loom/ark: stream: %w", err)
 	}

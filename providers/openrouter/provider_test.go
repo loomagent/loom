@@ -4,8 +4,20 @@ import (
 	"strings"
 	"testing"
 
+	goOpenai "github.com/meguminnnnnnnnn/go-openai"
+
 	"github.com/loomagent/loom"
 )
+
+func TestClassifierTreats503AsTransient(t *testing.T) {
+	err := &goOpenai.APIError{HTTPStatusCode: 503}
+	if got := (classifier{}).ClassifyError(err); got != loom.ErrorClassTransient {
+		t.Fatalf("503 class = %s, want transient", got)
+	}
+	if !(classifier{}).IsServiceUnavailable(err) {
+		t.Fatal("503 must open the shared service-unavailable circuit")
+	}
+}
 
 // TestBuildRequestReasoningModeRequired 必传契约的 provider 级兜底:
 // 调用方忘传 Reasoning.Mode 时,请求在构造阶段就报错,绝不发出去。

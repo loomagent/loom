@@ -1,6 +1,9 @@
 package ark
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -8,6 +11,36 @@ import (
 
 	"github.com/loomagent/loom"
 )
+
+func TestRequestHeadersAreSnapshottedAndSent(t *testing.T) {
+	const headerName = "X-Ark-Policy"
+	const headerValue = "reviewed-policy"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(headerName); got != headerValue {
+			t.Errorf("%s = %q, want %q", headerName, got, headerValue)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"response","model":"ep-test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{}}`))
+	}))
+	defer server.Close()
+
+	headers := map[string]string{headerName: headerValue}
+	model, err := New(Config{
+		APIKey: "test-key", ModelName: "ep-test", BaseURL: server.URL,
+		RequestHeaders: headers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers[headerName] = "mutated-after-construction"
+	response, err := model.chatRaw(context.Background(), arkmodel.CreateChatCompletionRequest{Model: "ep-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != "ok" {
+		t.Fatalf("content = %q, want ok", response.Content)
+	}
+}
 
 // TestBuildRequestReasoningModeRequired 必传契约的 provider 级兜底:
 // 调用方忘传 Reasoning.Mode 时,请求在构造阶段就报错,绝不发出去。
