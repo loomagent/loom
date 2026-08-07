@@ -14,6 +14,14 @@ var (
 	ErrConflict     = errors.New("sourceregistry: concurrent store conflict")
 )
 
+// Common source origins are storage-neutral. Stores may persist additional
+// application-defined values without extending this list.
+const (
+	OriginWebSearch = "web_search"
+	OriginWebReader = "web_reader"
+	OriginImport    = "import"
+)
+
 // DateEvidence keeps a provider date hint and its provenance together.
 type DateEvidence struct {
 	Text   string `json:"text,omitempty"`
