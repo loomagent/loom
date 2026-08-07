@@ -8,13 +8,6 @@ import "errors"
 // wrap this sentinel.
 var ErrUnsupportedCapability = errors.New("loom: provider 不支持此请求")
 
-// ErrUnsupported is kept as a compatibility alias. New code should use
-// ErrUnsupportedCapability so the error cannot be confused with unsupported
-// host operations or storage features.
-//
-// Deprecated: use ErrUnsupportedCapability.
-var ErrUnsupported = ErrUnsupportedCapability
-
 // ErrTurnClosed Turn 已封口或被外部终结,写入被拒。
 // 触发场景:
 //   - executor 已通过 FinalAnswer / StreamFinalAnswer 自封口
