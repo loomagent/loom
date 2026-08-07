@@ -7,18 +7,20 @@ import (
 )
 
 const (
-	journalFilename    = "journal.jsonl"
-	queriesFilename    = "queries.jsonl"
-	sourcesFilename    = "sources.jsonl"
-	priorTurnsFilename = "prior_turns.jsonl"
-	turnContextsFile   = "turn_contexts.jsonl"
-	contextDirName     = "context"
-	rawDirName         = "raw"
-	turnsDirName       = "turns"
-	rawExt             = ".md"
+	journalFilename            = "journal.jsonl"
+	queriesFilename            = "queries.jsonl"
+	sourcesFilename            = "sources.jsonl"
+	sourceObservationsFilename = "source_observations.jsonl"
+	priorTurnsFilename         = "prior_turns.jsonl"
+	turnContextsFile           = "turn_contexts.jsonl"
+	contextDirName             = "context"
+	rawDirName                 = "raw"
+	turnsDirName               = "turns"
+	rawExt                     = ".md"
 
 	eventTypeSearchObserved = "search_observed"
 	eventTypeSourceSaved    = "source_saved"
+	eventTypeSourceObserved = "source_observed"
 	eventTypeTurnCompleted  = "turn_completed"
 	eventTypeTurnContext    = "turn_context"
 )
@@ -30,9 +32,12 @@ const (
 type TurnMeta struct {
 	ConversationID string
 	TurnIndex      uint64
-	ChatModeID     string
-	Executor       string
-	UserText       string
+	// ExecutionID identifies one attempt of a turn. It is optional so workspaces
+	// written before execution-scoped records remain readable.
+	ExecutionID string
+	ChatModeID  string
+	Executor    string
+	UserText    string
 }
 
 type SearchObservation struct {
@@ -78,6 +83,43 @@ type SourceObservation struct {
 	SrcID string
 }
 
+// SourceContentObservation binds a stable conversation-level source identity
+// to the immutable content version that was actually read in one turn. Older
+// workspaces have no observation events and continue to use SourceEntry.RawPath.
+type SourceContentObservation struct {
+	ObservationID           string     `json:"observation_id"`
+	SourceID                string     `json:"src_id"`
+	TurnIndex               uint64     `json:"turn_index"`
+	ExecutionID             string     `json:"execution_id,omitempty"`
+	QueryIDs                []string   `json:"query_ids,omitempty"`
+	URL                     string     `json:"url"`
+	Title                   string     `json:"title,omitempty"`
+	Snippet                 string     `json:"snippet,omitempty"`
+	Date                    string     `json:"date,omitempty"`
+	DateSource              string     `json:"date_source,omitempty"`
+	PublishedAt             *time.Time `json:"published_at,omitempty"`
+	PublishedDateText       string     `json:"published_date_text,omitempty"`
+	PublishedDateSource     string     `json:"published_date_source,omitempty"`
+	PublishedDateConfidence string     `json:"published_date_confidence,omitempty"`
+	Domain                  string     `json:"domain,omitempty"`
+	Summary                 string     `json:"summary,omitempty"`
+	Tier                    string     `json:"tier,omitempty"`
+	ContentPath             string     `json:"content_path"`
+	ContentSHA256           string     `json:"content_sha256"`
+	Chars                   uint64     `json:"chars"`
+	Tool                    string     `json:"tool,omitempty"`
+	Phase                   string     `json:"phase,omitempty"`
+	Round                   uint64     `json:"round,omitempty"`
+	ObservedAt              time.Time  `json:"observed_at"`
+}
+
+type SourceSaveResult struct {
+	Entry              SourceEntry
+	Observation        SourceContentObservation
+	SourceCreated      bool
+	ObservationCreated bool
+}
+
 type QueryHit struct {
 	Pos        uint64 `json:"pos"`
 	URL        string `json:"url"`
@@ -92,6 +134,7 @@ type QueryHit struct {
 type QueryRecord struct {
 	QueryID        string     `json:"query_id"`
 	TurnIndex      uint64     `json:"turn_index,omitempty"`
+	ExecutionID    string     `json:"execution_id,omitempty"`
 	TurnQueryIndex uint64     `json:"turn_query_index,omitempty"`
 	Executor       string     `json:"executor,omitempty"`
 	Tool           string     `json:"tool,omitempty"`
@@ -125,6 +168,7 @@ type SourceEntry struct {
 	FoundByQuery            string     `json:"found_by_query,omitempty"`
 	FoundByQueries          []string   `json:"found_by_queries,omitempty"`
 	FoundTurnIndex          uint64     `json:"found_turn_index,omitempty"`
+	FoundExecutionID        string     `json:"found_execution_id,omitempty"`
 	FoundExecutor           string     `json:"found_executor,omitempty"`
 	FoundTool               string     `json:"found_tool,omitempty"`
 	FoundPhase              string     `json:"found_phase,omitempty"`
@@ -157,6 +201,7 @@ type SourceMeta struct {
 
 type PriorTurn struct {
 	TurnIndex       uint64     `json:"turn_index"`
+	ExecutionID     string     `json:"execution_id,omitempty"`
 	ConversationID  string     `json:"conversation_id,omitempty"`
 	ChatModeID      string     `json:"chat_mode_id,omitempty"`
 	Executor        string     `json:"executor,omitempty"`
@@ -171,6 +216,7 @@ type PriorTurn struct {
 
 type TurnContext struct {
 	TurnIndex      uint64    `json:"turn_index"`
+	ExecutionID    string    `json:"execution_id,omitempty"`
 	ConversationID string    `json:"conversation_id,omitempty"`
 	ChatModeID     string    `json:"chat_mode_id,omitempty"`
 	Executor       string    `json:"executor,omitempty"`
@@ -183,20 +229,22 @@ type TurnContext struct {
 }
 
 type JournalEvent struct {
-	Type      string       `json:"type"`
-	At        time.Time    `json:"at"`
-	Query     *QueryRecord `json:"query,omitempty"`
-	Source    *SourceEntry `json:"source,omitempty"`
-	PriorTurn *PriorTurn   `json:"prior_turn,omitempty"`
-	Context   *TurnContext `json:"context,omitempty"`
+	Type        string                    `json:"type"`
+	At          time.Time                 `json:"at"`
+	Query       *QueryRecord              `json:"query,omitempty"`
+	Source      *SourceEntry              `json:"source,omitempty"`
+	Observation *SourceContentObservation `json:"source_observation,omitempty"`
+	PriorTurn   *PriorTurn                `json:"prior_turn,omitempty"`
+	Context     *TurnContext              `json:"context,omitempty"`
 }
 
 type ContextSnapshot struct {
-	PriorTurns   []PriorTurn
-	TurnContexts []TurnContext
-	Queries      []QueryRecord
-	Sources      []SourceEntry
-	Stats        SnapshotStats
+	PriorTurns         []PriorTurn
+	TurnContexts       []TurnContext
+	Queries            []QueryRecord
+	Sources            []SourceEntry
+	SourceObservations []SourceContentObservation
+	Stats              SnapshotStats
 }
 
 type SnapshotStats struct {

@@ -118,6 +118,177 @@ func TestTurnSessionMaterializesSearchSourceLinks(t *testing.T) {
 	}
 }
 
+func TestTurnSessionObserveSearchReturnsDetachedRecord(t *testing.T) {
+	root := t.TempDir()
+	ws, err := OpenWorkspace(root)
+	if err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	session, err := ws.BeginTurn(TurnMeta{ConversationID: "conv_detached", TurnIndex: 1})
+	if err != nil {
+		t.Fatalf("BeginTurn: %v", err)
+	}
+	rec, err := session.ObserveSearch(context.Background(), SearchObservation{
+		Query: "detached record",
+		Hits:  []SearchHit{{URL: "https://example.com/detached", Relevant: true}},
+	})
+	if err != nil {
+		t.Fatalf("ObserveSearch: %v", err)
+	}
+	rec.Hits[0].SrcID = "SRC-EXTERNAL"
+
+	if err := session.Checkpoint(context.Background()); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	queries, err := LoadQueryRecords(root)
+	if err != nil {
+		t.Fatalf("LoadQueryRecords: %v", err)
+	}
+	if len(queries) != 1 || queries[0].Hits[0].SrcID != "" {
+		t.Fatalf("caller mutation leaked into session-owned record: %+v", queries)
+	}
+}
+
+func TestTurnSessionScopesRetryStateByExecutionID(t *testing.T) {
+	root := t.TempDir()
+	ws, err := OpenWorkspace(root)
+	if err != nil {
+		t.Fatalf("OpenWorkspace: %v", err)
+	}
+	oldSession, err := ws.BeginTurn(TurnMeta{
+		ConversationID: "conv_retry", TurnIndex: 2, ExecutionID: "loomrun-old", Executor: "pro_report",
+	})
+	if err != nil {
+		t.Fatalf("BeginTurn old: %v", err)
+	}
+	if _, err := oldSession.ObserveSearch(context.Background(), SearchObservation{
+		Query: "same useful query", Hits: []SearchHit{{URL: "https://example.com/source", Relevant: true}},
+	}); err != nil {
+		t.Fatalf("ObserveSearch old: %v", err)
+	}
+	oldSave, err := oldSession.SaveSourceVersioned(context.Background(), SourceObservation{
+		URL: "https://example.com/source", Markdown: "same immutable content",
+	})
+	if err != nil {
+		t.Fatalf("SaveSourceVersioned old: %v", err)
+	}
+	if err := oldSession.Checkpoint(context.Background()); err != nil {
+		t.Fatalf("Checkpoint old: %v", err)
+	}
+
+	newSession, err := ws.BeginTurn(TurnMeta{
+		ConversationID: "conv_retry", TurnIndex: 2, ExecutionID: "loomrun-new", Executor: "pro_report",
+	})
+	if err != nil {
+		t.Fatalf("BeginTurn new: %v", err)
+	}
+	if newSession.HasQuery("same useful query") {
+		t.Fatal("prior execution query suppressed the retry")
+	}
+	if newSession.HasObservedSource(oldSave.Entry.ID) {
+		t.Fatal("prior execution source observation leaked into the retry")
+	}
+	newQuery, err := newSession.ObserveSearch(context.Background(), SearchObservation{
+		Query: "same useful query", Hits: []SearchHit{{URL: "https://example.com/source", Relevant: true}},
+	})
+	if err != nil {
+		t.Fatalf("ObserveSearch new: %v", err)
+	}
+	newSave, err := newSession.SaveSourceVersioned(context.Background(), SourceObservation{
+		URL: "https://example.com/source", Markdown: "same immutable content",
+	})
+	if err != nil {
+		t.Fatalf("SaveSourceVersioned new: %v", err)
+	}
+	if !newSave.ObservationCreated {
+		t.Fatal("same content must create a new observation for a new execution")
+	}
+	if newSave.Observation.ObservationID == oldSave.Observation.ObservationID {
+		t.Fatalf("observation id reused across executions: %s", newSave.Observation.ObservationID)
+	}
+	if newQuery.ExecutionID != "loomrun-new" || newSave.Observation.ExecutionID != "loomrun-new" {
+		t.Fatalf("new records lost execution identity: query=%+v observation=%+v", newQuery, newSave.Observation)
+	}
+	if err := newSession.Checkpoint(context.Background()); err != nil {
+		t.Fatalf("Checkpoint new: %v", err)
+	}
+
+	snapshot, err := ws.LoadSnapshot(context.Background(), SnapshotOptions{})
+	if err != nil {
+		t.Fatalf("LoadSnapshot: %v", err)
+	}
+	if len(snapshot.Queries) != 2 || len(snapshot.SourceObservations) != 2 {
+		t.Fatalf("snapshot records = queries:%d observations:%d", len(snapshot.Queries), len(snapshot.SourceObservations))
+	}
+}
+
+func TestTurnSessionQueryDedupIsTurnScoped(t *testing.T) {
+	root := t.TempDir()
+	ws, err := OpenWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := ws.BeginTurn(TurnMeta{ConversationID: "conv", TurnIndex: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.ObserveSearch(context.Background(), SearchObservation{Query: "PostgreSQL 18 AIO"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Checkpoint(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := ws.BeginTurn(TurnMeta{ConversationID: "conv", TurnIndex: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.HasQuery("PostgreSQL 18 AIO") {
+		t.Fatal("historical query incorrectly suppressed in a new turn")
+	}
+	if _, err := second.ObserveSearch(context.Background(), SearchObservation{Query: "PostgreSQL 18 AIO"}); err != nil {
+		t.Fatal(err)
+	}
+	if !second.HasQuery("  postgresql   18 aio  ") {
+		t.Fatal("same-turn normalized duplicate was not suppressed")
+	}
+}
+
+func TestTurnSessionRejectsUnsafeAndConflictingSourceIDs(t *testing.T) {
+	root := t.TempDir()
+	ws, err := OpenWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := ws.BeginTurn(TurnMeta{ConversationID: "conv", TurnIndex: 1, Executor: "test", UserText: "question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, _, err := session.SaveSource(ctx, SourceObservation{
+		URL: "https://example.com/unsafe", Markdown: "body", SrcID: "../../escape",
+	}); err == nil || !strings.Contains(err.Error(), "invalid source id") {
+		t.Fatalf("unsafe SaveSource() error = %v", err)
+	}
+	if _, _, err := session.SaveSource(ctx, SourceObservation{
+		URL: "https://example.com/one", Markdown: "one", SrcID: "SRC-7",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := session.SaveSource(ctx, SourceObservation{
+		URL: "https://example.com/two", Markdown: "two", SrcID: "SRC-7",
+	}); err == nil || !strings.Contains(err.Error(), "already belongs") {
+		t.Fatalf("conflicting SaveSource() error = %v", err)
+	}
+	corpus, err := NewCorpus(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := corpus.ReadRaw("../journal"); err == nil || !strings.Contains(err.Error(), "invalid source id") {
+		t.Fatalf("unsafe ReadRaw() error = %v", err)
+	}
+}
+
 func TestTurnSessionGlobalIDsAndPriorTurns(t *testing.T) {
 	root := t.TempDir()
 	ws, err := OpenWorkspace(root)
@@ -254,6 +425,83 @@ func TestLaterSearchLinksExistingSourceByURL(t *testing.T) {
 	}
 	if len(rec.Hits) != 1 || rec.Hits[0].SrcID != "SRC-1" {
 		t.Fatalf("search did not link existing source: %+v", rec)
+	}
+}
+
+func TestTurnSessionRecordsImmutablePerTurnSourceVersions(t *testing.T) {
+	root := t.TempDir()
+	ws, err := OpenWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	first, err := ws.BeginTurn(TurnMeta{ConversationID: "conv_versions", TurnIndex: 1, Executor: "pro_report"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstResult, err := first.SaveSourceVersioned(ctx, SourceObservation{
+		URL: "https://example.com/versioned", Markdown: "first immutable body", Tool: "web_reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !firstResult.SourceCreated || !firstResult.ObservationCreated {
+		t.Fatalf("first save = %+v", firstResult)
+	}
+	if err := first.Checkpoint(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := ws.BeginTurn(TurnMeta{ConversationID: "conv_versions", TurnIndex: 2, Executor: "pro_report"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.HasObservedSource(firstResult.Entry.ID) {
+		t.Fatal("historical observation incorrectly counted as current-turn read")
+	}
+	secondResult, err := second.SaveSourceVersioned(ctx, SourceObservation{
+		URL: "https://example.com/versioned#latest", Markdown: "second immutable body", Tool: "web_reader",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondResult.SourceCreated || !secondResult.ObservationCreated {
+		t.Fatalf("second save = %+v", secondResult)
+	}
+	if firstResult.Observation.ContentPath == secondResult.Observation.ContentPath {
+		t.Fatal("changed content reused the same immutable object")
+	}
+	if !second.HasObservedSource(firstResult.Entry.ID) {
+		t.Fatal("current-turn source observation was not visible to the session")
+	}
+	if err := second.Checkpoint(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	canonical, err := os.ReadFile(filepath.Join(root, "raw", firstResult.Entry.ID+".md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(canonical) != "first immutable body" {
+		t.Fatalf("legacy canonical raw was overwritten: %q", canonical)
+	}
+	firstObject, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(firstResult.Observation.ContentPath)))
+	if err != nil || string(firstObject) != "first immutable body" {
+		t.Fatalf("first content object = %q, err=%v", firstObject, err)
+	}
+	secondObject, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(secondResult.Observation.ContentPath)))
+	if err != nil || string(secondObject) != "second immutable body" {
+		t.Fatalf("second content object = %q, err=%v", secondObject, err)
+	}
+	snapshot, err := ws.LoadSnapshot(ctx, SnapshotOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Sources) != 1 || len(snapshot.SourceObservations) != 2 {
+		t.Fatalf("snapshot sources=%d observations=%d", len(snapshot.Sources), len(snapshot.SourceObservations))
+	}
+	if _, err := os.Stat(filepath.Join(root, sourceObservationsFilename)); err != nil {
+		t.Fatalf("source observation compatibility view missing: %v", err)
 	}
 }
 

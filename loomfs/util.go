@@ -83,6 +83,16 @@ func (s sourceEntries) items() []any {
 	return out
 }
 
+type sourceObservationRecords []SourceContentObservation
+
+func (s sourceObservationRecords) items() []any {
+	out := make([]any, 0, len(s))
+	for i := range s {
+		out = append(out, s[i])
+	}
+	return out
+}
+
 type priorTurns []PriorTurn
 
 func (p priorTurns) items() []any {
@@ -159,6 +169,15 @@ func parseIDSeq(id, prefix string) uint64 {
 	return n
 }
 
+func validateSourceID(id string) error {
+	id = strings.TrimSpace(id)
+	seq := parseIDSeq(id, "SRC-")
+	if seq == 0 || srcID(seq) != id {
+		return fmt.Errorf("loomfs: invalid source id %q", id)
+	}
+	return nil
+}
+
 func rawPath(id string) string {
 	return filepath.ToSlash(filepath.Join(rawDirName, id+rawExt))
 }
@@ -181,6 +200,24 @@ func sortedSourceEntries(entries map[string]SourceEntry) []SourceEntry {
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return parseIDSeq(out[i].ID, "SRC-") < parseIDSeq(out[j].ID, "SRC-")
+	})
+	return out
+}
+
+func sortedSourceObservations(entries map[string]SourceContentObservation) []SourceContentObservation {
+	out := make([]SourceContentObservation, 0, len(entries))
+	for _, entry := range entries {
+		entry.QueryIDs = append([]string(nil), entry.QueryIDs...)
+		out = append(out, entry)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].TurnIndex != out[j].TurnIndex {
+			return out[i].TurnIndex < out[j].TurnIndex
+		}
+		if !out[i].ObservedAt.Equal(out[j].ObservedAt) {
+			return out[i].ObservedAt.Before(out[j].ObservedAt)
+		}
+		return out[i].ObservationID < out[j].ObservationID
 	})
 	return out
 }

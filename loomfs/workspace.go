@@ -98,6 +98,9 @@ func (w *Workspace) rebuildViewsLocked() error {
 	if err := writeJSONL(filepath.Join(w.root, sourcesFilename), sourceEntries(snapshot.Sources)); err != nil {
 		return fmt.Errorf("loomfs: write sources view: %w", err)
 	}
+	if err := writeJSONL(filepath.Join(w.root, sourceObservationsFilename), sourceObservationRecords(snapshot.SourceObservations)); err != nil {
+		return fmt.Errorf("loomfs: write source observations view: %w", err)
+	}
 	if err := writeJSONL(filepath.Join(w.root, priorTurnsFilename), priorTurns(snapshot.PriorTurns)); err != nil {
 		return fmt.Errorf("loomfs: write prior turns view: %w", err)
 	}
