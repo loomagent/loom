@@ -50,6 +50,9 @@ type SearchResult struct {
 	Title       string            `json:"title,omitempty"`
 	URL         string            `json:"url"`
 	Snippet     string            `json:"snippet,omitempty"`
+	Date        string            `json:"date,omitempty"`
+	DateSource  string            `json:"dateSource,omitempty"`
+	Position    int               `json:"position,omitempty"`
 	PublishedAt *time.Time        `json:"publishedAt,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }

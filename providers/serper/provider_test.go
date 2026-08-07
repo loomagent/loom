@@ -31,7 +31,8 @@ func TestSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Results) != 1 || response.Results[0].Metadata["date_source"] != "serper.organic.date" {
+	if len(response.Results) != 1 || response.Results[0].Date != "May 30, 2025" ||
+		response.Results[0].DateSource != "serper.organic.date" || response.Results[0].Position != 1 {
 		t.Fatalf("response = %+v", response)
 	}
 }

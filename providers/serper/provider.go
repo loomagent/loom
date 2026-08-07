@@ -140,7 +140,11 @@ func (c *Client) Search(ctx context.Context, request web.SearchRequest) (web.Sea
 		if len(metadata) == 0 {
 			metadata = nil
 		}
-		results = append(results, web.SearchResult{Title: item.Title, URL: item.Link, Snippet: item.Snippet, Metadata: metadata})
+		results = append(results, web.SearchResult{
+			Title: item.Title, URL: item.Link, Snippet: item.Snippet,
+			Date: item.Date, DateSource: metadata[web.SearchMetadataDateSource], Position: item.Position,
+			Metadata: metadata,
+		})
 	}
 	return web.SearchResponse{Results: results, Metadata: map[string]string{web.MetadataProvider: "serper"}}, nil
 }
