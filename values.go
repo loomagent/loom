@@ -5,7 +5,9 @@ package loom
 // 当前仅支持纯文本;后续扩展多模态时新增字段(Images / Files / 等),
 // 不改 Text 语义,保持向后兼容。
 type UserMessage struct {
-	Text string
+	Text    string
+	Source  MessageSource
+	Purpose MessagePurpose
 }
 
 // ToolResult 工具执行结果,用于 Writer.WriteToolResult / Stream 闭包写入。

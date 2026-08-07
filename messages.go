@@ -28,7 +28,7 @@ func HistoryToMessages(history []Turn, input UserMessage) ([]Message, error) {
 		}
 		out = append(out, turnToMessages(&history[i])...)
 	}
-	out = append(out, Message{Role: RoleUser, Content: input.Text})
+	out = append(out, NewTaskUserMessage(input.Source, input.Text))
 	return out, nil
 }
 
@@ -87,7 +87,7 @@ func turnToMessages(turn *Turn) []Message {
 			if pendingReasoning.Len() > 0 {
 				appendAssistantMsg("", nil)
 			}
-			out = append(out, Message{Role: RoleUser, Content: it.Text})
+			out = append(out, NewTaskUserMessage(it.MessageSource, it.Text))
 
 		case ItemKindReasoning:
 			if pendingReasoning.Len() > 0 {
