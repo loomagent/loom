@@ -18,7 +18,8 @@ type classifier struct{}
 var _ loom.ErrorClassifier = classifier{}
 
 // ClassifyError 实现 loom.ErrorClassifier。映射与 deepseek classifier 对齐:
-//   - 429 / 503             → RateLimit(无限 retry)
+//   - 429                   → RateLimit(共享额度退避)
+//   - 503 / 其它 5xx         → Transient(有限 retry)
 //   - 400 / 401 / 402 / 403 / 404 → Permanent(auth / 余额不足 / bad request)
 //   - 其它 5xx               → Transient(有限 retry)
 //   - 其它 4xx               → Permanent
@@ -33,7 +34,7 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 	}
 	if status, ok := httpStatusOf(err); ok {
 		switch status {
-		case 429, 503:
+		case 429:
 			return loom.ErrorClassRateLimit
 		case 400, 401, 402, 403, 404:
 			return loom.ErrorClassPermanent
@@ -57,4 +58,9 @@ func httpStatusOf(err error) (int, bool) {
 		return reqErr.HTTPStatusCode, true
 	}
 	return 0, false
+}
+
+func (classifier) IsServiceUnavailable(err error) bool {
+	status, ok := httpStatusOf(err)
+	return ok && status == 503
 }

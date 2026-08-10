@@ -2,7 +2,10 @@ package loomfs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,21 +19,27 @@ type TurnSession struct {
 	ws   *Workspace
 	meta TurnMeta
 
-	mu                sync.Mutex
-	nextQuerySeq      uint64
-	nextSourceSeq     uint64
-	turnQueryIndex    uint64
-	pendingQueries    []QueryRecord
-	pendingSources    map[string]SourceEntry
-	flushedQueries    map[string]struct{}
-	flushedSources    map[string]struct{}
-	urlToPendingHits  map[string][]pendingHitRef
-	sourceByURL       map[string]SourceEntry
-	queryIDsByURL     map[string][]string
-	searchMetaByURL   map[string]sourceSearchMeta
-	seenQueryText     map[string]struct{}
-	artifactPaths     []string
-	finishedPriorTurn bool
+	mu                     sync.Mutex
+	nextQuerySeq           uint64
+	nextSourceSeq          uint64
+	turnQueryIndex         uint64
+	pendingQueries         []QueryRecord
+	pendingSources         map[string]SourceEntry
+	pendingObservations    map[string]SourceContentObservation
+	flushedQueries         map[string]struct{}
+	flushedSources         map[string]struct{}
+	flushedObservations    map[string]struct{}
+	urlToPendingHits       map[string][]pendingHitRef
+	sourceByURL            map[string]SourceEntry
+	sourceByID             map[string]SourceEntry
+	queryIDsByURL          map[string][]string
+	turnQueryIDsByURL      map[string][]string
+	currentObservedSources map[string]struct{}
+	observationByKey       map[string]SourceContentObservation
+	searchMetaByURL        map[string]sourceSearchMeta
+	seenQueryText          map[string]struct{}
+	artifactPaths          []string
+	finishedPriorTurn      bool
 }
 
 type pendingHitRef struct {
@@ -47,30 +56,44 @@ type sourceSearchMeta struct {
 
 func newTurnSession(ws *Workspace, meta TurnMeta, snapshot ContextSnapshot) *TurnSession {
 	s := &TurnSession{
-		ws:               ws,
-		meta:             meta,
-		nextQuerySeq:     1,
-		nextSourceSeq:    1,
-		pendingSources:   map[string]SourceEntry{},
-		flushedQueries:   map[string]struct{}{},
-		flushedSources:   map[string]struct{}{},
-		urlToPendingHits: map[string][]pendingHitRef{},
-		sourceByURL:      map[string]SourceEntry{},
-		queryIDsByURL:    map[string][]string{},
-		searchMetaByURL:  map[string]sourceSearchMeta{},
-		seenQueryText:    map[string]struct{}{},
+		ws:                     ws,
+		meta:                   meta,
+		nextQuerySeq:           1,
+		nextSourceSeq:          1,
+		pendingSources:         map[string]SourceEntry{},
+		pendingObservations:    map[string]SourceContentObservation{},
+		flushedQueries:         map[string]struct{}{},
+		flushedSources:         map[string]struct{}{},
+		flushedObservations:    map[string]struct{}{},
+		urlToPendingHits:       map[string][]pendingHitRef{},
+		sourceByURL:            map[string]SourceEntry{},
+		sourceByID:             map[string]SourceEntry{},
+		queryIDsByURL:          map[string][]string{},
+		turnQueryIDsByURL:      map[string][]string{},
+		currentObservedSources: map[string]struct{}{},
+		observationByKey:       map[string]SourceContentObservation{},
+		searchMetaByURL:        map[string]sourceSearchMeta{},
+		seenQueryText:          map[string]struct{}{},
 	}
 	for _, q := range snapshot.Queries {
 		if seq := parseIDSeq(q.QueryID, "QUERY-"); seq >= s.nextQuerySeq {
 			s.nextQuerySeq = seq + 1
 		}
-		if text := NormalizeQuery(q.Text); text != "" {
-			s.seenQueryText[text] = struct{}{}
+		// Query identities are conversation-global, but duplicate suppression is
+		// execution-local. A new turn or retry must be allowed to issue the same
+		// useful query.
+		if sameExecution(q.TurnIndex, q.ExecutionID, meta) {
+			if text := NormalizeQuery(q.Text); text != "" {
+				s.seenQueryText[text] = struct{}{}
+			}
 		}
 		for _, h := range q.Hits {
 			key := NormalizeURL(h.URL)
 			if key != "" {
 				s.queryIDsByURL[key] = uniqueStrings(append(s.queryIDsByURL[key], q.QueryID))
+				if sameExecution(q.TurnIndex, q.ExecutionID, meta) {
+					s.turnQueryIDsByURL[key] = uniqueStrings(append(s.turnQueryIDsByURL[key], q.QueryID))
+				}
 				s.mergeSearchMetaLocked(key, sourceSearchMeta{
 					Title:      h.Title,
 					Snippet:    h.Snippet,
@@ -86,6 +109,18 @@ func newTurnSession(ws *Workspace, meta TurnMeta, snapshot ContextSnapshot) *Tur
 		}
 		if key := NormalizeURL(src.URL); key != "" {
 			s.sourceByURL[key] = src
+		}
+		if strings.TrimSpace(src.ID) != "" {
+			s.sourceByID[src.ID] = src
+		}
+	}
+	for _, observation := range snapshot.SourceObservations {
+		key := sourceObservationKey(observation.TurnIndex, observation.ExecutionID, observation.SourceID, observation.ContentSHA256)
+		if key != "" {
+			s.observationByKey[key] = observation
+		}
+		if sameExecution(observation.TurnIndex, observation.ExecutionID, meta) && strings.TrimSpace(observation.SourceID) != "" {
+			s.currentObservedSources[observation.SourceID] = struct{}{}
 		}
 	}
 	return s
@@ -115,6 +150,16 @@ func (s *TurnSession) HasQuery(query string) bool {
 	return ok
 }
 
+func (s *TurnSession) HasObservedSource(sourceID string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.currentObservedSources[strings.TrimSpace(sourceID)]
+	return ok
+}
+
 func (s *TurnSession) ObserveSearch(_ context.Context, obs SearchObservation) (QueryRecord, error) {
 	if s == nil {
 		return QueryRecord{}, nil
@@ -131,6 +176,7 @@ func (s *TurnSession) ObserveSearch(_ context.Context, obs SearchObservation) (Q
 	rec := QueryRecord{
 		QueryID:        queryID(s.nextQuerySeq),
 		TurnIndex:      s.meta.TurnIndex,
+		ExecutionID:    strings.TrimSpace(s.meta.ExecutionID),
 		TurnQueryIndex: s.turnQueryIndex,
 		Executor:       strings.TrimSpace(s.meta.Executor),
 		Tool:           strings.TrimSpace(obs.Tool),
@@ -138,6 +184,7 @@ func (s *TurnSession) ObserveSearch(_ context.Context, obs SearchObservation) (Q
 		Round:          obs.Round,
 		Text:           query,
 		Why:            strings.TrimSpace(obs.Why),
+		Metadata:       maps.Clone(obs.Metadata),
 		Hits:           make([]QueryHit, 0, len(obs.Hits)),
 		At:             time.Now(),
 	}
@@ -145,8 +192,12 @@ func (s *TurnSession) ObserveSearch(_ context.Context, obs SearchObservation) (Q
 	s.seenQueryText[NormalizeQuery(query)] = struct{}{}
 
 	for i, hit := range obs.Hits {
+		position := uint64(i + 1)
+		if hit.Position > 0 {
+			position = uint64(hit.Position)
+		}
 		qh := QueryHit{
-			Pos:        uint64(i + 1),
+			Pos:        position,
 			URL:        strings.TrimSpace(hit.URL),
 			Title:      strings.TrimSpace(hit.Title),
 			Snippet:    strings.TrimSpace(hit.Snippet),
@@ -167,6 +218,7 @@ func (s *TurnSession) ObserveSearch(_ context.Context, obs SearchObservation) (Q
 		key := NormalizeURL(qh.URL)
 		if key != "" {
 			s.queryIDsByURL[key] = uniqueStrings(append(s.queryIDsByURL[key], rec.QueryID))
+			s.turnQueryIDsByURL[key] = uniqueStrings(append(s.turnQueryIDsByURL[key], rec.QueryID))
 			s.mergeSearchMetaLocked(key, sourceSearchMeta{
 				Title:      qh.Title,
 				Snippet:    qh.Snippet,
@@ -181,18 +233,25 @@ func (s *TurnSession) ObserveSearch(_ context.Context, obs SearchObservation) (Q
 	}
 	rec.NumResults = uint64(len(rec.Hits))
 	rec.NumSaved = countSavedHits(rec.Hits)
-	s.pendingQueries = append(s.pendingQueries, rec)
+	// The session owns the persisted copy. Callers may retain the returned
+	// record while source saves update query/source links.
+	s.pendingQueries = append(s.pendingQueries, cloneQueryRecord(rec))
 	return rec, nil
 }
 
-func (s *TurnSession) SaveSource(_ context.Context, obs SourceObservation) (SourceEntry, bool, error) {
+func (s *TurnSession) SaveSource(ctx context.Context, obs SourceObservation) (SourceEntry, bool, error) {
+	result, err := s.SaveSourceVersioned(ctx, obs)
+	return result.Entry, result.SourceCreated, err
+}
+
+func (s *TurnSession) SaveSourceVersioned(_ context.Context, obs SourceObservation) (SourceSaveResult, error) {
 	if s == nil {
-		return SourceEntry{}, false, nil
+		return SourceSaveResult{}, nil
 	}
 	rawURL := strings.TrimSpace(obs.URL)
 	markdown := strings.TrimSpace(obs.Markdown)
 	if rawURL == "" || markdown == "" {
-		return SourceEntry{}, false, nil
+		return SourceSaveResult{}, nil
 	}
 	key := NormalizeURL(rawURL)
 
@@ -208,43 +267,52 @@ func (s *TurnSession) SaveSource(_ context.Context, obs SourceObservation) (Sour
 		if id == "" {
 			id = srcID(s.nextSourceSeq)
 		}
+		if err := validateSourceID(id); err != nil {
+			return SourceSaveResult{}, err
+		}
+		if prior, ok := s.sourceByID[id]; ok && NormalizeURL(prior.URL) != key {
+			return SourceSaveResult{}, fmt.Errorf("loomfs: source id %s already belongs to %s", id, prior.URL)
+		}
 		if seq := parseIDSeq(id, "SRC-"); seq >= s.nextSourceSeq {
 			s.nextSourceSeq = seq + 1
 		}
 		entry = SourceEntry{
-			ID:             id,
-			URL:            rawURL,
-			Domain:         domainOf(rawURL),
-			RawPath:        rawPath(id),
-			FoundTurnIndex: s.meta.TurnIndex,
-			FoundExecutor:  strings.TrimSpace(s.meta.Executor),
-			FoundTool:      strings.TrimSpace(obs.Tool),
-			FoundPhase:     strings.TrimSpace(obs.Phase),
-			FoundRound:     obs.Round,
-			SavedAt:        time.Now(),
+			ID:               id,
+			URL:              rawURL,
+			Domain:           domainOf(rawURL),
+			RawPath:          rawPath(id),
+			FoundTurnIndex:   s.meta.TurnIndex,
+			FoundExecutionID: strings.TrimSpace(s.meta.ExecutionID),
+			FoundExecutor:    strings.TrimSpace(s.meta.Executor),
+			FoundTool:        strings.TrimSpace(obs.Tool),
+			FoundPhase:       strings.TrimSpace(obs.Phase),
+			FoundRound:       obs.Round,
+			SavedAt:          time.Now(),
 		}
 		added = true
 	}
-	entry.Title = firstNonEmpty(obs.Title, entry.Title)
-	entry.Snippet = firstNonEmpty(obs.Snippet, entry.Snippet)
-	entry.Date = firstNonEmpty(obs.Date, entry.Date)
-	entry.DateSource = firstNonEmpty(obs.DateSource, entry.DateSource)
+	entry.Title = firstNonEmpty(entry.Title, obs.Title)
+	entry.Snippet = firstNonEmpty(entry.Snippet, obs.Snippet)
+	entry.Date = firstNonEmpty(entry.Date, obs.Date)
+	entry.DateSource = firstNonEmpty(entry.DateSource, obs.DateSource)
 	if entry.PublishedAt == nil && obs.PublishedAt != nil {
 		publishedAt := *obs.PublishedAt
 		entry.PublishedAt = &publishedAt
 	}
-	entry.PublishedDateText = firstNonEmpty(obs.PublishedDateText, entry.PublishedDateText)
-	entry.PublishedDateSource = firstNonEmpty(obs.PublishedDateSource, entry.PublishedDateSource)
-	entry.PublishedDateConfidence = firstNonEmpty(obs.PublishedDateConfidence, entry.PublishedDateConfidence)
+	entry.PublishedDateText = firstNonEmpty(entry.PublishedDateText, obs.PublishedDateText)
+	entry.PublishedDateSource = firstNonEmpty(entry.PublishedDateSource, obs.PublishedDateSource)
+	entry.PublishedDateConfidence = firstNonEmpty(entry.PublishedDateConfidence, obs.PublishedDateConfidence)
 	if meta, ok := s.searchMetaByURL[key]; ok {
 		entry.Title = firstNonEmpty(entry.Title, meta.Title)
 		entry.Snippet = firstNonEmpty(entry.Snippet, meta.Snippet)
 		entry.Date = firstNonEmpty(entry.Date, meta.Date)
 		entry.DateSource = firstNonEmpty(entry.DateSource, meta.DateSource)
 	}
-	entry.Summary = firstNonEmpty(obs.Summary, entry.Summary)
-	entry.Tier = firstNonEmpty(obs.Tier, entry.Tier)
-	entry.Chars = uint64(len([]rune(markdown)))
+	entry.Summary = firstNonEmpty(entry.Summary, obs.Summary)
+	entry.Tier = firstNonEmpty(entry.Tier, obs.Tier)
+	if added {
+		entry.Chars = uint64(len([]rune(markdown)))
+	}
 	if entry.RawPath == "" {
 		entry.RawPath = rawPath(entry.ID)
 	}
@@ -274,15 +342,123 @@ func (s *TurnSession) SaveSource(_ context.Context, obs SourceObservation) (Sour
 
 	if added {
 		if err := os.MkdirAll(filepath.Join(s.ws.root, rawDirName), 0o755); err != nil {
-			return SourceEntry{}, false, fmt.Errorf("loomfs: create raw dir: %w", err)
+			return SourceSaveResult{}, fmt.Errorf("loomfs: create raw dir: %w", err)
 		}
 		if err := os.WriteFile(filepath.Join(s.ws.root, entry.RawPath), []byte(markdown), 0o644); err != nil {
-			return SourceEntry{}, false, fmt.Errorf("loomfs: write raw source: %w", err)
+			return SourceSaveResult{}, fmt.Errorf("loomfs: write raw source: %w", err)
 		}
 	}
+	digest := sha256.Sum256([]byte(markdown))
+	contentSHA := hex.EncodeToString(digest[:])
+	contentPath := sourceContentPath(contentSHA)
+	if err := writeImmutableContentObject(s.ws.root, contentPath, markdown); err != nil {
+		return SourceSaveResult{}, err
+	}
+	observationKey := sourceObservationKey(s.meta.TurnIndex, s.meta.ExecutionID, entry.ID, contentSHA)
+	observation, observed := s.observationByKey[observationKey]
+	if !observed {
+		now := time.Now()
+		observation = SourceContentObservation{
+			ObservationID:           sourceObservationID(s.meta.TurnIndex, s.meta.ExecutionID, entry.ID, contentSHA),
+			SourceID:                entry.ID,
+			TurnIndex:               s.meta.TurnIndex,
+			ExecutionID:             strings.TrimSpace(s.meta.ExecutionID),
+			QueryIDs:                append([]string(nil), s.turnQueryIDsByURL[key]...),
+			URL:                     rawURL,
+			Title:                   strings.TrimSpace(obs.Title),
+			Snippet:                 strings.TrimSpace(obs.Snippet),
+			Date:                    strings.TrimSpace(obs.Date),
+			DateSource:              strings.TrimSpace(obs.DateSource),
+			PublishedAt:             cloneTime(obs.PublishedAt),
+			PublishedDateText:       strings.TrimSpace(obs.PublishedDateText),
+			PublishedDateSource:     strings.TrimSpace(obs.PublishedDateSource),
+			PublishedDateConfidence: strings.TrimSpace(obs.PublishedDateConfidence),
+			Domain:                  domainOf(rawURL),
+			Summary:                 strings.TrimSpace(obs.Summary),
+			Tier:                    strings.TrimSpace(obs.Tier),
+			ContentPath:             contentPath,
+			ContentSHA256:           contentSHA,
+			Chars:                   uint64(len([]rune(markdown))),
+			Tool:                    strings.TrimSpace(obs.Tool),
+			Phase:                   strings.TrimSpace(obs.Phase),
+			Round:                   obs.Round,
+			ObservedAt:              now,
+		}
+		s.observationByKey[observationKey] = observation
+		s.pendingObservations[observation.ObservationID] = observation
+	}
 	s.sourceByURL[key] = entry
+	s.sourceByID[entry.ID] = entry
 	s.pendingSources[entry.ID] = entry
-	return entry, added, nil
+	s.currentObservedSources[entry.ID] = struct{}{}
+	return SourceSaveResult{
+		Entry: entry, Observation: observation, SourceCreated: added, ObservationCreated: !observed,
+	}, nil
+}
+
+func sourceContentPath(contentSHA string) string {
+	return filepath.ToSlash(filepath.Join("objects", "sha256", contentSHA[:2], contentSHA+rawExt))
+}
+
+func sourceObservationKey(turnIndex uint64, executionID, sourceID, contentSHA string) string {
+	executionID = strings.TrimSpace(executionID)
+	sourceID = strings.TrimSpace(sourceID)
+	contentSHA = strings.TrimSpace(contentSHA)
+	if turnIndex == 0 || sourceID == "" || contentSHA == "" {
+		return ""
+	}
+	return fmt.Sprintf("%d:%s:%s:%s", turnIndex, executionID, sourceID, contentSHA)
+}
+
+func sourceObservationID(turnIndex uint64, executionID, sourceID, contentSHA string) string {
+	executionID = strings.TrimSpace(executionID)
+	if executionID == "" {
+		return fmt.Sprintf("OBS-%d-%s-%s", turnIndex, strings.TrimPrefix(sourceID, "SRC-"), contentSHA[:16])
+	}
+	digest := sha256.Sum256([]byte(executionID))
+	return fmt.Sprintf("OBS-%d-%s-%s-%s", turnIndex, strings.TrimPrefix(sourceID, "SRC-"), hex.EncodeToString(digest[:])[:8], contentSHA[:16])
+}
+
+func sameExecution(turnIndex uint64, executionID string, meta TurnMeta) bool {
+	if turnIndex != meta.TurnIndex {
+		return false
+	}
+	current := strings.TrimSpace(meta.ExecutionID)
+	if current == "" {
+		return strings.TrimSpace(executionID) == ""
+	}
+	return strings.TrimSpace(executionID) == current
+}
+
+func writeImmutableContentObject(root, relativePath, content string) error {
+	fullPath := filepath.Join(root, filepath.FromSlash(relativePath))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		return fmt.Errorf("loomfs: create source object dir: %w", err)
+	}
+	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o444)
+	if err != nil {
+		if !os.IsExist(err) {
+			return fmt.Errorf("loomfs: create source object: %w", err)
+		}
+		existing, readErr := os.ReadFile(fullPath)
+		if readErr != nil {
+			return fmt.Errorf("loomfs: verify source object: %w", readErr)
+		}
+		if string(existing) != content {
+			return fmt.Errorf("loomfs: source object hash collision at %s", relativePath)
+		}
+		return nil
+	}
+	if _, err := f.WriteString(content); err != nil {
+		_ = f.Close()
+		_ = os.Remove(fullPath)
+		return fmt.Errorf("loomfs: write source object: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(fullPath)
+		return fmt.Errorf("loomfs: close source object: %w", err)
+	}
+	return nil
 }
 
 func (s *TurnSession) mergeSearchMetaLocked(key string, meta sourceSearchMeta) {
@@ -343,6 +519,7 @@ func (s *TurnSession) Finish(ctx context.Context, out TurnOutcome) error {
 			now := time.Now()
 			pt := PriorTurn{
 				TurnIndex:       s.meta.TurnIndex,
+				ExecutionID:     strings.TrimSpace(s.meta.ExecutionID),
 				ConversationID:  s.meta.ConversationID,
 				ChatModeID:      s.meta.ChatModeID,
 				Executor:        s.meta.Executor,
@@ -395,6 +572,7 @@ func (s *TurnSession) buildTurnContext(final string, finalPath string, at time.T
 	}
 	return TurnContext{
 		TurnIndex:      s.meta.TurnIndex,
+		ExecutionID:    strings.TrimSpace(s.meta.ExecutionID),
 		ConversationID: s.meta.ConversationID,
 		ChatModeID:     s.meta.ChatModeID,
 		Executor:       s.meta.Executor,
@@ -444,13 +622,13 @@ func turnFinalAnswerPath(turnIndex uint64) string {
 func (s *TurnSession) collectUnflushedEvents(includeCompletion bool, completionEvents []JournalEvent) []JournalEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	events := make([]JournalEvent, 0, len(s.pendingQueries)+len(s.pendingSources)+len(completionEvents))
+	events := make([]JournalEvent, 0, len(s.pendingQueries)+len(s.pendingSources)+len(s.pendingObservations)+len(completionEvents))
 	for i := range s.pendingQueries {
 		rec := s.pendingQueries[i]
 		if _, ok := s.flushedQueries[rec.QueryID]; ok {
 			continue
 		}
-		r := rec
+		r := cloneQueryRecord(rec)
 		events = append(events, JournalEvent{Type: eventTypeSearchObserved, Query: &r, At: time.Now()})
 		s.flushedQueries[rec.QueryID] = struct{}{}
 	}
@@ -458,15 +636,46 @@ func (s *TurnSession) collectUnflushedEvents(includeCompletion bool, completionE
 		if _, ok := s.flushedSources[src.ID]; ok {
 			continue
 		}
-		entry := src
+		entry := cloneSourceEntry(src)
 		events = append(events, JournalEvent{Type: eventTypeSourceSaved, Source: &entry, At: time.Now()})
 		s.flushedSources[src.ID] = struct{}{}
+	}
+	for _, observation := range sortedSourceObservations(s.pendingObservations) {
+		if _, ok := s.flushedObservations[observation.ObservationID]; ok {
+			continue
+		}
+		entry := cloneSourceObservation(observation)
+		events = append(events, JournalEvent{Type: eventTypeSourceObserved, Observation: &entry, At: time.Now()})
+		s.flushedObservations[observation.ObservationID] = struct{}{}
 	}
 	if includeCompletion && len(completionEvents) > 0 && !s.finishedPriorTurn {
 		events = append(events, completionEvents...)
 		s.finishedPriorTurn = true
 	}
 	return events
+}
+
+func cloneQueryRecord(rec QueryRecord) QueryRecord {
+	rec.Hits = append([]QueryHit(nil), rec.Hits...)
+	return rec
+}
+
+func cloneSourceEntry(entry SourceEntry) SourceEntry {
+	entry.FoundByQueries = append([]string(nil), entry.FoundByQueries...)
+	if entry.PublishedAt != nil {
+		publishedAt := *entry.PublishedAt
+		entry.PublishedAt = &publishedAt
+	}
+	return entry
+}
+
+func cloneSourceObservation(observation SourceContentObservation) SourceContentObservation {
+	observation.QueryIDs = append([]string(nil), observation.QueryIDs...)
+	if observation.PublishedAt != nil {
+		publishedAt := *observation.PublishedAt
+		observation.PublishedAt = &publishedAt
+	}
+	return observation
 }
 
 func finalAnswerText(items []loom.Item) string {

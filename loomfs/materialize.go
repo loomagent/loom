@@ -8,6 +8,7 @@ import (
 func materialize(events []JournalEvent, root string) ContextSnapshot {
 	queries := map[string]QueryRecord{}
 	sources := map[string]SourceEntry{}
+	observations := map[string]SourceContentObservation{}
 	priorTurns := map[uint64]PriorTurn{}
 	turnContexts := map[uint64]TurnContext{}
 
@@ -70,6 +71,13 @@ func materialize(events []JournalEvent, root string) ContextSnapshot {
 					queries[qid] = rec
 				}
 			}
+		case eventTypeSourceObserved:
+			if ev.Observation == nil || ev.Observation.ObservationID == "" || ev.Observation.SourceID == "" {
+				continue
+			}
+			observation := *ev.Observation
+			observation.QueryIDs = uniqueStrings(observation.QueryIDs)
+			observations[observation.ObservationID] = observation
 		case eventTypeTurnCompleted:
 			if ev.PriorTurn == nil || ev.PriorTurn.TurnIndex == 0 {
 				continue
@@ -94,11 +102,12 @@ func materialize(events []JournalEvent, root string) ContextSnapshot {
 	}
 
 	return ContextSnapshot{
-		PriorTurns:   sortedPriorTurns(priorTurns),
-		TurnContexts: sortedTurnContexts(turnContexts),
-		Queries:      sortedQueryRecords(queries),
-		Sources:      sortedSourceEntries(sources),
-		Stats:        SnapshotStats{RawCount: rawCount},
+		PriorTurns:         sortedPriorTurns(priorTurns),
+		TurnContexts:       sortedTurnContexts(turnContexts),
+		Queries:            sortedQueryRecords(queries),
+		Sources:            sortedSourceEntries(sources),
+		SourceObservations: sortedSourceObservations(observations),
+		Stats:              SnapshotStats{RawCount: rawCount},
 	}
 }
 

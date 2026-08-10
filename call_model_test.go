@@ -118,3 +118,67 @@ func TestCallModel_NoFailoverReturnsOriginalResponse(t *testing.T) {
 		t.Fatalf("resp = %#v", resp)
 	}
 }
+
+func TestCallModel_UsageAccumulatesAtBoundTurnAndStep(t *testing.T) {
+	sink := NewMemorySink()
+	rootModel := &fakeCallModel{name: "provider/root", responses: []*ChatResponse{{
+		Content: "root", Model: "actual/root", Usage: Usage{PromptTokens: 11, CompletionTokens: 3, CachedTokens: 4, TotalTokens: 14},
+	}}}
+	stepModel := &fakeCallModel{name: "provider/step", responses: []*ChatResponse{{
+		Content: "step", Usage: Usage{PromptTokens: 17, CompletionTokens: 5, ReasoningTokens: 2, TotalTokens: 22},
+	}}}
+	turn, err := Run(context.Background(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
+		if _, err := CallModel(ctx, "sync.root", rootModel, ChatRequest{}); err != nil {
+			return err
+		}
+		if err := w.Step(ctx, "structured", func(stepCtx context.Context, _ Step) error {
+			_, err := CallModel(stepCtx, "sync.step", stepModel, ChatRequest{})
+			return err
+		}); err != nil {
+			return err
+		}
+		return w.FinalAnswer(ctx, "done")
+	}, RunOptions{ConversationID: "conv_sync_usage", Sinks: []Sink{sink}, Input: UserMessage{Text: "x"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := turn.Usage; got.PromptTokens != 28 || got.CompletionTokens != 8 || got.CachedTokens != 4 || got.ReasoningTokens != 2 || got.TotalTokens != 36 {
+		t.Fatalf("turn usage=%+v", got)
+	}
+	if len(turn.Items) < 1 || turn.Items[0].Kind != ItemKindStep || turn.Items[0].Usage.PromptTokens != 17 || turn.Items[0].Usage.CompletionTokens != 5 {
+		t.Fatalf("step usage not attributed: %+v", turn.Items)
+	}
+	calls := sink.LLMCalls()
+	if len(calls) != 2 {
+		t.Fatalf("llm calls=%d, want 2: %+v", len(calls), calls)
+	}
+	if calls[0].Model != "actual/root" || calls[0].StepPath != "" || calls[1].Model != "provider/step" || calls[1].StepPath == "" {
+		t.Fatalf("unexpected usage attribution: %+v", calls)
+	}
+}
+
+func TestCallModel_FailoverCountsEveryPaidResponse(t *testing.T) {
+	sink := NewMemorySink()
+	primary := &fakeCallModel{name: "primary", responses: []*ChatResponse{{
+		Content: "blocked", FinishReason: FinishReasonContentFilter, Usage: Usage{PromptTokens: 7, CompletionTokens: 1, TotalTokens: 8},
+	}}}
+	fallback := &fakeCallModel{name: "fallback", responses: []*ChatResponse{{
+		Content: "ok", FinishReason: FinishReasonStop, Usage: Usage{PromptTokens: 9, CompletionTokens: 2, TotalTokens: 11},
+	}}}
+	turn, err := Run(context.Background(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
+		_, err := CallModel(ctx, "sync.failover", primary, ChatRequest{}, WithModelFailover(FailoverConfig{
+			ShouldFailover:   ShouldFailoverOnErrorOrFinishReason(FinishReasonContentFilter),
+			GetFailoverModel: func(context.Context, FailoverAttempt) (ChatModel, error) { return fallback, nil },
+		}))
+		if err != nil {
+			return err
+		}
+		return w.FinalAnswer(ctx, "done")
+	}, RunOptions{ConversationID: "conv_sync_failover", Sinks: []Sink{sink}, Input: UserMessage{Text: "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.Usage.PromptTokens != 16 || turn.Usage.CompletionTokens != 3 || turn.Usage.TotalTokens != 19 || len(sink.LLMCalls()) != 2 {
+		t.Fatalf("paid failover usage lost: turn=%+v calls=%+v", turn.Usage, sink.LLMCalls())
+	}
+}

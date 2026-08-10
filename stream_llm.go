@@ -193,7 +193,7 @@ func StreamLLMToStep(
 	// 阶段 4:emit LLMCalled — 让 sink 把 usage 累加到 step / turn 维度。
 	// 没有 usage 帧时不 emit(避免污染累计字段 + 触发空 UPDATE)。
 	// turn 根 / 任意 step 都用同一份逻辑:scope 沿 indices 累加。
-	if usage != nil && (usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0) {
+	if usage != nil && nonZeroUsage(*usage) {
 		if sa, ok := w.(scopeAccessor); ok {
 			scope := sa.underlyingScope()
 			scope.state.emitLLMCalled(ctx, scope, modelID, purpose, *usage)

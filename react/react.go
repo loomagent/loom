@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/loomagent/loom"
 )
@@ -15,6 +16,9 @@ type Config struct {
 	Model    loom.ChatModel
 	Tools    *loom.ToolRegistry
 	Messages []loom.Message
+	// SensitiveFallback retries the same model request once when the primary
+	// model reports a sensitive-content rejection.
+	SensitiveFallback *SensitiveFallbackConfig
 
 	// Reasoning is sent on every model call. Its zero value defaults to enabled.
 	Reasoning loom.Reasoning
@@ -27,6 +31,12 @@ type Config struct {
 	ToolCallLimits map[string]uint64
 	// SoftLandingPrompt is appended as a system message before the final call.
 	SoftLandingPrompt string
+	// SoftLandingReserve forces the final tool-free call when the context
+	// deadline is this close. Zero disables deadline-based soft landing.
+	SoftLandingReserve time.Duration
+	// DeadlineSoftLandingPrompt overrides SoftLandingPrompt only when the
+	// deadline reserve triggers. Empty reuses SoftLandingPrompt.
+	DeadlineSoftLandingPrompt string
 	// Purpose prefixes model call span names and errors.
 	Purpose string
 
@@ -36,6 +46,16 @@ type Config struct {
 	// TransformToolResults may compact or redact results before they are sent
 	// back to the model. The original results remain visible to policies.
 	TransformToolResults func([]loom.ToolExecResult) []loom.ToolExecResult
+}
+
+// SensitiveFallbackConfig configures a provider-neutral fallback for content
+// filtering. Configured IDs are compared exactly only to avoid retrying an
+// administrator-configured identical route; model display names are not used
+// to infer route identity.
+type SensitiveFallbackConfig struct {
+	Model           loom.ChatModel
+	PrimaryModelID  string
+	FallbackModelID string
 }
 
 // State is the observable state supplied to policies.
@@ -149,11 +169,20 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 			Messages: append([]loom.Message(nil), msgs...),
 			Tools:    availableTools(allTools, cfg, totalUses, uses),
 		}
-		if cfg.MaxSteps > 0 && step >= cfg.MaxSteps {
+		loopLimitReached := cfg.MaxSteps > 0 && step >= cfg.MaxSteps
+		deadlineNear := false
+		if deadline, ok := ctx.Deadline(); ok && cfg.SoftLandingReserve > 0 {
+			deadlineNear = time.Until(deadline) <= cfg.SoftLandingReserve
+		}
+		if loopLimitReached || deadlineNear {
 			plan.IsFinalStep = true
 			plan.Tools = nil
 			plan.ToolChoice = &loom.ToolChoice{Mode: loom.ToolChoiceNone}
-			if prompt := strings.TrimSpace(cfg.SoftLandingPrompt); prompt != "" {
+			prompt := cfg.SoftLandingPrompt
+			if deadlineNear && strings.TrimSpace(cfg.DeadlineSoftLandingPrompt) != "" {
+				prompt = cfg.DeadlineSoftLandingPrompt
+			}
+			if prompt = strings.TrimSpace(prompt); prompt != "" {
 				plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Content: prompt})
 			}
 		}
@@ -169,12 +198,14 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 		}
 		state.Messages = append([]loom.Message(nil), plan.Messages...)
 
-		response, err := loom.StreamLLMToStep(ctx, w, fmt.Sprintf("%s.step_%d", purpose, step+1), cfg.Model, loom.ChatRequest{
+		stepPurpose := fmt.Sprintf("%s.step_%d", purpose, step+1)
+		request := loom.ChatRequest{
 			Messages:   plan.Messages,
 			Tools:      plan.Tools,
 			ToolChoice: plan.ToolChoice,
 			Reasoning:  reasoning,
-		})
+		}
+		response, err := streamWithSensitiveFallback(ctx, w, stepPurpose, cfg.Model, request, cfg.SensitiveFallback)
 		if err != nil {
 			return nil, fmt.Errorf("%s: step %d model: %w", purpose, step+1, err)
 		}
@@ -250,6 +281,105 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 			}
 		}
 	}
+}
+
+func streamWithSensitiveFallback(
+	ctx context.Context,
+	w loom.Writer,
+	purpose string,
+	primary loom.ChatModel,
+	request loom.ChatRequest,
+	fallback *SensitiveFallbackConfig,
+) (*loom.ChatResponse, error) {
+	response, err := loom.StreamLLMToStep(ctx, w, purpose, primary, request)
+	if err != nil {
+		if !isSensitiveModelError(err) || fallback == nil || fallback.Model == nil {
+			return nil, err
+		}
+		if sameConfiguredModelID(fallback) {
+			if noteErr := writeFallbackNote(ctx, w, fallback, primary, purpose, sensitiveErrorClass(err), true); noteErr != nil {
+				return nil, noteErr
+			}
+			return nil, err
+		}
+		if noteErr := writeFallbackNote(ctx, w, fallback, primary, purpose, sensitiveErrorClass(err), false); noteErr != nil {
+			return nil, noteErr
+		}
+		return loom.StreamLLMToStep(ctx, w, purpose+".sensitive_fallback", fallback.Model, request)
+	}
+	if response == nil || response.FinishReason != loom.FinishReasonContentFilter || fallback == nil || fallback.Model == nil {
+		return response, nil
+	}
+	if sameConfiguredModelID(fallback) {
+		if noteErr := writeFallbackNote(ctx, w, fallback, primary, purpose, "content_filter", true); noteErr != nil {
+			return nil, noteErr
+		}
+		return response, nil
+	}
+	if noteErr := writeFallbackNote(ctx, w, fallback, primary, purpose, "content_filter", false); noteErr != nil {
+		return nil, noteErr
+	}
+	return loom.StreamLLMToStep(ctx, w, purpose+".sensitive_fallback", fallback.Model, request)
+}
+
+func isSensitiveModelError(err error) bool {
+	return errors.Is(err, loom.ErrSensitiveContentRisk) || errors.Is(err, loom.ErrContentFilter)
+}
+
+func sensitiveErrorClass(err error) string {
+	if errors.Is(err, loom.ErrSensitiveContentRisk) {
+		return "sensitive_content_risk"
+	}
+	return "content_filter"
+}
+
+func sameConfiguredModelID(config *SensitiveFallbackConfig) bool {
+	if config == nil {
+		return false
+	}
+	primaryID := strings.TrimSpace(config.PrimaryModelID)
+	fallbackID := strings.TrimSpace(config.FallbackModelID)
+	return primaryID != "" && fallbackID != "" && primaryID == fallbackID
+}
+
+func writeFallbackNote(
+	ctx context.Context,
+	w loom.Writer,
+	config *SensitiveFallbackConfig,
+	primary loom.ChatModel,
+	purpose string,
+	errorClass string,
+	skipped bool,
+) error {
+	decision := "retry"
+	message := "Primary model triggered sensitive-content filtering; retrying the same request with the configured sensitive fallback model."
+	if skipped {
+		decision = "skip_same_model_id"
+		message = "Primary model triggered sensitive-content filtering, but the configured fallback uses the same model ID; skipping an ineffective retry."
+	}
+	primaryName := ""
+	if primary != nil {
+		primaryName = primary.Name()
+	}
+	fallbackName := ""
+	if config != nil && config.Model != nil {
+		fallbackName = config.Model.Name()
+	}
+	note := fmt.Sprintf(
+		"%s decision=%s error_class=%s primary_model_id=%s fallback_model_id=%s primary_model=%s fallback_model=%s purpose=%s",
+		message,
+		decision,
+		errorClass,
+		config.PrimaryModelID,
+		config.FallbackModelID,
+		primaryName,
+		fallbackName,
+		purpose,
+	)
+	if err := w.WriteReasoning(ctx, "sensitive_fallback", note); err != nil {
+		return fmt.Errorf("react: write sensitive fallback decision: %w", err)
+	}
+	return nil
 }
 
 func snapshotState(step uint64, messages []loom.Message, tools []*loom.ToolInfo, total uint64, uses map[string]uint64) State {

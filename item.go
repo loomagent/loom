@@ -87,6 +87,9 @@ type Item struct {
 
 	// Text user_message / reasoning / final_answer / note 用。
 	Text string
+	// MessageSource / MessagePurpose are only used by persisted user messages.
+	MessageSource  MessageSource
+	MessagePurpose MessagePurpose
 	// Label 所有 Item 通用的人类可读标签(可空 — UI 渲染时自行用 Kind+Index 派生默认)。
 	// step 用作阶段标题,reasoning / tool_call / tool_result 用作子项短描述。
 	Label string

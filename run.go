@@ -100,6 +100,7 @@ func Run(ctx context.Context, h Handler, opts RunOptions) (*Turn, error) {
 	// OTel:起 Turn 根 span,handler 拿到的 ctx 已嵌入 span,Step / StreamLLMToStep /
 	// runOneTool 内部起的子 span 自然成为子节点。OTel 未 Setup 时是 noop tracer,零开销。
 	turnCtx, turnSpan := startTurnSpan(ctx, state)
+	turnCtx = withUsageScope(turnCtx, root.underlyingScope())
 
 	handlerErr := h(turnCtx, root, opts.History, opts.Input)
 

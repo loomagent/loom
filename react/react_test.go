@@ -4,14 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/loomagent/loom"
 )
 
 type scriptedModel struct {
+	name      string
 	responses []*loom.ChatResponse
+	errs      []error
 	requests  []loom.ChatRequest
 }
 
@@ -23,7 +28,12 @@ type echoNumberArguments struct {
 	N int `json:"n"`
 }
 
-func (m *scriptedModel) Name() string { return "test/model" }
+func (m *scriptedModel) Name() string {
+	if m.name != "" {
+		return m.name
+	}
+	return "test/model"
+}
 func (m *scriptedModel) Capabilities() loom.ModelCapabilities {
 	return loom.ModelCapabilities{}
 }
@@ -32,6 +42,11 @@ func (m *scriptedModel) Chat(context.Context, loom.ChatRequest) (*loom.ChatRespo
 }
 func (m *scriptedModel) Stream(_ context.Context, req loom.ChatRequest) (loom.Stream, error) {
 	m.requests = append(m.requests, req)
+	if len(m.errs) > 0 {
+		err := m.errs[0]
+		m.errs = m.errs[1:]
+		return nil, err
+	}
 	if len(m.responses) == 0 {
 		return nil, errors.New("no scripted response")
 	}
@@ -48,6 +63,93 @@ func (m *scriptedModel) Stream(_ context.Context, req loom.ChatRequest) (loom.St
 		chunk.ToolCallDeltas = append(chunk.ToolCallDeltas, loom.ToolCallDelta{Index: i, ID: call.ID, Name: call.Name, Arguments: call.Arguments})
 	}
 	return &sliceStream{chunks: []*loom.Chunk{chunk}}, nil
+}
+
+func TestRunSensitiveFallbackRetriesRejectedRequest(t *testing.T) {
+	primary := &scriptedModel{name: "primary", errs: []error{fmt.Errorf("provider rejected: %w", loom.ErrSensitiveContentRisk)}}
+	fallback := &scriptedModel{name: "fallback", responses: []*loom.ChatResponse{{Content: "safe answer", FinishReason: loom.FinishReasonStop}}}
+
+	var result *Result
+	_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+		var runErr error
+		result, runErr = Run(ctx, w, Config{
+			Model: primary,
+			Tools: loom.NewToolRegistry(),
+			SensitiveFallback: &SensitiveFallbackConfig{
+				Model: fallback, PrimaryModelID: "primary-route", FallbackModelID: "fallback-route",
+			},
+		})
+		if runErr != nil {
+			return runErr
+		}
+		return w.FinalAnswer(ctx, result.FinalContent)
+	}, loom.RunOptions{ConversationID: "sensitive-error"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalContent != "safe answer" || len(primary.requests) != 1 || len(fallback.requests) != 1 {
+		t.Fatalf("result=%+v primary calls=%d fallback calls=%d", result, len(primary.requests), len(fallback.requests))
+	}
+	if !reflect.DeepEqual(fallback.requests[0], primary.requests[0]) {
+		t.Fatalf("fallback did not retry the same request: primary=%+v fallback=%+v", primary.requests[0], fallback.requests[0])
+	}
+}
+
+func TestRunSensitiveFallbackRetriesContentFilterResponse(t *testing.T) {
+	primary := &scriptedModel{name: "primary", responses: []*loom.ChatResponse{{
+		FinishReason: loom.FinishReasonContentFilter,
+		Usage:        loom.Usage{PromptTokens: 7, CompletionTokens: 1, TotalTokens: 8},
+	}}}
+	fallback := &scriptedModel{name: "fallback", responses: []*loom.ChatResponse{{
+		Content:      "safe answer",
+		FinishReason: loom.FinishReasonStop,
+		Usage:        loom.Usage{PromptTokens: 9, CompletionTokens: 2, TotalTokens: 11},
+	}}}
+
+	turn, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+		result, runErr := Run(ctx, w, Config{
+			Model: primary,
+			Tools: loom.NewToolRegistry(),
+			SensitiveFallback: &SensitiveFallbackConfig{
+				Model: fallback, PrimaryModelID: "primary-route", FallbackModelID: "fallback-route",
+			},
+		})
+		if runErr != nil {
+			return runErr
+		}
+		return w.FinalAnswer(ctx, result.FinalContent)
+	}, loom.RunOptions{ConversationID: "content-filter"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(primary.requests) != 1 || len(fallback.requests) != 1 {
+		t.Fatalf("primary calls=%d fallback calls=%d", len(primary.requests), len(fallback.requests))
+	}
+	if turn.Usage.PromptTokens != 16 || turn.Usage.CompletionTokens != 3 || turn.Usage.TotalTokens != 19 {
+		t.Fatalf("paid fallback usage lost: %+v", turn.Usage)
+	}
+}
+
+func TestRunSensitiveFallbackSkipsSameConfiguredModelID(t *testing.T) {
+	primary := &scriptedModel{name: "primary", responses: []*loom.ChatResponse{{FinishReason: loom.FinishReasonContentFilter}}}
+	fallback := &scriptedModel{name: "fallback", responses: []*loom.ChatResponse{{Content: "must not run", FinishReason: loom.FinishReasonStop}}}
+
+	_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+		_, runErr := Run(ctx, w, Config{
+			Model: primary,
+			Tools: loom.NewToolRegistry(),
+			SensitiveFallback: &SensitiveFallbackConfig{
+				Model: fallback, PrimaryModelID: "same-route", FallbackModelID: "same-route",
+			},
+		})
+		return runErr
+	}, loom.RunOptions{ConversationID: "same-model"})
+	if !errors.Is(err, loom.ErrContentFilter) {
+		t.Fatalf("error=%v, want ErrContentFilter", err)
+	}
+	if len(fallback.requests) != 0 {
+		t.Fatalf("fallback calls=%d, want 0", len(fallback.requests))
+	}
 }
 
 type sliceStream struct {
@@ -118,6 +220,39 @@ func TestRunSoftLandingDisablesTools(t *testing.T) {
 	}
 	if len(model.requests) != 2 || len(model.requests[1].Tools) != 0 || model.requests[1].ToolChoice == nil || model.requests[1].ToolChoice.Mode != loom.ToolChoiceNone {
 		t.Fatalf("final request = %+v", model.requests[1])
+	}
+}
+
+func TestRunSoftLandsBeforeDeadlineReserve(t *testing.T) {
+	model := &scriptedModel{responses: []*loom.ChatResponse{{Content: "landed", FinishReason: loom.FinishReasonStop}}}
+	tools := loom.NewToolRegistry(loom.NewTool(loom.MustToolContract[loom.NoArguments]("echo"), "echo", func(context.Context, loom.NoArguments) (string, error) { return "ok", nil }))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	var result *Result
+	_, err := loom.Run(ctx, func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+		var runErr error
+		result, runErr = Run(ctx, w, Config{
+			Model:                     model,
+			Tools:                     tools,
+			SoftLandingReserve:        2 * time.Minute,
+			SoftLandingPrompt:         "loop limit",
+			DeadlineSoftLandingPrompt: "deadline near",
+		})
+		if runErr != nil {
+			return runErr
+		}
+		return w.FinalAnswer(ctx, result.FinalContent)
+	}, loom.RunOptions{ConversationID: "deadline-reserve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.SoftLanded || len(model.requests) != 1 || len(model.requests[0].Tools) != 0 {
+		t.Fatalf("result=%+v request=%+v", result, model.requests)
+	}
+	messages := model.requests[0].Messages
+	if len(messages) != 1 || messages[0].Content != "deadline near" {
+		t.Fatalf("deadline prompt=%+v", messages)
 	}
 }
 

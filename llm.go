@@ -23,6 +23,12 @@ const (
 type Message struct {
 	Role Role
 
+	// source/purpose are runtime-local provenance and are never serialized to a
+	// model provider. They distinguish terminal tasks from framework-generated
+	// role=user status and retry messages without inspecting content.
+	source  MessageSource
+	purpose MessagePurpose
+
 	// Content 主体内容。
 	// 对 reasoning 模型的 assistant 消息,这是去掉 reasoning 后的最终答案文本。
 	// role=assistant 且仅触发 tool_calls 没有文本输出时可为空。

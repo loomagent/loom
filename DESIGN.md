@@ -767,7 +767,7 @@ pkg/loom/
   call_model.go             CallModel / per-call failover / sync chat tracing
   structured_output.go      ChatStructured / auto JSON Schema / output retry
   tool.go                   Tool / ToolInfo / ToolCall / ToolCallDelta / ToolRegistry
-  errors.go                 ErrUnsupported + sentinel(将来加)
+  errors.go                 provider-neutral sentinel errors
 
   providers/
     deepseek/               ✅
