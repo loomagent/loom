@@ -327,6 +327,17 @@ func applyValidationTags(schema *jsonschema.Schema, typ reflect.Type) error {
 		if schema.AdditionalProperties != nil {
 			return applyValidationTags(schema.AdditionalProperties, typ.Elem())
 		}
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Uintptr, reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// Only composite kinds carry nested fields to walk into; a scalar's own
+		// validate tag was already projected by its parent struct.
+	default:
+		// Unreachable: every reflect.Kind is listed above.
 	}
 	return nil
 }
@@ -410,10 +421,26 @@ func jsonEmptyValue(typ reflect.Type) (any, bool) {
 		return []any{}, true
 	case reflect.Map:
 		return map[string]any{}, true
+	case reflect.Struct, reflect.Interface, reflect.Invalid, reflect.Pointer,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer,
+		reflect.Complex64, reflect.Complex128:
+		// A struct has no single empty JSON form worth testing, and the rest
+		// never appear in a JSON-serializable argument type.
+		return nil, false
 	default:
-		// Structs and interfaces have no single empty JSON form worth testing.
+		// Unreachable: every reflect.Kind is listed above.
 		return nil, false
 	}
+}
+
+// parseJSONExampleValue reads an example written as a JSON literal, used for
+// kinds with no scalar textual form.
+func parseJSONExampleValue(typ reflect.Type, raw string) (any, error) {
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return nil, fmt.Errorf("must be valid JSON for %s: %w", typ, err)
+	}
+	return value, nil
 }
 
 func parseExampleValue(typ reflect.Type, raw string) (any, error) {
@@ -431,12 +458,16 @@ func parseExampleValue(typ reflect.Type, raw string) (any, error) {
 		return strconv.ParseUint(raw, 10, typ.Bits())
 	case reflect.Float32, reflect.Float64:
 		return strconv.ParseFloat(raw, typ.Bits())
+	case reflect.Slice, reflect.Array, reflect.Map, reflect.Struct,
+		reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer,
+		reflect.Complex64, reflect.Complex128:
+		// Composite and unsupported kinds are read as raw JSON: an example for
+		// them is written as a JSON literal in the struct tag.
+		return parseJSONExampleValue(typ, raw)
 	default:
-		var value any
-		if err := json.Unmarshal([]byte(raw), &value); err != nil {
-			return nil, fmt.Errorf("must be valid JSON for %s: %w", typ, err)
-		}
-		return value, nil
+		// Unreachable: every reflect.Kind is listed above.
+		return parseJSONExampleValue(typ, raw)
 	}
 }
 
@@ -698,7 +729,16 @@ func validatorOneOfKind(kind reflect.Kind) bool {
 		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return true
+	case reflect.Bool, reflect.Uintptr, reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Array, reflect.Slice, reflect.Map, reflect.Struct,
+		reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// oneof enumerates scalar values; a float cannot be compared exactly
+		// and the composite kinds have no enumerable form.
+		return false
 	default:
+		// Unreachable: every reflect.Kind is listed above.
 		return false
 	}
 }
@@ -728,7 +768,17 @@ func applyDiveValidationRules(schema *jsonschema.Schema, typ reflect.Type, rules
 			return fmt.Errorf("dive requires a map value schema")
 		}
 		return applyValidationRuleList(schema.AdditionalProperties, typ.Elem(), rules)
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Uintptr, reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Struct, reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// dive descends into elements, which only arrays, slices and maps have.
+		return fmt.Errorf("dive is not valid for %s fields", typ.Kind())
 	default:
+		// Unreachable: every reflect.Kind is listed above.
 		return fmt.Errorf("dive is not valid for %s fields", typ.Kind())
 	}
 }
@@ -765,6 +815,13 @@ func applyRequiredValueRule(schema *jsonschema.Schema, kind reflect.Kind) {
 	case reflect.Bool:
 		value := any(true)
 		schema.Const = &value
+	case reflect.Struct, reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer,
+		reflect.Complex64, reflect.Complex128:
+		// No "non-zero" form to project: a struct or interface has no single
+		// empty value, and the rest never reach a JSON argument schema.
+	default:
+		// Unreachable: every reflect.Kind is listed above.
 	}
 }
 
@@ -833,7 +890,14 @@ func applyComparisonRule(schema *jsonschema.Schema, kind reflect.Kind, rule, raw
 		case "lte":
 			setLengthRule(schema, kind, "max", value)
 		}
+	case reflect.Bool, reflect.Complex64, reflect.Complex128,
+		reflect.Struct, reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// A bound needs either a length or a numeric value; these kinds have
+		// neither, so the rule cannot apply to them.
+		return fmt.Errorf("%s is not valid for %s fields", rule, kind)
 	default:
+		// Unreachable: every reflect.Kind is listed above.
 		return fmt.Errorf("%s is not valid for %s fields", rule, kind)
 	}
 	return nil
@@ -945,7 +1009,14 @@ func applySizeRule(schema *jsonschema.Schema, kind reflect.Kind, rule, raw strin
 			return nil
 		}
 		setLengthRule(schema, kind, rule, value)
+	case reflect.Bool, reflect.Complex64, reflect.Complex128,
+		reflect.Struct, reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// A bound needs either a length or a numeric value; these kinds have
+		// neither, so the rule cannot apply to them.
+		return fmt.Errorf("%s is not valid for %s fields", rule, kind)
 	default:
+		// Unreachable: every reflect.Kind is listed above.
 		return fmt.Errorf("%s is not valid for %s fields", rule, kind)
 	}
 	return nil
@@ -973,6 +1044,17 @@ func setLengthRule(schema *jsonschema.Schema, kind reflect.Kind, rule string, va
 		set(&schema.MinItems, &schema.MaxItems)
 	case reflect.Map:
 		set(&schema.MinProperties, &schema.MaxProperties)
+	case reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Uintptr, reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Invalid, reflect.Chan, reflect.Func, reflect.Interface,
+		reflect.Pointer, reflect.Struct, reflect.UnsafePointer:
+		// Length bounds only apply to strings and containers; numeric bounds
+		// are handled by the caller as minimum/maximum instead.
+	default:
+		// Unreachable: every reflect.Kind is listed above.
 	}
 }
 
@@ -988,7 +1070,15 @@ func parseEnumValue(kind reflect.Kind, raw string) (any, error) {
 		return strconv.ParseUint(raw, 10, 64)
 	case reflect.Float32, reflect.Float64:
 		return strconv.ParseFloat(raw, 64)
+	case reflect.Complex64, reflect.Complex128,
+		reflect.Array, reflect.Slice, reflect.Map, reflect.Struct,
+		reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// oneof enumerates scalar values; these kinds have no literal form to
+		// enumerate.
+		return nil, fmt.Errorf("oneof is not valid for %s fields", kind)
 	default:
+		// Unreachable: every reflect.Kind is listed above.
 		return nil, fmt.Errorf("oneof is not valid for %s fields", kind)
 	}
 }

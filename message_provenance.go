@@ -58,7 +58,13 @@ func (m Message) IsExternalUserMessage() bool {
 	switch m.source {
 	case MessageSourceTerminalUser, MessageSourceScheduledTask, MessageSourceReport:
 		return true
+	case MessageSourceUnknown, MessageSourceFramework:
+		// Unknown covers legacy rows with no recorded provenance, which are
+		// deliberately not trusted as terminal input; framework messages are
+		// generated server-side and are never external by definition.
+		return false
 	default:
+		// Unreachable: every MessageSource is listed above.
 		return false
 	}
 }

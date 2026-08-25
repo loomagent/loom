@@ -226,7 +226,13 @@ func jsonTypeNameForGoType(typ reflect.Type) string {
 		return "an array"
 	case reflect.Map, reflect.Struct:
 		return "an object"
+	case reflect.Invalid, reflect.Complex64, reflect.Complex128, reflect.Chan,
+		reflect.Func, reflect.Interface, reflect.Pointer, reflect.UnsafePointer:
+		// No JSON type describes these; the pointer and interface cases are
+		// unwrapped above, and the rest cannot appear in a decodable argument.
+		return "a JSON value"
 	default:
+		// Unreachable: every reflect.Kind is listed above.
 		return "a JSON value"
 	}
 }
@@ -327,24 +333,45 @@ func explainValidatorError(err error) []ToolArgumentIssue {
 	return issues
 }
 
-func comparisonMessage(kind reflect.Kind, comparison, param string) string {
+// kindPhrasing picks how a bound reads for a given kind: strings are measured
+// in characters, containers in items, and everything else is compared as a
+// plain value. Every reflect.Kind is accounted for here so the five message
+// helpers below stay one line each.
+func kindPhrasing(kind reflect.Kind, characters, items, value string) string {
 	switch kind {
 	case reflect.String:
-		return " must contain a number of characters " + comparison + " " + param
+		return characters
 	case reflect.Array, reflect.Slice, reflect.Map:
-		return " must contain a number of items " + comparison + " " + param
+		return items
+	case reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Uintptr, reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Invalid, reflect.Chan, reflect.Func, reflect.Interface,
+		reflect.Pointer, reflect.Struct, reflect.UnsafePointer:
+		return value
 	default:
-		return " must be " + comparison + " " + param
+		// Unreachable: every reflect.Kind is listed above.
+		return value
 	}
 }
 
+func comparisonMessage(kind reflect.Kind, comparison, param string) string {
+	return kindPhrasing(kind,
+		" must contain a number of characters "+comparison+" "+param,
+		" must contain a number of items "+comparison+" "+param,
+		" must be "+comparison+" "+param)
+}
+
 func equalityMessage(kind reflect.Kind, comparison, param string) string {
-	switch kind {
-	case reflect.Array, reflect.Slice, reflect.Map:
-		return " must contain a number of items " + comparison + " to " + param
-	default:
-		return " must be " + comparison + " to " + strconv.Quote(param)
-	}
+	// A string is compared as a value here, not by length, so it shares the
+	// value wording — quoted, since the parameter is literal text.
+	value := " must be " + comparison + " to " + strconv.Quote(param)
+	return kindPhrasing(kind,
+		value,
+		" must contain a number of items "+comparison+" to "+param,
+		value)
 }
 
 func validatorFieldPath(fieldError validator.FieldError) string {
@@ -359,36 +386,24 @@ func validatorFieldPath(fieldError validator.FieldError) string {
 }
 
 func minimumMessage(kind reflect.Kind, param string) string {
-	switch kind {
-	case reflect.String:
-		return " must contain at least " + param + " characters"
-	case reflect.Array, reflect.Slice, reflect.Map:
-		return " must contain at least " + param + " items"
-	default:
-		return " must be at least " + param
-	}
+	return kindPhrasing(kind,
+		" must contain at least "+param+" characters",
+		" must contain at least "+param+" items",
+		" must be at least "+param)
 }
 
 func maximumMessage(kind reflect.Kind, param string) string {
-	switch kind {
-	case reflect.String:
-		return " must contain at most " + param + " characters"
-	case reflect.Array, reflect.Slice, reflect.Map:
-		return " must contain at most " + param + " items"
-	default:
-		return " must be at most " + param
-	}
+	return kindPhrasing(kind,
+		" must contain at most "+param+" characters",
+		" must contain at most "+param+" items",
+		" must be at most "+param)
 }
 
 func lengthMessage(kind reflect.Kind, param string) string {
-	switch kind {
-	case reflect.String:
-		return " must contain exactly " + param + " characters"
-	case reflect.Array, reflect.Slice, reflect.Map:
-		return " must contain exactly " + param + " items"
-	default:
-		return " must equal " + param
-	}
+	return kindPhrasing(kind,
+		" must contain exactly "+param+" characters",
+		" must contain exactly "+param+" items",
+		" must equal "+param)
 }
 
 func explainSchemaError(schema *jsonschema.Schema, instance any, err error) []ToolArgumentIssue {
