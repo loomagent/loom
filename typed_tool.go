@@ -2,6 +2,7 @@ package loom
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -27,18 +28,28 @@ type ToolContract[T any] struct {
 }
 
 type toolContractConfig struct {
-	schema *jsonschema.Schema
+	schema     *jsonschema.Schema
+	configured bool
 }
 
 // ToolContractOption configures a ToolContract before its schema is compiled.
 type ToolContractOption func(*toolContractConfig) error
 
-// WithArgumentSchema replaces the struct-derived schema. The schema is cloned
-// before use and must still describe T.
+// WithArgumentSchema replaces the struct-derived schema wholesale. The schema is
+// cloned before use and must still describe T.
+//
+// Replacing means exactly that: every constraint derived from T's validate tags
+// is discarded along with anything earlier options configured, so this must come
+// before other schema options — passing it later is rejected rather than
+// silently undoing them. Prefer ConfigureArgumentSchema when the goal is to
+// adjust the derived schema rather than supply a different one.
 func WithArgumentSchema(schema *jsonschema.Schema) ToolContractOption {
 	return func(config *toolContractConfig) error {
 		if schema == nil {
 			return fmt.Errorf("argument schema is nil")
+		}
+		if config.configured {
+			return fmt.Errorf("WithArgumentSchema replaces the whole schema and must come before other schema options")
 		}
 		config.schema = schema.CloneSchemas()
 		return nil
@@ -52,6 +63,7 @@ func ConfigureArgumentSchema(configure func(*jsonschema.Schema) error) ToolContr
 		if configure == nil {
 			return nil
 		}
+		config.configured = true
 		return configure(config.schema)
 	}
 }
@@ -81,6 +93,7 @@ func configureArgumentProperty(name string, configure func(*jsonschema.Schema)) 
 		if property == nil {
 			return fmt.Errorf("argument property %q does not exist", name)
 		}
+		config.configured = true
 		configure(property)
 		return nil
 	}
@@ -135,7 +148,33 @@ func MustToolContract[T any](toolName string, options ...ToolContractOption) *To
 func (c *ToolContract[T]) Name() string { return c.name }
 
 // Schema returns an independent copy of the model-facing argument schema.
-func (c *ToolContract[T]) Schema() *jsonschema.Schema { return c.schema.CloneSchemas() }
+// Callers may mutate the result freely: it shares no state with the schema the
+// contract validates against.
+func (c *ToolContract[T]) Schema() *jsonschema.Schema { return cloneSchema(c.schema) }
+
+// cloneSchema deep-copies a schema.
+//
+// jsonschema.Schema.CloneSchemas only clones nested *Schema values; slices and
+// pointers holding plain values — Required, Enum, Examples, Minimum, MaxLength
+// and friends — stay shared with the original. That is not enough here: a
+// contract hands its schema to callers that may normalize it in place, and any
+// such write would reach straight into the schema Decode validates against,
+// racing with concurrent calls. Marshalling through JSON is exact for a JSON
+// Schema and leaves nothing aliased.
+func cloneSchema(schema *jsonschema.Schema) *jsonschema.Schema {
+	if schema == nil {
+		return nil
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return schema.CloneSchemas()
+	}
+	var clone jsonschema.Schema
+	if err := json.Unmarshal(data, &clone); err != nil {
+		return schema.CloneSchemas()
+	}
+	return &clone
+}
 
 // Decode parses and validates one tool call using the precompiled contract.
 func (c *ToolContract[T]) Decode(argumentsJSON string) (T, error) {

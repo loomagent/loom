@@ -6,6 +6,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/google/jsonschema-go/jsonschema"
 )
 
 type typedToolRequest struct {
@@ -197,4 +200,141 @@ func BenchmarkToolArgumentDecode(b *testing.B) {
 			}
 		}
 	})
+}
+
+// A schema the framework cannot exemplify on its own must still yield a usable
+// contract: a required map has no valid empty instance, but the tool works.
+func TestToolContractBuildsWhenExampleCannotBeAssembled(t *testing.T) {
+	type requiredMap struct {
+		Labels map[string]string `json:"labels" validate:"required"`
+	}
+	contract, err := NewToolContract[requiredMap]("required_map")
+	if err != nil {
+		t.Fatalf("NewToolContract: %v", err)
+	}
+	if _, err := contract.Decode(`{"labels":{"a":"b"}}`); err != nil {
+		t.Fatalf("Decode(valid) = %v", err)
+	}
+	if _, err := contract.Decode(`{}`); err == nil {
+		t.Fatal("Decode({}) must still reject a missing required field")
+	}
+}
+
+// A validator bound with no JSON Schema equivalent must be left to the
+// validator instead of failing contract construction.
+func TestToolContractAcceptsNonNumericValidatorBound(t *testing.T) {
+	type durationArgs struct {
+		Timeout time.Duration `json:"timeout" validate:"min=1s,max=1h"`
+	}
+	if _, err := NewToolContract[durationArgs]("duration_tool"); err != nil {
+		t.Fatalf("NewToolContract: %v", err)
+	}
+}
+
+// An int64 bound float64 cannot hold exactly must not be projected as a
+// rounded — and unsatisfiable — JSON Schema bound.
+func TestToolContractSkipsInexactIntegerBound(t *testing.T) {
+	type bigArgs struct {
+		Big int64 `json:"big,omitempty" validate:"omitempty,min=9223372036854775806"`
+	}
+	contract, err := NewToolContract[bigArgs]("big_tool")
+	if err != nil {
+		t.Fatalf("NewToolContract: %v", err)
+	}
+	if _, err := contract.Decode(`{"big":9223372036854775806}`); err != nil {
+		t.Fatalf("Decode(valid int64 bound) = %v", err)
+	}
+}
+
+// Schema() must hand back a fully independent copy: mutating it — including
+// plain slices and pointer bounds that CloneSchemas leaves shared — must not
+// reach the schema the contract validates against.
+func TestToolContractSchemaIsFullyIndependent(t *testing.T) {
+	type simple struct {
+		Query string `json:"query" validate:"required"`
+	}
+	contract := MustToolContract[simple]("mytool")
+
+	first, second := contract.Schema(), contract.Schema()
+	if len(first.Required) == 0 {
+		t.Fatal("expected a required field to mutate")
+	}
+	if &first.Required[0] == &second.Required[0] {
+		t.Fatal("two Schema() copies share the Required backing array")
+	}
+
+	first.Required[0] = "HACKED"
+	if _, err := contract.Decode(`{"query":"x"}`); err != nil {
+		t.Fatalf("mutating a returned schema changed contract validation: %v", err)
+	}
+}
+
+// WithArgumentSchema discards everything configured before it, so ordering it
+// after another schema option is a mistake worth catching rather than silently
+// undoing that option.
+func TestWithArgumentSchemaRejectsLateOrdering(t *testing.T) {
+	type simple struct {
+		Query string `json:"query" validate:"required"`
+	}
+	_, err := NewToolContract[simple]("late_schema",
+		WithArgumentDescription("query", "described"),
+		WithArgumentSchema(&jsonschema.Schema{Type: "object"}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "must come before") {
+		t.Fatalf("late WithArgumentSchema error = %v", err)
+	}
+
+	// Leading it is still fine.
+	if _, err := NewToolContract[simple]("early_schema",
+		WithArgumentSchema(&jsonschema.Schema{Type: "object"}),
+	); err != nil {
+		t.Fatalf("leading WithArgumentSchema = %v", err)
+	}
+}
+
+// A len rule must not leave the two bounds sharing one int: adjusting the
+// maximum later would drag the minimum with it.
+func TestLenRuleBoundsAreNotAliased(t *testing.T) {
+	type fixed struct {
+		Code string `json:"code" validate:"len=4"`
+	}
+	schema, err := SchemaFor[fixed]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := schema.Properties["code"]
+	if code.MinLength == nil || code.MaxLength == nil {
+		t.Fatalf("len did not set both bounds: %#v", code)
+	}
+	if code.MinLength == code.MaxLength {
+		t.Fatal("minLength and maxLength share one pointer")
+	}
+	*code.MaxLength = 20
+	if *code.MinLength != 4 {
+		t.Fatalf("minLength moved to %d when maxLength was changed", *code.MinLength)
+	}
+}
+
+// An or-rule with an unprojectable alternative must not emit an anyOf that
+// matches everything while looking like a constraint.
+func TestOrRuleWithUnprojectableAlternativeIsNotEmitted(t *testing.T) {
+	type orArgs struct {
+		P string `json:"p" validate:"required,url|startswith=/"`
+	}
+	schema, err := SchemaFor[orArgs]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, branch := range schema.Properties["p"].AllOf {
+		if branch.AnyOf != nil {
+			t.Fatalf("emitted a vacuous anyOf: %#v", branch.AnyOf)
+		}
+	}
+	// The validator still enforces it.
+	if _, err := DecodeToolArguments[orArgs](`{"p":"???"}`); err == nil {
+		t.Error("validator must still reject a value matching neither alternative")
+	}
+	if _, err := DecodeToolArguments[orArgs](`{"p":"/ok"}`); err != nil {
+		t.Errorf("a value matching an alternative must be accepted: %v", err)
+	}
 }
