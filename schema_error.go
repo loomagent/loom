@@ -28,6 +28,13 @@ const (
 	maxToolArgumentMessageRunes = 512
 	maxExpectedArgumentRunes    = 4096
 	maxExampleArgumentRunes     = 4096
+	// Issues carries structured diagnostics, and both its length and the text
+	// inside it are shaped by model-supplied field names. Error() bounds what it
+	// renders, but consumers that walk Issues themselves need the stored values
+	// bounded too — otherwise a single absurd key can be fed straight back to a
+	// model.
+	maxToolArgumentIssues     = 64
+	maxToolArgumentFieldRunes = 256
 )
 
 // ToolArgumentIssue is one model-facing validation problem.
@@ -56,16 +63,20 @@ func (e *ToolArgumentError) Error() string {
 	if e.Tool != "" {
 		prefix = fmt.Sprintf("invalid arguments for tool %q", e.Tool)
 	}
-	messages := make([]string, 0, min(len(e.Issues), maxToolArgumentMessages)+1)
-	for _, issue := range e.Issues {
-		if issue.Message != "" {
-			messages = append(messages, truncateDiagnostic(issue.Message, maxToolArgumentMessageRunes))
-			if len(messages) == maxToolArgumentMessages {
-				break
-			}
+	rendered := summarizeUnknownFieldIssues(e.Issues)
+	messages := make([]string, 0, min(len(rendered), maxToolArgumentMessages)+1)
+	rendering := 0
+	for _, issue := range rendered {
+		if issue.Message == "" {
+			continue
 		}
+		rendering++
+		if len(messages) == maxToolArgumentMessages {
+			continue
+		}
+		messages = append(messages, truncateDiagnostic(issue.Message, maxToolArgumentMessageRunes))
 	}
-	if remaining := len(e.Issues) - len(messages); remaining > 0 {
+	if remaining := rendering - len(messages); remaining > 0 {
 		messages = append(messages, fmt.Sprintf("and %d more validation issues", remaining))
 	}
 	if len(messages) == 0 {
@@ -83,6 +94,55 @@ func (e *ToolArgumentError) Error() string {
 		}
 	}
 	return message
+}
+
+// summarizeUnknownFieldIssues collapses stray-field issues into one line for
+// rendering. A model that guessed a dozen field names would otherwise spend the
+// whole message budget being told about each one, and listing them together
+// reads better than repeating the same sentence.
+//
+// The structured Issues slice keeps them separate; only the rendered text is
+// condensed.
+func summarizeUnknownFieldIssues(issues []ToolArgumentIssue) []ToolArgumentIssue {
+	unknown := 0
+	for _, issue := range issues {
+		if issue.Rule == "unknown" {
+			unknown++
+		}
+	}
+	if unknown < 2 {
+		return issues
+	}
+	out := make([]ToolArgumentIssue, 0, len(issues)-unknown+1)
+	names := make([]string, 0, unknown)
+	for _, issue := range issues {
+		if issue.Rule != "unknown" {
+			out = append(out, issue)
+			continue
+		}
+		if issue.Field != "" {
+			names = append(names, strconv.Quote(issue.Field))
+		}
+	}
+	message := fmt.Sprintf("%d fields are not accepted", unknown)
+	if len(names) > 0 {
+		message = "these fields are not accepted: " + strings.Join(names, ", ")
+	}
+	return append(out, ToolArgumentIssue{Rule: "unknown", Message: message})
+}
+
+// clampIssues bounds diagnostics built from model-supplied input, so neither
+// the number of issues nor the text inside any one of them can grow without
+// limit before a consumer reads them.
+func clampIssues(issues []ToolArgumentIssue) []ToolArgumentIssue {
+	if len(issues) > maxToolArgumentIssues {
+		issues = issues[:maxToolArgumentIssues]
+	}
+	for index := range issues {
+		issues[index].Field = truncateDiagnostic(issues[index].Field, maxToolArgumentFieldRunes)
+		issues[index].Message = truncateDiagnostic(issues[index].Message, maxToolArgumentMessageRunes)
+	}
+	return issues
 }
 
 func truncateDiagnostic(value string, maximum int) string {
@@ -115,11 +175,73 @@ func newJSONToolArgumentError(tool string, guidance argumentGuidance, err error)
 	}
 }
 
+// newTypeMismatchToolArgumentError reports a value whose JSON type does not fit
+// the argument field it decodes into. The document itself parsed cleanly, so
+// calling it malformed would send the model hunting for a syntax error that is
+// not there. Only the JSON field path is reported — the Go struct name that
+// json.UnmarshalTypeError renders in its own message is deliberately dropped,
+// since it means nothing to a model and leaks server internals.
+func newTypeMismatchToolArgumentError(tool string, guidance argumentGuidance, typeError *json.UnmarshalTypeError) error {
+	label := "arguments"
+	if typeError.Field != "" {
+		label = quoteField(typeError.Field)
+	}
+	message := label + " must be " + jsonTypeNameForGoType(typeError.Type)
+	if typeError.Value != "" {
+		message += ", but got " + typeError.Value
+	}
+	return &ToolArgumentError{
+		Tool:              tool,
+		Kind:              ToolArgumentErrorSchema,
+		Issues:            clampIssues([]ToolArgumentIssue{{Field: typeError.Field, Rule: "type", Message: message}}),
+		ExpectedArguments: guidance.expected,
+		ExampleArguments:  guidance.example,
+		Err:               typeError,
+	}
+}
+
+// jsonTypeNameForGoType names the JSON type a Go type accepts, so diagnostics
+// speak the model's vocabulary rather than Go's.
+func jsonTypeNameForGoType(typ reflect.Type) string {
+	for typ != nil && (typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Interface) {
+		if typ.Kind() == reflect.Interface {
+			return "a JSON value"
+		}
+		typ = typ.Elem()
+	}
+	if typ == nil {
+		return "a JSON value"
+	}
+	switch typ.Kind() {
+	case reflect.Bool:
+		return "a boolean"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return "an integer"
+	case reflect.Float32, reflect.Float64:
+		return "a number"
+	case reflect.String:
+		return "a string"
+	case reflect.Slice, reflect.Array:
+		return "an array"
+	case reflect.Map, reflect.Struct:
+		return "an object"
+	case reflect.Invalid, reflect.Complex64, reflect.Complex128, reflect.Chan,
+		reflect.Func, reflect.Interface, reflect.Pointer, reflect.UnsafePointer:
+		// No JSON type describes these; the pointer and interface cases are
+		// unwrapped above, and the rest cannot appear in a decodable argument.
+		return "a JSON value"
+	default:
+		// Unreachable: every reflect.Kind is listed above.
+		return "a JSON value"
+	}
+}
+
 func newSchemaToolArgumentError(tool string, schema *jsonschema.Schema, guidance argumentGuidance, instance any, err error) error {
 	return &ToolArgumentError{
 		Tool:              tool,
 		Kind:              ToolArgumentErrorSchema,
-		Issues:            explainSchemaError(schema, instance, err),
+		Issues:            clampIssues(explainSchemaError(schema, instance, err)),
 		ExpectedArguments: guidance.expected,
 		ExampleArguments:  guidance.example,
 		Err:               err,
@@ -130,7 +252,7 @@ func newStructToolArgumentError(tool string, guidance argumentGuidance, err erro
 	return &ToolArgumentError{
 		Tool:              tool,
 		Kind:              ToolArgumentErrorStruct,
-		Issues:            explainValidatorError(err),
+		Issues:            clampIssues(explainValidatorError(err)),
 		ExpectedArguments: guidance.expected,
 		ExampleArguments:  guidance.example,
 		Err:               err,
@@ -184,11 +306,23 @@ func explainValidatorError(err error) []ToolArgumentIssue {
 			message = label + " must contain unique items"
 		case "notblank":
 			message = label + " must not be blank"
-		case "url", "http_url", "https_url", "email", "uri", "hostname", "ipv4", "ipv6", "uuid", "uuid3", "uuid4", "uuid5", "datetime":
+		case "datetime":
+			// Naming the layout is the whole point: without it the model cannot
+			// tell "2026-08-25" from "2026-08-25T10:00:00Z" and has nothing to
+			// correct towards.
+			if param != "" {
+				message = label + " must be a datetime in layout " + strconv.Quote(param)
+			} else {
+				message = label + " must be a valid datetime"
+			}
+		case "url", "http_url", "https_url", "email", "uri", "hostname", "ipv4", "ipv6", "uuid", "uuid3", "uuid4", "uuid5":
 			message = label + " must be a valid " + strings.ReplaceAll(rule, "_", " ")
 		default:
 			constraint := rule
-			if param != "" {
+			// For an or-rule the tag already reads "url|startswith=/" and Param
+			// returns the winning alternative's argument; appending it again
+			// would render "url|startswith=/=/".
+			if param != "" && !strings.Contains(rule, "|") {
 				constraint += "=" + param
 			}
 			message = label + " must satisfy " + strconv.Quote(constraint)
@@ -199,24 +333,45 @@ func explainValidatorError(err error) []ToolArgumentIssue {
 	return issues
 }
 
-func comparisonMessage(kind reflect.Kind, comparison, param string) string {
+// kindPhrasing picks how a bound reads for a given kind: strings are measured
+// in characters, containers in items, and everything else is compared as a
+// plain value. Every reflect.Kind is accounted for here so the five message
+// helpers below stay one line each.
+func kindPhrasing(kind reflect.Kind, characters, items, value string) string {
 	switch kind {
 	case reflect.String:
-		return " must contain a number of characters " + comparison + " " + param
+		return characters
 	case reflect.Array, reflect.Slice, reflect.Map:
-		return " must contain a number of items " + comparison + " " + param
+		return items
+	case reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Uintptr, reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Invalid, reflect.Chan, reflect.Func, reflect.Interface,
+		reflect.Pointer, reflect.Struct, reflect.UnsafePointer:
+		return value
 	default:
-		return " must be " + comparison + " " + param
+		// Unreachable: every reflect.Kind is listed above.
+		return value
 	}
 }
 
+func comparisonMessage(kind reflect.Kind, comparison, param string) string {
+	return kindPhrasing(kind,
+		" must contain a number of characters "+comparison+" "+param,
+		" must contain a number of items "+comparison+" "+param,
+		" must be "+comparison+" "+param)
+}
+
 func equalityMessage(kind reflect.Kind, comparison, param string) string {
-	switch kind {
-	case reflect.Array, reflect.Slice, reflect.Map:
-		return " must contain a number of items " + comparison + " to " + param
-	default:
-		return " must be " + comparison + " to " + strconv.Quote(param)
-	}
+	// A string is compared as a value here, not by length, so it shares the
+	// value wording — quoted, since the parameter is literal text.
+	value := " must be " + comparison + " to " + strconv.Quote(param)
+	return kindPhrasing(kind,
+		value,
+		" must contain a number of items "+comparison+" to "+param,
+		value)
 }
 
 func validatorFieldPath(fieldError validator.FieldError) string {
@@ -231,36 +386,24 @@ func validatorFieldPath(fieldError validator.FieldError) string {
 }
 
 func minimumMessage(kind reflect.Kind, param string) string {
-	switch kind {
-	case reflect.String:
-		return " must contain at least " + param + " characters"
-	case reflect.Array, reflect.Slice, reflect.Map:
-		return " must contain at least " + param + " items"
-	default:
-		return " must be at least " + param
-	}
+	return kindPhrasing(kind,
+		" must contain at least "+param+" characters",
+		" must contain at least "+param+" items",
+		" must be at least "+param)
 }
 
 func maximumMessage(kind reflect.Kind, param string) string {
-	switch kind {
-	case reflect.String:
-		return " must contain at most " + param + " characters"
-	case reflect.Array, reflect.Slice, reflect.Map:
-		return " must contain at most " + param + " items"
-	default:
-		return " must be at most " + param
-	}
+	return kindPhrasing(kind,
+		" must contain at most "+param+" characters",
+		" must contain at most "+param+" items",
+		" must be at most "+param)
 }
 
 func lengthMessage(kind reflect.Kind, param string) string {
-	switch kind {
-	case reflect.String:
-		return " must contain exactly " + param + " characters"
-	case reflect.Array, reflect.Slice, reflect.Map:
-		return " must contain exactly " + param + " items"
-	default:
-		return " must equal " + param
-	}
+	return kindPhrasing(kind,
+		" must contain exactly "+param+" characters",
+		" must contain exactly "+param+" items",
+		" must equal "+param)
 }
 
 func explainSchemaError(schema *jsonschema.Schema, instance any, err error) []ToolArgumentIssue {
@@ -497,18 +640,18 @@ func diagnoseArraySchema(schema *jsonschema.Schema, value []any, field string) [
 		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "max", Message: label + " must contain at most " + strconv.Itoa(*schema.MaxItems) + " items"})
 	}
 	if schema.UniqueItems {
-		duplicate := false
-		for i := range value {
-			for j := 0; j < i; j++ {
-				if equalJSONValue(value[i], value[j]) {
-					issues = append(issues, ToolArgumentIssue{Field: field, Rule: "unique", Message: label + " must contain unique items"})
-					duplicate = true
-					break
-				}
-			}
-			if duplicate {
+		// Keyed lookup rather than pairwise comparison: array contents come
+		// straight from the model, and a quadratic scan here burns seconds of
+		// CPU on a few thousand items — on a path that only runs once
+		// validation has already failed.
+		seen := make(map[string]struct{}, len(value))
+		for _, item := range value {
+			key := canonicalJSONKey(item)
+			if _, exists := seen[key]; exists {
+				issues = append(issues, ToolArgumentIssue{Field: field, Rule: "unique", Message: label + " must contain unique items"})
 				break
 			}
+			seen[key] = struct{}{}
 		}
 	}
 	if schema.Items != nil {
@@ -541,7 +684,16 @@ func diagnoseObjectSchema(schema *jsonschema.Schema, value map[string]any, field
 	}
 	for name, propertyValue := range value {
 		if schema.PropertyNames != nil {
-			issues = append(issues, diagnoseSchema(schema.PropertyNames, name, joinFieldPath(field, name))...)
+			// Key constraints are relabelled: rendered on the same path as the
+			// value they belong to, "m.ab must contain at least 3 characters"
+			// gives the model no way to tell whether the key or the value is
+			// wrong.
+			keyPath := joinFieldPath(field, name)
+			for _, issue := range diagnoseSchema(schema.PropertyNames, name, keyPath) {
+				issue.Message = "field name " + strconv.Quote(name) + " in " + label +
+					strings.TrimPrefix(issue.Message, quoteField(keyPath))
+				issues = append(issues, issue)
+			}
 		}
 		if _, exists := schema.Properties[name]; exists {
 			continue
@@ -584,6 +736,59 @@ func containsJSONValue(values []any, target any) bool {
 		}
 	}
 	return false
+}
+
+// canonicalJSONKey builds a lookup key matching equalJSONValue semantics:
+// numerically equal values share a key regardless of their Go type or literal
+// form (1, 1.0 and json.Number("1")), and object members are ordered so member
+// order never affects the key.
+func canonicalJSONKey(value any) string {
+	var builder strings.Builder
+	writeCanonicalJSONKey(&builder, value)
+	return builder.String()
+}
+
+func writeCanonicalJSONKey(builder *strings.Builder, value any) {
+	if rational, ok := jsonNumericValue(value); ok {
+		builder.WriteString("#n:")
+		builder.WriteString(rational.RatString())
+		return
+	}
+	switch typed := value.(type) {
+	case nil:
+		builder.WriteString("#z")
+	case bool:
+		builder.WriteString("#b:")
+		builder.WriteString(strconv.FormatBool(typed))
+	case string:
+		builder.WriteString("#s:")
+		builder.WriteString(strconv.Quote(typed))
+	case []any:
+		builder.WriteString("#a[")
+		for _, item := range typed {
+			writeCanonicalJSONKey(builder, item)
+			builder.WriteByte(',')
+		}
+		builder.WriteByte(']')
+	case map[string]any:
+		names := make([]string, 0, len(typed))
+		for name := range typed {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		builder.WriteString("#o{")
+		for _, name := range names {
+			builder.WriteString(strconv.Quote(name))
+			builder.WriteByte(':')
+			writeCanonicalJSONKey(builder, typed[name])
+			builder.WriteByte(',')
+		}
+		builder.WriteByte('}')
+	default:
+		// Unknown dynamic type: fall back to a type-qualified rendering so
+		// distinct values never collide into one key.
+		fmt.Fprintf(builder, "#?%T:%#v", typed, typed)
+	}
 }
 
 func equalJSONValue(left, right any) bool {
@@ -643,13 +848,36 @@ func joinFieldPath(prefix, field string) string {
 	return prefix + "." + field
 }
 
+// sortIssues orders diagnostics by how useful they are to a model, then by
+// field for stability. Only the first few issues survive rendering, and a model
+// that invented twenty stray fields would otherwise push the one actionable
+// line — a missing required field — out of view.
 func sortIssues(issues []ToolArgumentIssue) {
-	sort.Slice(issues, func(i, j int) bool {
+	sort.SliceStable(issues, func(i, j int) bool {
+		leftRank, rightRank := issueRank(issues[i].Rule), issueRank(issues[j].Rule)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
 		if issues[i].Field == issues[j].Field {
 			return issues[i].Rule < issues[j].Rule
 		}
 		return issues[i].Field < issues[j].Field
 	})
+}
+
+func issueRank(rule string) int {
+	switch rule {
+	case "required":
+		return 0
+	case "type":
+		return 1
+	case "unknown":
+		// Stray fields are the least actionable: the fix is to drop them, and
+		// they are summarized as a group when rendered.
+		return 3
+	default:
+		return 2
+	}
 }
 
 func quoteField(field string) string {

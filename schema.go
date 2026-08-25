@@ -110,6 +110,12 @@ func DecodeToolArgumentsWithSchema[T any](argumentsJSON string, schema *jsonsche
 
 // DecodeToolArgumentsWithSchemaFor is DecodeToolArgumentsWithSchema with a
 // tool name included in validation errors.
+//
+// Like the other DecodeToolArguments functions, this resolves the schema and
+// rebuilds the argument guidance on every call, which costs roughly an order of
+// magnitude more than a precompiled contract. Use it for one-off decoding;
+// anything on a request path should build a ToolContract once and call its
+// Decode method instead.
 func DecodeToolArgumentsWithSchemaFor[T any](toolName, argumentsJSON string, schema *jsonschema.Schema) (T, error) {
 	return decodeToolArguments[T](toolName, argumentsJSON, schema, nil, argumentGuidance{})
 }
@@ -127,12 +133,21 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 			return zero, fmt.Errorf("loom: resolve tool argument schema: %w", err)
 		}
 	}
-	if guidance.expected == "" {
+	if !guidance.built {
 		var err error
 		guidance, err = buildArgumentGuidance[T](schema, resolved)
 		if err != nil {
 			return zero, fmt.Errorf("loom: build tool argument guidance: %w", err)
 		}
+	}
+
+	// Providers commonly send an empty string rather than "{}" when a model
+	// calls a tool that takes no arguments, or none of its optional ones. Treat
+	// blank arguments as an empty JSON object so this convention is not
+	// reported as malformed JSON, and so a call that is genuinely missing a
+	// required field gets a field-level diagnostic instead of a syntax error.
+	if strings.TrimSpace(argumentsJSON) == "" {
+		argumentsJSON = "{}"
 	}
 
 	decoder := json.NewDecoder(strings.NewReader(argumentsJSON))
@@ -159,6 +174,10 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 	}
 	decoder = json.NewDecoder(strings.NewReader(string(normalizedJSON)))
 	if err := decoder.Decode(&arguments); err != nil {
+		var typeError *json.UnmarshalTypeError
+		if errors.As(err, &typeError) {
+			return zero, newTypeMismatchToolArgumentError(toolName, guidance, typeError)
+		}
 		return zero, newJSONToolArgumentError(toolName, guidance, err)
 	}
 	if err := validateToolArgumentStruct(arguments); err != nil {
@@ -217,6 +236,20 @@ func normalizeJSONNumber(number json.Number) (any, error) {
 }
 
 func validateToolArgumentStruct(value any) (err error) {
+	// go-playground only validates structs. Arguments typed as a slice, map, or
+	// scalar carry no struct rules, and handing one to Struct yields an
+	// InvalidValidationError that reaches the model as "validation is
+	// misconfigured" — which blames the tool for a perfectly good call.
+	target := reflect.ValueOf(value)
+	for target.Kind() == reflect.Pointer {
+		if target.IsNil() {
+			return nil
+		}
+		target = target.Elem()
+	}
+	if target.Kind() != reflect.Struct {
+		return nil
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("invalid validator tag: %v", recovered)
@@ -264,20 +297,23 @@ func applyValidationTags(schema *jsonschema.Schema, typ reflect.Type) error {
 			if property == nil {
 				continue
 			}
+			if tag, ok := field.Tag.Lookup("validate"); ok {
+				if err := applyFieldValidationRules(property, field.Type, tag); err != nil {
+					return fmt.Errorf("field %s: %w", field.Name, err)
+				}
+				if hasValidationRule(tag, "required") && !slices.Contains(schema.Required, name) {
+					schema.Required = append(schema.Required, name)
+				}
+			}
+			// Declared examples are attached after the validate tag is projected:
+			// that projection may copy the schema through JSON, which would
+			// renormalize a parsed example's Go type (int64 becoming float64).
 			if raw, ok := field.Tag.Lookup("example"); ok {
 				example, err := parseExampleValue(field.Type, raw)
 				if err != nil {
 					return fmt.Errorf("field %s example: %w", field.Name, err)
 				}
 				property.Examples = []any{example}
-			}
-			if tag, ok := field.Tag.Lookup("validate"); ok {
-				if err := applyValidationRules(property, field.Type, tag); err != nil {
-					return fmt.Errorf("field %s: %w", field.Name, err)
-				}
-				if hasValidationRule(tag, "required") && !slices.Contains(schema.Required, name) {
-					schema.Required = append(schema.Required, name)
-				}
 			}
 			if err := applyValidationTags(property, field.Type); err != nil {
 				return err
@@ -291,8 +327,120 @@ func applyValidationTags(schema *jsonschema.Schema, typ reflect.Type) error {
 		if schema.AdditionalProperties != nil {
 			return applyValidationTags(schema.AdditionalProperties, typ.Elem())
 		}
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Uintptr, reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// Only composite kinds carry nested fields to walk into; a scalar's own
+		// validate tag was already projected by its parent struct.
+	default:
+		// Unreachable: every reflect.Kind is listed above.
 	}
 	return nil
+}
+
+// applyFieldValidationRules projects one field's validate tag onto its schema.
+//
+// A leading omitempty (or omitzero/omitnil) makes go-playground skip every
+// later rule when the value is empty, and JSON Schema has no way to express
+// that exemption. Projecting such rules verbatim makes the schema stricter
+// than the validator that actually decides: an explicit "" would be rejected
+// by the schema while the validator accepts it. So the projection is trialled
+// on a copy first and kept only when the field's own empty value still
+// satisfies it. Constraints that empty values satisfy anyway — uniqueItems, an
+// upper bound — survive; the ones that would contradict the validator, such as
+// minLength or enum, are dropped and left to the validator alone.
+func applyFieldValidationRules(property *jsonschema.Schema, typ reflect.Type, tag string) error {
+	exempt := hasEmptyExemption(tag)
+	target := property
+	if exempt {
+		target = cloneSchema(property)
+	}
+	if err := applyValidationRules(target, typ, tag); err != nil {
+		return err
+	}
+	if exempt {
+		if rejectsEmptyValue(target, typ) {
+			return nil
+		}
+		*property = *target
+	}
+	return nil
+}
+
+func hasEmptyExemption(tag string) bool {
+	for _, rule := range splitValidationRules(tag) {
+		switch rule {
+		case "dive":
+			// Later rules apply to elements, not to this value.
+			return false
+		case "omitempty", "omitzero", "omitnil":
+			return true
+		}
+	}
+	return false
+}
+
+// rejectsEmptyValue reports whether schema turns away the value go-playground
+// treats as empty for typ. Types with no meaningful JSON empty value, and
+// schemas that cannot be resolved standalone, report false so the projection is
+// kept as-is.
+func rejectsEmptyValue(schema *jsonschema.Schema, typ reflect.Type) bool {
+	empty, ok := jsonEmptyValue(typ)
+	if !ok {
+		return false
+	}
+	resolved, err := cloneSchema(schema).Resolve(nil)
+	if err != nil {
+		return false
+	}
+	return resolved.Validate(empty) != nil
+}
+
+func jsonEmptyValue(typ reflect.Type) (any, bool) {
+	for typ != nil && typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ == nil {
+		return nil, false
+	}
+	switch typ.Kind() {
+	case reflect.String:
+		return "", true
+	case reflect.Bool:
+		return false, true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return int64(0), true
+	case reflect.Float32, reflect.Float64:
+		return float64(0), true
+	case reflect.Slice, reflect.Array:
+		return []any{}, true
+	case reflect.Map:
+		return map[string]any{}, true
+	case reflect.Struct, reflect.Interface, reflect.Invalid, reflect.Pointer,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer,
+		reflect.Complex64, reflect.Complex128:
+		// A struct has no single empty JSON form worth testing, and the rest
+		// never appear in a JSON-serializable argument type.
+		return nil, false
+	default:
+		// Unreachable: every reflect.Kind is listed above.
+		return nil, false
+	}
+}
+
+// parseJSONExampleValue reads an example written as a JSON literal, used for
+// kinds with no scalar textual form.
+func parseJSONExampleValue(typ reflect.Type, raw string) (any, error) {
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return nil, fmt.Errorf("must be valid JSON for %s: %w", typ, err)
+	}
+	return value, nil
 }
 
 func parseExampleValue(typ reflect.Type, raw string) (any, error) {
@@ -310,12 +458,16 @@ func parseExampleValue(typ reflect.Type, raw string) (any, error) {
 		return strconv.ParseUint(raw, 10, typ.Bits())
 	case reflect.Float32, reflect.Float64:
 		return strconv.ParseFloat(raw, typ.Bits())
+	case reflect.Slice, reflect.Array, reflect.Map, reflect.Struct,
+		reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer,
+		reflect.Complex64, reflect.Complex128:
+		// Composite and unsupported kinds are read as raw JSON: an example for
+		// them is written as a JSON literal in the struct tag.
+		return parseJSONExampleValue(typ, raw)
 	default:
-		var value any
-		if err := json.Unmarshal([]byte(raw), &value); err != nil {
-			return nil, fmt.Errorf("must be valid JSON for %s: %w", typ, err)
-		}
-		return value, nil
+		// Unreachable: every reflect.Kind is listed above.
+		return parseJSONExampleValue(typ, raw)
 	}
 }
 
@@ -353,21 +505,50 @@ func applyValidationRuleList(schema *jsonschema.Schema, typ reflect.Type, rules 
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
+	// After omitempty (or omitzero/omitnil) go-playground skips the remaining
+	// rules whenever the value is empty. JSON Schema cannot express that
+	// exemption, so from here on each rule is trialled on a copy and kept only
+	// if the field's empty value still satisfies it. Constraints an empty value
+	// meets anyway — uniqueItems, an upper bound — survive; ones that would
+	// contradict the validator, such as minItems or minLength, are dropped.
+	exemptEmpty := false
 	for index, rule := range rules {
 		if rule == "dive" {
+			// Rules after dive constrain elements, not this value, so the
+			// exemption does not carry into them.
 			return applyDiveValidationRules(schema, typ, rules[index+1:])
 		}
 		if rule == "keys" || rule == "endkeys" {
 			return fmt.Errorf("%q must follow dive on a map", rule)
 		}
-		if rule == "" || rule == "omitempty" || rule == "omitzero" || rule == "omitnil" || rule == "structonly" || rule == "nostructlevel" {
+		if rule == "omitempty" || rule == "omitzero" || rule == "omitnil" {
+			exemptEmpty = true
 			continue
 		}
-		if strings.Contains(rule, "|") {
-			if err := applyOrValidationRule(schema, typ, rule); err != nil {
+		if rule == "" || rule == "structonly" || rule == "nostructlevel" {
+			continue
+		}
+		if exemptEmpty {
+			trial := cloneSchema(schema)
+			if err := applySingleValidationRule(trial, typ, rule); err != nil {
 				return err
 			}
+			if !rejectsEmptyValue(trial, typ) {
+				*schema = *trial
+			}
 			continue
+		}
+		if err := applySingleValidationRule(schema, typ, rule); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applySingleValidationRule(schema *jsonschema.Schema, typ reflect.Type, rule string) error {
+	{
+		if strings.Contains(rule, "|") {
+			return applyOrValidationRule(schema, typ, rule)
 		}
 		name, value, ok := strings.Cut(rule, "=")
 		value = decodeValidatorParam(value)
@@ -426,12 +607,12 @@ func applyValidationRuleList(schema *jsonschema.Schema, typ reflect.Type, rules 
 				pattern += "$"
 			case "excludes":
 				addNotConstraint(schema, &jsonschema.Schema{Pattern: pattern})
-				continue
+				return nil
 			}
 			addPatternConstraint(schema, pattern)
 		case "unique":
 			if ok && value != "" {
-				continue // unique=Field has no direct JSON Schema equivalent.
+				return nil // unique=Field has no direct JSON Schema equivalent.
 			}
 			if typ.Kind() == reflect.Array || typ.Kind() == reflect.Slice {
 				schema.UniqueItems = true
@@ -440,7 +621,9 @@ func applyValidationRuleList(schema *jsonschema.Schema, typ reflect.Type, rules 
 			if typ.Kind() != reflect.String {
 				return fmt.Errorf("%s is only valid for string fields", name)
 			}
-			schema.Format = validatorJSONSchemaFormat(name)
+			if format := validatorJSONSchemaFormat(name, value); format != "" {
+				schema.Format = format
+			}
 		case "notblank":
 			if typ.Kind() != reflect.String {
 				return fmt.Errorf("notblank is only valid for string fields")
@@ -450,7 +633,7 @@ func applyValidationRuleList(schema *jsonschema.Schema, typ reflect.Type, rules 
 			// go-playground/validator remains the source of truth for runtime
 			// validation. Rules without a direct JSON Schema equivalent are
 			// intentionally left to it.
-			continue
+			return nil
 		}
 	}
 	return nil
@@ -464,20 +647,77 @@ func applyOrValidationRule(schema *jsonschema.Schema, typ reflect.Type, rule str
 		if err := applyValidationRuleList(branch, typ, []string{alternative}); err != nil {
 			return fmt.Errorf("validation alternative %q: %w", alternative, err)
 		}
+		if isVacuousSchema(branch) {
+			// This alternative asserts nothing, so it matches anything — and an
+			// anyOf containing it constrains nothing while still looking like a
+			// constraint. Drop the whole projection and let the validator, which
+			// does enforce the rule, be the only word on it.
+			return nil
+		}
 		branches = append(branches, branch)
 	}
 	schema.AllOf = append(schema.AllOf, &jsonschema.Schema{AnyOf: branches})
 	return nil
 }
 
-func validatorJSONSchemaFormat(rule string) string {
+// annotationSchemaKeywords carry no assertion: a schema holding only these
+// accepts every instance. format is among them because this library's validator
+// treats it as an annotation rather than a constraint.
+var annotationSchemaKeywords = map[string]bool{
+	"format": true, "description": true, "title": true, "examples": true,
+	"default": true, "deprecated": true, "readOnly": true, "writeOnly": true,
+	"$comment": true, "$schema": true, "$id": true,
+}
+
+// isVacuousSchema reports whether schema accepts every instance — either an
+// empty schema, or one carrying nothing but annotations.
+func isVacuousSchema(schema *jsonschema.Schema) bool {
+	if schema == nil {
+		return true
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return false
+	}
+	if string(data) == "true" {
+		return true
+	}
+	var keywords map[string]any
+	if err := json.Unmarshal(data, &keywords); err != nil {
+		return false
+	}
+	for keyword := range keywords {
+		if !annotationSchemaKeywords[keyword] {
+			return false
+		}
+	}
+	return true
+}
+
+// validatorJSONSchemaFormat maps a validator rule to a JSON Schema format, or
+// returns "" when no format describes it faithfully. param carries the rule's
+// argument, which matters for datetime: its layout decides whether the value is
+// a date, a time, or a full timestamp, and claiming date-time for a date-only
+// layout tells the model to send a value the validator will reject.
+func validatorJSONSchemaFormat(rule, param string) string {
 	switch rule {
 	case "url", "uri":
 		return "uri"
 	case "uuid3", "uuid4", "uuid5":
 		return "uuid"
 	case "datetime":
-		return "date-time"
+		switch param {
+		case "2006-01-02":
+			return "date"
+		case "15:04:05":
+			return "time"
+		case "2006-01-02T15:04:05Z07:00", "2006-01-02T15:04:05Z0700", "2006-01-02T15:04:05":
+			return "date-time"
+		default:
+			// A custom layout has no JSON Schema format; the validator enforces
+			// it, and the error message names the layout.
+			return ""
+		}
 	default:
 		return rule
 	}
@@ -489,7 +729,16 @@ func validatorOneOfKind(kind reflect.Kind) bool {
 		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return true
+	case reflect.Bool, reflect.Uintptr, reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Array, reflect.Slice, reflect.Map, reflect.Struct,
+		reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// oneof enumerates scalar values; a float cannot be compared exactly
+		// and the composite kinds have no enumerable form.
+		return false
 	default:
+		// Unreachable: every reflect.Kind is listed above.
 		return false
 	}
 }
@@ -519,7 +768,17 @@ func applyDiveValidationRules(schema *jsonschema.Schema, typ reflect.Type, rules
 			return fmt.Errorf("dive requires a map value schema")
 		}
 		return applyValidationRuleList(schema.AdditionalProperties, typ.Elem(), rules)
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Uintptr, reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Struct, reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// dive descends into elements, which only arrays, slices and maps have.
+		return fmt.Errorf("dive is not valid for %s fields", typ.Kind())
 	default:
+		// Unreachable: every reflect.Kind is listed above.
 		return fmt.Errorf("dive is not valid for %s fields", typ.Kind())
 	}
 }
@@ -556,7 +815,35 @@ func applyRequiredValueRule(schema *jsonschema.Schema, kind reflect.Kind) {
 	case reflect.Bool:
 		value := any(true)
 		schema.Const = &value
+	case reflect.Struct, reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer,
+		reflect.Complex64, reflect.Complex128:
+		// No "non-zero" form to project: a struct or interface has no single
+		// empty value, and the rest never reach a JSON argument schema.
+	default:
+		// Unreachable: every reflect.Kind is listed above.
 	}
+}
+
+// parseNumericRuleParam parses a numeric validator bound for projection into a
+// JSON Schema minimum/maximum. Integer literals are rejected when float64
+// cannot hold them exactly: projecting a rounded bound would silently reject
+// values the validator accepts, so it is better to project nothing and let the
+// validator remain the only enforcer.
+func parseNumericRuleParam(raw string) (float64, error) {
+	if integer, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if int64(float64(integer)) != integer {
+			return 0, fmt.Errorf("%q is not exactly representable as a JSON Schema bound", raw)
+		}
+		return float64(integer), nil
+	}
+	if unsigned, err := strconv.ParseUint(raw, 10, 64); err == nil {
+		if uint64(float64(unsigned)) != unsigned {
+			return 0, fmt.Errorf("%q is not exactly representable as a JSON Schema bound", raw)
+		}
+		return float64(unsigned), nil
+	}
+	return strconv.ParseFloat(raw, 64)
 }
 
 func applyComparisonRule(schema *jsonschema.Schema, kind reflect.Kind, rule, raw string) error {
@@ -564,9 +851,12 @@ func applyComparisonRule(schema *jsonschema.Schema, kind reflect.Kind, rule, raw
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
 		reflect.Float32, reflect.Float64:
-		value, err := strconv.ParseFloat(raw, 64)
+		value, err := parseNumericRuleParam(raw)
 		if err != nil {
-			return fmt.Errorf("%s=%q is not numeric", rule, raw)
+			// Not a plain number — go-playground also accepts forms such as a
+			// time.Duration bound ("min=1s"). JSON Schema has no equivalent, so
+			// skip the projection and let the validator enforce it.
+			return nil
 		}
 		switch rule {
 		case "gt":
@@ -581,7 +871,9 @@ func applyComparisonRule(schema *jsonschema.Schema, kind reflect.Kind, rule, raw
 	case reflect.String, reflect.Array, reflect.Slice, reflect.Map:
 		value, err := strconv.Atoi(raw)
 		if err != nil || value < 0 {
-			return fmt.Errorf("%s=%q must be a non-negative integer", rule, raw)
+			// Length bounds only accept non-negative integers; anything else has
+			// no JSON Schema projection. Leave it to the validator.
+			return nil
 		}
 		switch rule {
 		case "gt":
@@ -598,7 +890,14 @@ func applyComparisonRule(schema *jsonschema.Schema, kind reflect.Kind, rule, raw
 		case "lte":
 			setLengthRule(schema, kind, "max", value)
 		}
+	case reflect.Bool, reflect.Complex64, reflect.Complex128,
+		reflect.Struct, reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// A bound needs either a length or a numeric value; these kinds have
+		// neither, so the rule cannot apply to them.
+		return fmt.Errorf("%s is not valid for %s fields", rule, kind)
 	default:
+		// Unreachable: every reflect.Kind is listed above.
 		return fmt.Errorf("%s is not valid for %s fields", rule, kind)
 	}
 	return nil
@@ -687,9 +986,12 @@ func applySizeRule(schema *jsonschema.Schema, kind reflect.Kind, rule, raw strin
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
 		reflect.Float32, reflect.Float64:
-		value, err := strconv.ParseFloat(raw, 64)
+		value, err := parseNumericRuleParam(raw)
 		if err != nil {
-			return fmt.Errorf("%s=%q is not numeric", rule, raw)
+			// Not a plain number — go-playground also accepts forms such as a
+			// time.Duration bound ("min=1s"). JSON Schema has no equivalent, so
+			// skip the projection and let the validator enforce it.
+			return nil
 		}
 		switch rule {
 		case "min":
@@ -702,10 +1004,19 @@ func applySizeRule(schema *jsonschema.Schema, kind reflect.Kind, rule, raw strin
 	case reflect.String, reflect.Array, reflect.Slice, reflect.Map:
 		value, err := strconv.Atoi(raw)
 		if err != nil || value < 0 {
-			return fmt.Errorf("%s=%q must be a non-negative integer", rule, raw)
+			// Length bounds only accept non-negative integers; anything else has
+			// no JSON Schema projection. Leave it to the validator.
+			return nil
 		}
 		setLengthRule(schema, kind, rule, value)
+	case reflect.Bool, reflect.Complex64, reflect.Complex128,
+		reflect.Struct, reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// A bound needs either a length or a numeric value; these kinds have
+		// neither, so the rule cannot apply to them.
+		return fmt.Errorf("%s is not valid for %s fields", rule, kind)
 	default:
+		// Unreachable: every reflect.Kind is listed above.
 		return fmt.Errorf("%s is not valid for %s fields", rule, kind)
 	}
 	return nil
@@ -719,7 +1030,11 @@ func setLengthRule(schema *jsonschema.Schema, kind reflect.Kind, rule string, va
 		case "max":
 			setStrongestMaximum(maximum, value)
 		case "len":
-			*minimum, *maximum = &value, &value
+			// Separate variables: pointing both bounds at one int makes a later
+			// in-place tweak of the maximum silently move the minimum too, and
+			// CloneSchemas preserves that aliasing.
+			lower, upper := value, value
+			*minimum, *maximum = &lower, &upper
 		}
 	}
 	switch kind {
@@ -729,6 +1044,17 @@ func setLengthRule(schema *jsonschema.Schema, kind reflect.Kind, rule string, va
 		set(&schema.MinItems, &schema.MaxItems)
 	case reflect.Map:
 		set(&schema.MinProperties, &schema.MaxProperties)
+	case reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Uintptr, reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128,
+		reflect.Invalid, reflect.Chan, reflect.Func, reflect.Interface,
+		reflect.Pointer, reflect.Struct, reflect.UnsafePointer:
+		// Length bounds only apply to strings and containers; numeric bounds
+		// are handled by the caller as minimum/maximum instead.
+	default:
+		// Unreachable: every reflect.Kind is listed above.
 	}
 }
 
@@ -744,7 +1070,15 @@ func parseEnumValue(kind reflect.Kind, raw string) (any, error) {
 		return strconv.ParseUint(raw, 10, 64)
 	case reflect.Float32, reflect.Float64:
 		return strconv.ParseFloat(raw, 64)
+	case reflect.Complex64, reflect.Complex128,
+		reflect.Array, reflect.Slice, reflect.Map, reflect.Struct,
+		reflect.Interface, reflect.Pointer, reflect.Invalid,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// oneof enumerates scalar values; these kinds have no literal form to
+		// enumerate.
+		return nil, fmt.Errorf("oneof is not valid for %s fields", kind)
 	default:
+		// Unreachable: every reflect.Kind is listed above.
 		return nil, fmt.Errorf("oneof is not valid for %s fields", kind)
 	}
 }

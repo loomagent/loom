@@ -334,3 +334,81 @@ func TestMustSchemaForReturnsIndependentSchemas(t *testing.T) {
 		t.Fatalf("schema mutation leaked between calls: %q", got)
 	}
 }
+
+// Providers commonly send an empty string instead of "{}" for tools that take
+// no arguments, or none of their optional ones.
+func TestDecodeToolArgumentsTreatsBlankArgumentsAsEmptyObject(t *testing.T) {
+	for _, blank := range []string{"", "   ", "\n\t"} {
+		if _, err := DecodeToolArguments[NoArguments](blank); err != nil {
+			t.Errorf("DecodeToolArguments[NoArguments](%q) = %v, want blank treated as {}", blank, err)
+		}
+	}
+
+	type optionalArgs struct {
+		Limit int `json:"limit,omitempty" validate:"omitempty"`
+	}
+	for _, blank := range []string{"", "   ", "\n\t"} {
+		if _, err := DecodeToolArguments[optionalArgs](blank); err != nil {
+			t.Errorf("DecodeToolArguments[optionalArgs](%q) = %v, want blank treated as {}", blank, err)
+		}
+	}
+}
+
+// Blank arguments missing a required field must produce a field-level
+// diagnostic, not a JSON syntax error.
+func TestDecodeToolArgumentsBlankReportsMissingRequiredField(t *testing.T) {
+	type requiredArgs struct {
+		Query string `json:"query" validate:"required"`
+	}
+	_, err := DecodeToolArgumentsFor[requiredArgs]("search", "")
+	if err == nil {
+		t.Fatal("blank arguments missing a required field must fail")
+	}
+	if strings.Contains(err.Error(), "malformed JSON") {
+		t.Fatalf("want field-level diagnostic, got JSON syntax error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "query") {
+		t.Fatalf("error does not name the missing field: %v", err)
+	}
+}
+
+// An omitempty field must not end up with a schema stricter than the validator
+// that actually decides: go-playground skips the later rules on an empty value,
+// so a bound the empty value fails is left to the validator alone. Bounds an
+// empty value satisfies anyway stay in the schema.
+func TestSchemaForExemptsEmptyValuesOfOptionalFields(t *testing.T) {
+	type request struct {
+		Q     string   `json:"q,omitempty" validate:"omitempty,min=3"`
+		Mode  string   `json:"mode,omitempty" validate:"omitempty,oneof=fast slow"`
+		Limit int      `json:"limit,omitempty" validate:"omitempty,max=10"`
+		Tags  []string `json:"tags,omitempty" validate:"omitempty,unique"`
+	}
+
+	schema, err := SchemaFor[request]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := schema.Properties["q"].MinLength; got != nil {
+		t.Errorf("q minLength = %v, want unset so \"\" is accepted like the validator does", *got)
+	}
+	if got := schema.Properties["mode"].Enum; got != nil {
+		t.Errorf("mode enum = %v, want unset so \"\" is accepted like the validator does", got)
+	}
+	if got := schema.Properties["limit"].Maximum; got == nil || *got != 10 {
+		t.Errorf("limit maximum = %v, want 10 kept: zero satisfies it", got)
+	}
+	if !schema.Properties["tags"].UniqueItems {
+		t.Error("tags uniqueItems dropped, but an empty array satisfies it")
+	}
+
+	// Both layers must now agree on an explicitly empty value.
+	for _, raw := range []string{`{"q":""}`, `{"mode":""}`, `{"limit":0}`, `{"tags":[]}`} {
+		if _, err := DecodeToolArguments[request](raw); err != nil {
+			t.Errorf("DecodeToolArguments(%s) = %v, want accepted", raw, err)
+		}
+	}
+	// A non-empty value is still checked — by the validator.
+	if _, err := DecodeToolArguments[request](`{"q":"ab"}`); err == nil {
+		t.Error(`{"q":"ab"} must still be rejected by the validator`)
+	}
+}

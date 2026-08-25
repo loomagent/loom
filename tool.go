@@ -104,7 +104,7 @@ func (t *funcTool) Info(context.Context) (*ToolInfo, error) {
 	}
 	info := *t.info
 	if info.Parameters != nil {
-		info.Parameters = info.Parameters.CloneSchemas()
+		info.Parameters = cloneSchema(info.Parameters)
 	}
 	return &info, nil
 }
