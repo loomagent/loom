@@ -904,6 +904,11 @@ func summarizeExpectedArguments(schema *jsonschema.Schema) string {
 	}
 	sort.Strings(remaining)
 	names = append(names, remaining...)
+	if len(names) == 0 {
+		// Saying outright that the tool takes nothing beats making the model
+		// infer it from an empty example.
+		return "none"
+	}
 
 	var b strings.Builder
 	for i, name := range names {
