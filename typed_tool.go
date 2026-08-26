@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
+
+	"github.com/loomagent/loom/internal/toolcontract"
 )
 
 // InvokeFunc is a tool implementation whose arguments have already been
@@ -21,10 +23,11 @@ type NoArguments struct{}
 // JSON Schema. A contract is immutable after construction and safe for
 // concurrent Decode calls.
 type ToolContract[T any] struct {
-	name     string
-	schema   *jsonschema.Schema
-	resolved *jsonschema.Resolved
-	guidance argumentGuidance
+	name      string
+	schema    *jsonschema.Schema
+	resolved  *jsonschema.Resolved
+	validator *toolcontract.Validator
+	guidance  argumentGuidance
 }
 
 type toolContractConfig struct {
@@ -127,11 +130,16 @@ func NewToolContract[T any](toolName string, options ...ToolContractOption) (*To
 	if err != nil {
 		return nil, fmt.Errorf("loom: build argument guidance for tool %q: %w", toolName, err)
 	}
+	compiled, err := compileValidationSchema(config.schema)
+	if err != nil {
+		return nil, fmt.Errorf("loom: compile argument schema for tool %q: %w", toolName, err)
+	}
 	return &ToolContract[T]{
-		name:     toolName,
-		schema:   config.schema,
-		resolved: resolved,
-		guidance: guidance,
+		name:      toolName,
+		schema:    config.schema,
+		resolved:  resolved,
+		validator: compiled,
+		guidance:  guidance,
 	}, nil
 }
 
@@ -178,7 +186,7 @@ func cloneSchema(schema *jsonschema.Schema) *jsonschema.Schema {
 
 // Decode parses and validates one tool call using the precompiled contract.
 func (c *ToolContract[T]) Decode(argumentsJSON string) (T, error) {
-	return decodeToolArguments[T](c.name, argumentsJSON, c.schema, c.resolved, c.guidance)
+	return decodeToolArguments[T](c.name, argumentsJSON, c.schema, c.resolved, c.validator, c.guidance)
 }
 
 // NewTool exposes a typed handler using contract. The model-facing schema

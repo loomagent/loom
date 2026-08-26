@@ -15,6 +15,8 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/google/jsonschema-go/jsonschema"
+
+	"github.com/loomagent/loom/internal/toolcontract"
 )
 
 // ToolArgumentErrorKind identifies the stage that rejected tool arguments.
@@ -42,6 +44,7 @@ const (
 type ToolArgumentIssue struct {
 	Field   string
 	Rule    string
+	Code    string
 	Message string
 }
 
@@ -160,10 +163,6 @@ func newJSONToolArgumentError(tool string, guidance argumentGuidance, err error)
 	message := "malformed JSON: " + err.Error()
 	if errors.Is(err, errMultipleJSONValues) {
 		message = "input must contain exactly one JSON object"
-	} else {
-		if _, ok := errors.AsType[*unsupportedJSONNumberError](err); ok {
-			message = "unsupported numeric value: " + err.Error()
-		}
 	}
 	return &ToolArgumentError{
 		Tool:              tool,
@@ -186,8 +185,16 @@ func newTypeMismatchToolArgumentError(tool string, guidance argumentGuidance, ty
 	if field != "" {
 		label = quoteField(field)
 	}
-	message := label + " must be " + jsonTypeNameForGoType(typeError.GoType)
-	if typeError.JSONKind != jsontext.KindInvalid {
+	message := ""
+	if typeError.JSONKind == jsontext.KindNumber && isIntegerType(typeError.GoType) {
+		if number, ok := new(big.Rat).SetString(string(typeError.JSONValue)); ok && number.IsInt() && !integerFitsType(number.Num(), typeError.GoType) {
+			message = label + " is outside the supported " + strconv.Itoa(typeError.GoType.Bits()) + "-bit integer range"
+		}
+	}
+	if message == "" {
+		message = label + " must be " + jsonTypeNameForGoType(typeError.GoType)
+	}
+	if typeError.JSONKind != jsontext.KindInvalid && !strings.Contains(message, "outside the supported") {
 		message += ", but got " + typeError.JSONKind.String()
 	}
 	return &ToolArgumentError{
@@ -197,6 +204,39 @@ func newTypeMismatchToolArgumentError(tool string, guidance argumentGuidance, ty
 		ExpectedArguments: guidance.expected,
 		ExampleArguments:  guidance.example,
 		Err:               typeError,
+	}
+}
+
+func integerFitsType(integer *big.Int, typ reflect.Type) bool {
+	switch typ.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		bits := typ.Bits()
+		return integer.BitLen() < bits || integer.BitLen() == bits && integer.Sign() < 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return integer.Sign() >= 0 && integer.BitLen() <= typ.Bits()
+	case reflect.Invalid, reflect.Bool, reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128,
+		reflect.Array, reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer,
+		reflect.Slice, reflect.String, reflect.Struct, reflect.UnsafePointer:
+		return false
+	default:
+		return false
+	}
+}
+
+func isIntegerType(typ reflect.Type) bool {
+	if typ == nil {
+		return false
+	}
+	switch typ.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return true
+	case reflect.Invalid, reflect.Bool, reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128,
+		reflect.Array, reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer,
+		reflect.Slice, reflect.String, reflect.Struct, reflect.UnsafePointer:
+		return false
+	default:
+		return false
 	}
 }
 
@@ -237,15 +277,156 @@ func jsonTypeNameForGoType(typ reflect.Type) string {
 	}
 }
 
-func newSchemaToolArgumentError(tool string, schema *jsonschema.Schema, guidance argumentGuidance, instance any, err error) error {
+func newSchemaToolArgumentError(tool string, guidance argumentGuidance, err *toolcontract.ValidationError) error {
 	return &ToolArgumentError{
 		Tool:              tool,
 		Kind:              ToolArgumentErrorSchema,
-		Issues:            clampIssues(explainSchemaError(schema, instance, err)),
+		Issues:            clampIssues(explainValidationResult(err)),
 		ExpectedArguments: guidance.expected,
 		ExampleArguments:  guidance.example,
 		Err:               err,
 	}
+}
+
+func explainValidationResult(err *toolcontract.ValidationError) []ToolArgumentIssue {
+	if err == nil {
+		return []ToolArgumentIssue{{Rule: "schema", Message: "input does not match the expected schema"}}
+	}
+	issues := make([]ToolArgumentIssue, 0, len(err.Violations))
+	collectValidationIssues(err.Violations, &issues)
+	if len(issues) == 0 {
+		issues = append(issues, ToolArgumentIssue{Rule: "schema", Message: "input does not match the expected schema"})
+	}
+	sortIssues(issues)
+	return issues
+}
+
+func collectValidationIssues(violations []toolcontract.Violation, issues *[]ToolArgumentIssue) {
+	for index, violation := range violations {
+		field := violation.Field()
+		if violation.Code == "any_of_item_mismatch" {
+			if allowed := validationAlternatives(violations[index+1:], field); len(allowed) > 0 {
+				*issues = append(*issues, ToolArgumentIssue{
+					Field:   field,
+					Rule:    "oneof",
+					Code:    violation.Code,
+					Message: quoteField(field) + " must be one of " + compactJSON(allowed),
+				})
+				continue
+			}
+		}
+		if issue, ok := validationIssue(field, violation); ok {
+			*issues = append(*issues, issue)
+		}
+	}
+}
+
+func validationAlternatives(violations []toolcontract.Violation, field string) []any {
+	var alternatives []any
+	for _, violation := range violations {
+		if violation.Field() != field {
+			break
+		}
+		if violation.Code == "const_mismatch" || violation.Code == "const_mismatch_null" {
+			alternatives = append(alternatives, violation.Params["expected"])
+		}
+	}
+	return alternatives
+}
+
+func validationIssue(field string, violation toolcontract.Violation) (ToolArgumentIssue, bool) {
+	label := quoteField(field)
+	rule := violation.Keyword
+	code := violation.Code
+	params := violation.Params
+	message := ""
+	switch code {
+	case "property_mismatch", "properties_mismatch", "all_of_item_mismatch",
+		"any_of_item_mismatch", "one_of_item_mismatch", "false_schema_mismatch":
+		return ToolArgumentIssue{}, false
+	case "missing_required_property":
+		property := strings.Trim(fmt.Sprint(params["property"]), "'")
+		field = joinField(field, property)
+		message = quoteField(field) + " is required"
+	case "missing_required_properties":
+		message = label + " is missing required fields: " + fmt.Sprint(params["properties"])
+	case "additional_property_mismatch", "additional_property_false":
+		property := strings.Trim(fmt.Sprint(params["property"]), "'")
+		field = joinField(field, property)
+		rule = "unknown"
+		message = quoteField(field) + " is not an accepted field"
+	case "additional_properties_mismatch":
+		rule = "unknown"
+		message = "these fields are not accepted: " + fmt.Sprint(params["properties"])
+	case "value_above_maximum":
+		message = label + " must be at most " + fmt.Sprint(params["maximum"])
+	case "value_below_minimum":
+		message = label + " must be at least " + fmt.Sprint(params["minimum"])
+	case "exclusive_maximum_mismatch":
+		message = label + " must be less than " + fmt.Sprint(params["exclusive_maximum"])
+	case "exclusive_minimum_mismatch":
+		message = label + " must be greater than " + fmt.Sprint(params["exclusive_minimum"])
+	case "value_not_in_enum":
+		rule = "oneof"
+		message = label + " must be one of " + compactJSON(params["allowed"])
+	case "const_mismatch", "const_mismatch_null":
+		message = label + " must equal " + compactJSON(params["expected"])
+	case "unique_items_mismatch":
+		message = label + " must contain unique items"
+	case "pattern_mismatch":
+		message = patternValidationMessage(label, fmt.Sprint(params["pattern"]))
+	case "property_name_mismatch":
+		property := strings.Trim(fmt.Sprint(params["property"]), "'")
+		field = property
+		message = "field name " + strconv.Quote(property) + " is not accepted"
+	case "property_names_mismatch":
+		message = "field names are not accepted: " + fmt.Sprint(params["properties"])
+	case "string_too_short":
+		message = label + " must contain at least " + fmt.Sprint(params["min_length"]) + " characters"
+	case "string_too_long":
+		message = label + " must contain at most " + fmt.Sprint(params["max_length"]) + " characters"
+	case "items_too_short":
+		message = label + " must contain at least " + fmt.Sprint(params["min_items"]) + " items"
+	case "items_too_long":
+		message = label + " must contain at most " + fmt.Sprint(params["max_items"]) + " items"
+	case "type_mismatch":
+		message = label + " must be " + fmt.Sprint(params["expected"]) + ", but got " + fmt.Sprint(params["received"])
+	default:
+		message = label + " does not satisfy " + strconv.Quote(rule)
+	}
+	if message == "" {
+		return ToolArgumentIssue{}, false
+	}
+	return ToolArgumentIssue{Field: field, Rule: rule, Code: code, Message: message}, true
+}
+
+func patternValidationMessage(label, pattern string) string {
+	switch {
+	case pattern == `\S`:
+		return label + " must not be blank"
+	case strings.HasPrefix(pattern, "^") && isLiteralPattern(strings.TrimPrefix(pattern, "^")):
+		return label + " must start with " + strconv.Quote(strings.TrimPrefix(pattern, "^"))
+	case strings.HasSuffix(pattern, "$") && isLiteralPattern(strings.TrimSuffix(pattern, "$")):
+		return label + " must end with " + strconv.Quote(strings.TrimSuffix(pattern, "$"))
+	case isLiteralPattern(pattern):
+		return label + " must contain " + strconv.Quote(pattern)
+	default:
+		return label + " must match pattern " + strconv.Quote(pattern)
+	}
+}
+
+func isLiteralPattern(pattern string) bool {
+	return pattern != "" && !strings.ContainsAny(pattern, `\\[](){}.*+?|^$`)
+}
+
+func joinField(parent, child string) string {
+	if parent == "" {
+		return child
+	}
+	if child == "" {
+		return parent
+	}
+	return parent + "." + child
 }
 
 func newStructToolArgumentError(tool string, guidance argumentGuidance, err error) error {
@@ -803,11 +984,6 @@ func equalJSONValue(left, right any) bool {
 func jsonNumericValue(value any) (*big.Rat, bool) {
 	rational := new(big.Rat)
 	switch value := value.(type) {
-	case rawJSONNumber:
-		if _, ok := rational.SetString(string(value)); !ok {
-			return nil, false
-		}
-		return rational, true
 	case float64:
 		return rational.SetFloat64(value), true
 	case float32:
