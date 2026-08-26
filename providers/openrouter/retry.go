@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 
-	goOpenai "github.com/meguminnnnnnnnn/go-openai"
+	"github.com/openai/openai-go/v3"
 
 	"github.com/loomagent/loom"
 )
 
 // classifier 把 go-openai 暴露的错误翻成 loom.ErrorClass。
-// 任何上层 wrap 过的 error 都通过 errors.As 解出 *goOpenai.APIError /
-// *goOpenai.RequestError。
+// 任何上层 wrap 过的 error 都通过 errors.As 解出 *openai.Error。
 type classifier struct{}
 
 // 编译期断言 — 框架引入新的 ErrorClassifier 字段时编译错暴露。
@@ -49,13 +48,10 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 	return loom.ErrorClassTransient
 }
 
-// httpStatusOf 从 go-openai 的两种错误类型里解出 HTTP 状态码。
+// httpStatusOf 从官方 SDK 的错误类型里解出 HTTP 状态码。
 func httpStatusOf(err error) (int, bool) {
-	if apiErr, ok := errors.AsType[*goOpenai.APIError](err); ok {
-		return apiErr.HTTPStatusCode, true
-	}
-	if reqErr, ok := errors.AsType[*goOpenai.RequestError](err); ok {
-		return reqErr.HTTPStatusCode, true
+	if apiErr, ok := errors.AsType[*openai.Error](err); ok {
+		return apiErr.StatusCode, true
 	}
 	return 0, false
 }
