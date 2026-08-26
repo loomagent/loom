@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
-	"math/big"
 	"reflect"
 	"regexp"
 	"slices"
@@ -16,20 +14,11 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/google/jsonschema-go/jsonschema"
+
+	"github.com/loomagent/loom/internal/toolcontract"
 )
 
 var errMultipleJSONValues = errors.New("multiple JSON values")
-
-type rawJSONNumber string
-
-type unsupportedJSONNumberError struct {
-	number string
-	reason string
-}
-
-func (e *unsupportedJSONNumberError) Error() string {
-	return fmt.Sprintf("JSON number %q %s", e.number, e.reason)
-}
 
 var toolArgumentValidator = newToolArgumentValidator()
 
@@ -120,10 +109,10 @@ func DecodeToolArgumentsWithSchema[T any](argumentsJSON string, schema *jsonsche
 // anything on a request path should build a ToolContract once and call its
 // Decode method instead.
 func DecodeToolArgumentsWithSchemaFor[T any](toolName, argumentsJSON string, schema *jsonschema.Schema) (T, error) {
-	return decodeToolArguments[T](toolName, argumentsJSON, schema, nil, argumentGuidance{})
+	return decodeToolArguments[T](toolName, argumentsJSON, schema, nil, nil, argumentGuidance{})
 }
 
-func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonschema.Schema, resolved *jsonschema.Resolved, guidance argumentGuidance) (T, error) {
+func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonschema.Schema, resolved *jsonschema.Resolved, validator *toolcontract.Validator, guidance argumentGuidance) (T, error) {
 	var zero T
 	if schema == nil {
 		return zero, fmt.Errorf("loom: tool argument schema is nil")
@@ -143,6 +132,13 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 			return zero, fmt.Errorf("loom: build tool argument guidance: %w", err)
 		}
 	}
+	if validator == nil {
+		var err error
+		validator, err = compileValidationSchema(schema)
+		if err != nil {
+			return zero, fmt.Errorf("loom: compile tool argument schema: %w", err)
+		}
+	}
 
 	// Providers commonly send an empty string rather than "{}" when a model
 	// calls a tool that takes no arguments, or none of its optional ones. Treat
@@ -158,16 +154,8 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 		return zero, newJSONToolArgumentError(toolName, guidance, err)
 	}
 
-	instance, err := decodeJSONInstance(raw)
-	if err != nil {
-		return zero, newJSONToolArgumentError(toolName, guidance, err)
-	}
-	instance, err = normalizeJSONNumbers(instance)
-	if err != nil {
-		return zero, newJSONToolArgumentError(toolName, guidance, err)
-	}
-	if err := resolved.Validate(instance); err != nil {
-		return zero, newSchemaToolArgumentError(toolName, schema, guidance, instance, err)
+	if validationError := validator.Validate(raw); validationError != nil {
+		return zero, newSchemaToolArgumentError(toolName, guidance, validationError)
 	}
 
 	var arguments T
@@ -183,6 +171,14 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 	return arguments, nil
 }
 
+func compileValidationSchema(schema *jsonschema.Schema) (*toolcontract.Validator, error) {
+	data, err := jsonv2.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	return toolcontract.Compile(data)
+}
+
 func readStrictJSON(input string) (jsontext.Value, error) {
 	decoder := jsontext.NewDecoder(strings.NewReader(input))
 	raw, err := decoder.ReadValue()
@@ -196,122 +192,6 @@ func readStrictJSON(input string) (jsontext.Value, error) {
 		return nil, err
 	}
 	return raw, nil
-}
-
-func decodeJSONInstance(raw jsontext.Value) (any, error) {
-	switch raw.Kind() {
-	case jsontext.KindNull:
-		return nil, nil
-	case jsontext.KindFalse, jsontext.KindTrue:
-		var value bool
-		if err := jsonv2.Unmarshal(raw, &value); err != nil {
-			return nil, err
-		}
-		return value, nil
-	case jsontext.KindString:
-		var value string
-		if err := jsonv2.Unmarshal(raw, &value); err != nil {
-			return nil, err
-		}
-		return value, nil
-	case jsontext.KindNumber:
-		return rawJSONNumber(raw), nil
-	case jsontext.KindBeginArray:
-		decoder := jsontext.NewDecoder(strings.NewReader(string(raw)))
-		if _, err := decoder.ReadToken(); err != nil {
-			return nil, err
-		}
-		var values []any
-		for decoder.PeekKind() != jsontext.KindEndArray {
-			item, err := decoder.ReadValue()
-			if err != nil {
-				return nil, err
-			}
-			value, err := decodeJSONInstance(item)
-			if err != nil {
-				return nil, err
-			}
-			values = append(values, value)
-		}
-		_, err := decoder.ReadToken()
-		return values, err
-	case jsontext.KindBeginObject:
-		decoder := jsontext.NewDecoder(strings.NewReader(string(raw)))
-		if _, err := decoder.ReadToken(); err != nil {
-			return nil, err
-		}
-		values := make(map[string]any)
-		for decoder.PeekKind() != jsontext.KindEndObject {
-			nameToken, err := decoder.ReadToken()
-			if err != nil {
-				return nil, err
-			}
-			name := nameToken.String()
-			item, err := decoder.ReadValue()
-			if err != nil {
-				return nil, err
-			}
-			value, err := decodeJSONInstance(item)
-			if err != nil {
-				return nil, err
-			}
-			values[name] = value
-		}
-		_, err := decoder.ReadToken()
-		return values, err
-	default:
-		return nil, fmt.Errorf("unsupported JSON kind %q", raw.Kind())
-	}
-}
-
-func normalizeJSONNumbers(value any) (any, error) {
-	switch value := value.(type) {
-	case rawJSONNumber:
-		return normalizeJSONNumber(value)
-	case []any:
-		for index := range value {
-			normalized, err := normalizeJSONNumbers(value[index])
-			if err != nil {
-				return nil, fmt.Errorf("array item %d: %w", index, err)
-			}
-			value[index] = normalized
-		}
-		return value, nil
-	case map[string]any:
-		for name, item := range value {
-			normalized, err := normalizeJSONNumbers(item)
-			if err != nil {
-				return nil, fmt.Errorf("field %q: %w", name, err)
-			}
-			value[name] = normalized
-		}
-		return value, nil
-	default:
-		return value, nil
-	}
-}
-
-func normalizeJSONNumber(number rawJSONNumber) (any, error) {
-	raw := string(number)
-	rational, ok := new(big.Rat).SetString(raw)
-	if !ok {
-		return nil, &unsupportedJSONNumberError{number: raw, reason: "cannot be represented"}
-	}
-	if rational.IsInt() {
-		integer := rational.Num()
-		if integer.IsInt64() {
-			return integer.Int64(), nil
-		}
-		if integer.Sign() >= 0 && integer.BitLen() <= 64 {
-			return integer.Uint64(), nil
-		}
-		return nil, &unsupportedJSONNumberError{number: raw, reason: "is outside the supported 64-bit integer range"}
-	}
-	floating, _ := rational.Float64()
-	if math.IsInf(floating, 0) {
-		return nil, &unsupportedJSONNumberError{number: raw, reason: "is outside the supported floating-point range"}
-	}
-	return floating, nil
 }
 
 func validateToolArgumentStruct(value any) (err error) {
