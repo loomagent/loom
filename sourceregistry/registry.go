@@ -148,7 +148,7 @@ func (r *Registry) EnsureBatch(ctx context.Context, inputs []Input) ([]Ref, erro
 	for i, result := range stored {
 		byKey[unique[i].Key] = Ref{
 			Seq: result.Source.Seq, ID: SourceID(result.Source.Seq),
-			RawPath: result.Source.RawPath, Created: result.Created,
+			Created: result.Created,
 		}
 	}
 	refs := make([]Ref, len(inputs))
@@ -174,14 +174,6 @@ func SourceID(seq uint64) string {
 		return ""
 	}
 	return "SRC-" + strconv.FormatUint(seq, 10)
-}
-
-// RawPath returns the conventional workspace path for source content.
-func RawPath(seq uint64) string {
-	if seq == 0 {
-		return ""
-	}
-	return "raw/" + SourceID(seq) + ".md"
 }
 
 func cleanInput(input Input, key string) Input {
@@ -232,12 +224,6 @@ func validateStored(candidates []Candidate, stored []StoredRef) error {
 			return fmt.Errorf("%w: duplicate sequence %d", ErrInvalidStore, result.Source.Seq)
 		}
 		seenSeq[result.Source.Seq] = struct{}{}
-		if result.Source.HasContent && result.Source.RawPath != RawPath(result.Source.Seq) {
-			return fmt.Errorf("%w: result %d has inconsistent raw path %q", ErrInvalidStore, i, result.Source.RawPath)
-		}
-		if !result.Source.HasContent && result.Source.RawPath != "" {
-			return fmt.Errorf("%w: result %d has a raw path without content", ErrInvalidStore, i)
-		}
 	}
 	return nil
 }

@@ -6,7 +6,6 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/google/jsonschema-go v0.4.3
-	github.com/itchyny/gojq v0.12.19
 	github.com/kaptinlin/jsonschema v0.9.8
 	github.com/openai/openai-go/v3 v3.52.0
 	github.com/storynap/goseek v0.0.0-20260426102406-7214f6b941a0
@@ -14,7 +13,6 @@ require (
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
 	go.starlark.net v0.0.0-20260708150628-5395d018f003
-	mvdan.cc/sh/v3 v3.13.1
 )
 
 require (
@@ -26,7 +24,6 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/kaptinlin/jsonpointer v0.4.28 // indirect
 	github.com/klauspost/compress v1.13.5 // indirect
@@ -40,7 +37,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v2 v2.2.8 // indirect

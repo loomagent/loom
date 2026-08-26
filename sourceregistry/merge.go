@@ -38,9 +38,6 @@ func MergeSource(existing Source, candidate Candidate) (Source, bool) {
 	if in.HasContent && !existing.HasContent {
 		existing.HasContent = true
 	}
-	if existing.HasContent && existing.RawPath == "" {
-		existing.RawPath = RawPath(existing.Seq)
-	}
 	return existing, existing != before
 }
 

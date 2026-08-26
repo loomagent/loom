@@ -16,7 +16,6 @@ interfaces.
 - Provider-neutral `ChatModel` abstraction
 - OpenTelemetry tracing with content capture disabled by default
 - Built-in providers for Ark, DeepSeek, and OpenRouter
-- Filesystem-backed context utilities in `loomfs`
 
 ## Install
 
@@ -134,13 +133,11 @@ when the struct declares a complete example.
 
 - `github.com/loomagent/loom`: runtime, events, writers, sinks, tools, and model abstractions
 - `github.com/loomagent/loom/handlerregistry`: concurrent, explicit handler registration
-- `github.com/loomagent/loom/loomfs`: filesystem-backed context and workspace utilities
 - `github.com/loomagent/loom/modelfactory`: storage-independent model construction and configuration loading
 - `github.com/loomagent/loom/modelprobe`: behavioral model capability probing and declaration comparison
 - `github.com/loomagent/loom/contextpolicy`: composable context construction and audit decisions
 - `github.com/loomagent/loom/react`: provider-neutral ReAct runtime and policy interfaces
 - `github.com/loomagent/loom/react/review`: generic ReAct quality gate
-- `github.com/loomagent/loom/proreportbench`: offline report-agent trace and artifact evaluation
 - `github.com/loomagent/loom/prompttemplate`: explicit prompt placeholder validation and rendering
 - `github.com/loomagent/loom/sourceregistry`: storage-neutral source deduplication and stable citation IDs
 - `github.com/loomagent/loom/sourceregistry/sourceregistrytest`: reusable Store conformance suite
@@ -153,9 +150,6 @@ when the struct declares a complete example.
 - `github.com/loomagent/loom/tools/web`: provider-neutral search and reader contracts
 - `github.com/loomagent/loom/tools/calculator`: sandboxed Starlark calculator
 - `github.com/loomagent/loom/tools/gettime`: fixed Beijing-time tool
-- `github.com/loomagent/loom/tools/workspace`: in-memory workspace backend and file tools
-- `github.com/loomagent/loom/tools/workspacebash`: validated, read-only shell tool contract
-- `github.com/loomagent/loom/tools/workspacebash/gobash`: pure-Go workspace shell runner
 
 The architecture and original design decisions are documented in
 [DESIGN.md](DESIGN.md).
@@ -206,62 +200,11 @@ By default, request errors remain inconclusive and never silently become an
 "unsupported" capability. Applications may provide an `ErrorClassifier` when
 their provider exposes a reliable unsupported-parameter error classification.
 
-## Workspace tools
-
-The workspace package provides `ls`, `read_file`, `write_file`, and `edit_file`
-as Loom tools over a small storage interface. Its in-memory and local filesystem
-backends enforce read-before-write for existing files:
-
-```go
-backend := workspace.NewInMemoryBackend()
-tools := loom.NewToolRegistry()
-if err := workspace.RegisterAll(tools, backend); err != nil {
-	return err
-}
-```
-
-Applications can implement `workspace.Backend` to add their own persistent
-storage without introducing an ORM dependency into Loom.
-
-For a persistent local workspace, pass the root explicitly. The backend confines
-all access beneath that directory, including symbolic-link resolution:
-
-```go
-backend, err := workspace.OpenLocalBackend("./agent-workspace")
-if err != nil {
-	return err
-}
-defer backend.Close()
-```
-
 ## Prompt templates
 
 `prompttemplate` validates that required placeholders occur exactly once before
 rendering them. Built-in placeholders cover user input, assistant answers, and
 conversation context; callers may also use arbitrary placeholder strings.
-
-## Read-only workspace shell
-
-`workspacebash` exposes a constrained shell tool for agents, while `gobash`
-executes its allowlisted commands entirely in process. Filesystem access is
-confined to an `os.Root`; writes, host command fallback, command substitution,
-background jobs, and non-allowlisted commands are rejected.
-
-```go
-runner, err := gobash.New(gobash.Options{WorkspaceDir: workspaceDir})
-if err != nil {
-	return err
-}
-defer runner.Close()
-
-bashTool := workspacebash.NewTool(workspacebash.ToolOptions{
-	Runner:      runner,
-	Description: "Search and inspect files in the read-only workspace.",
-})
-```
-
-The built-in command set includes `cat`, `grep`, `jq`, `find`, `ls`, `sed`,
-`head`, `tail`, `sort`, `uniq`, `xargs`, and other read-only text utilities.
 
 ## Source dates
 
@@ -328,14 +271,6 @@ extend it without forking the loop through three small policy interfaces:
 `contextpolicy.ReactStepPolicy` adapts composable context builders to the loop.
 `react/review.Policy` supplies a stateful quality gate while leaving the actual
 reviewer, criteria, and instructions to the application.
-
-## Report-agent evaluation
-
-`proreportbench` performs offline comparisons between report-agent traces and
-reference marker traces. It normalizes Loom turns, item arrays, and generic
-JSON item trees into signals, checks required ordering and forbidden events,
-builds batch comparison reports, and extracts metrics from stable research
-artifacts. It has no database, model, tool, or network dependency.
 
 ## Web tools
 
