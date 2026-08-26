@@ -6,14 +6,12 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/google/jsonschema-go v0.4.3
-	github.com/itchyny/gojq v0.12.19
 	github.com/meguminnnnnnnnn/go-openai v0.1.5
 	github.com/storynap/goseek v0.0.0-20260426102406-7214f6b941a0
 	github.com/volcengine/volcengine-go-sdk v1.2.40
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
 	go.starlark.net v0.0.0-20260708150628-5395d018f003
-	mvdan.cc/sh/v3 v3.13.1
 )
 
 require (
@@ -29,7 +27,6 @@ require (
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/google/uuid v1.3.0 // indirect
-	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.13.5 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
@@ -42,7 +39,6 @@ require (
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/term v0.41.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v2 v2.2.8 // indirect
