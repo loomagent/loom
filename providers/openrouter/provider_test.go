@@ -1,16 +1,17 @@
 package openrouter
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
-	goOpenai "github.com/meguminnnnnnnnn/go-openai"
+	"github.com/openai/openai-go/v3"
 
 	"github.com/loomagent/loom"
 )
 
 func TestClassifierTreats503AsTransient(t *testing.T) {
-	err := &goOpenai.APIError{HTTPStatusCode: 503}
+	err := &openai.Error{StatusCode: 503}
 	if got := (classifier{}).ClassifyError(err); got != loom.ErrorClassTransient {
 		t.Fatalf("503 class = %s, want transient", got)
 	}
@@ -36,6 +37,21 @@ func TestBuildRequestReasoningModeRequired(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "必传") {
 		t.Fatalf("错误信息 %q 不含 \"必传\"", err.Error())
+	}
+}
+
+func TestBuildRequestRejectsUnknownMessageRole(t *testing.T) {
+	m, err := New(Config{APIKey: "test-key", ModelName: "x-ai/grok-4.3"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = m.buildRequest(loom.ChatRequest{
+		Messages:  []loom.Message{{Role: loom.Role("invalid"), Content: "hi"}},
+		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+	})
+	if err == nil || !strings.Contains(err.Error(), `未知角色 "invalid"`) {
+		t.Fatalf("期望未知角色报错,实际: %v", err)
 	}
 }
 
@@ -65,10 +81,17 @@ func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("mode=%s buildRequest: %v", tt.mode, err)
 		}
-		extra := req.GetExtraFields()
-		reasoning, ok := extra["reasoning"].(map[string]any)
+		encoded, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("mode=%s marshal request: %v", tt.mode, err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(encoded, &body); err != nil {
+			t.Fatalf("mode=%s unmarshal request: %v", tt.mode, err)
+		}
+		reasoning, ok := body["reasoning"].(map[string]any)
 		if !ok {
-			t.Fatalf("mode=%s 期望 ExtraFields 带 reasoning 对象,实际 %v", tt.mode, extra)
+			t.Fatalf("mode=%s 期望请求带 reasoning 对象,实际 %s", tt.mode, encoded)
 		}
 		if reasoning["enabled"] != tt.wantEnabled {
 			t.Fatalf("mode=%s reasoning.enabled = %v, want %v", tt.mode, reasoning["enabled"], tt.wantEnabled)
