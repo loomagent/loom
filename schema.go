@@ -1,7 +1,8 @@
 package loom
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,8 @@ import (
 )
 
 var errMultipleJSONValues = errors.New("multiple JSON values")
+
+type rawJSONNumber string
 
 type unsupportedJSONNumberError struct {
 	number string
@@ -150,16 +153,16 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 		argumentsJSON = "{}"
 	}
 
-	decoder := json.NewDecoder(strings.NewReader(argumentsJSON))
-	decoder.UseNumber()
-	var instance any
-	if err := decoder.Decode(&instance); err != nil {
+	raw, err := readStrictJSON(argumentsJSON)
+	if err != nil {
 		return zero, newJSONToolArgumentError(toolName, guidance, err)
 	}
-	if err := requireJSONEOF(decoder); err != nil {
+
+	instance, err := decodeJSONInstance(raw)
+	if err != nil {
 		return zero, newJSONToolArgumentError(toolName, guidance, err)
 	}
-	instance, err := normalizeJSONNumbers(instance)
+	instance, err = normalizeJSONNumbers(instance)
 	if err != nil {
 		return zero, newJSONToolArgumentError(toolName, guidance, err)
 	}
@@ -168,14 +171,8 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 	}
 
 	var arguments T
-	normalizedJSON, err := json.Marshal(instance)
-	if err != nil {
-		return zero, newJSONToolArgumentError(toolName, guidance, err)
-	}
-	decoder = json.NewDecoder(strings.NewReader(string(normalizedJSON)))
-	if err := decoder.Decode(&arguments); err != nil {
-		var typeError *json.UnmarshalTypeError
-		if errors.As(err, &typeError) {
+	if err := jsonv2.Unmarshal(raw, &arguments, jsonv2.RejectUnknownMembers(true)); err != nil {
+		if typeError, ok := errors.AsType[*jsonv2.SemanticError](err); ok {
 			return zero, newTypeMismatchToolArgumentError(toolName, guidance, typeError)
 		}
 		return zero, newJSONToolArgumentError(toolName, guidance, err)
@@ -186,9 +183,90 @@ func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonsche
 	return arguments, nil
 }
 
+func readStrictJSON(input string) (jsontext.Value, error) {
+	decoder := jsontext.NewDecoder(strings.NewReader(input))
+	raw, err := decoder.ReadValue()
+	if err != nil {
+		return nil, err
+	}
+	raw = raw.Clone()
+	if _, err := decoder.ReadValue(); err == nil {
+		return nil, errMultipleJSONValues
+	} else if !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func decodeJSONInstance(raw jsontext.Value) (any, error) {
+	switch raw.Kind() {
+	case jsontext.KindNull:
+		return nil, nil
+	case jsontext.KindFalse, jsontext.KindTrue:
+		var value bool
+		if err := jsonv2.Unmarshal(raw, &value); err != nil {
+			return nil, err
+		}
+		return value, nil
+	case jsontext.KindString:
+		var value string
+		if err := jsonv2.Unmarshal(raw, &value); err != nil {
+			return nil, err
+		}
+		return value, nil
+	case jsontext.KindNumber:
+		return rawJSONNumber(raw), nil
+	case jsontext.KindBeginArray:
+		decoder := jsontext.NewDecoder(strings.NewReader(string(raw)))
+		if _, err := decoder.ReadToken(); err != nil {
+			return nil, err
+		}
+		var values []any
+		for decoder.PeekKind() != jsontext.KindEndArray {
+			item, err := decoder.ReadValue()
+			if err != nil {
+				return nil, err
+			}
+			value, err := decodeJSONInstance(item)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+		}
+		_, err := decoder.ReadToken()
+		return values, err
+	case jsontext.KindBeginObject:
+		decoder := jsontext.NewDecoder(strings.NewReader(string(raw)))
+		if _, err := decoder.ReadToken(); err != nil {
+			return nil, err
+		}
+		values := make(map[string]any)
+		for decoder.PeekKind() != jsontext.KindEndObject {
+			nameToken, err := decoder.ReadToken()
+			if err != nil {
+				return nil, err
+			}
+			name := nameToken.String()
+			item, err := decoder.ReadValue()
+			if err != nil {
+				return nil, err
+			}
+			value, err := decodeJSONInstance(item)
+			if err != nil {
+				return nil, err
+			}
+			values[name] = value
+		}
+		_, err := decoder.ReadToken()
+		return values, err
+	default:
+		return nil, fmt.Errorf("unsupported JSON kind %q", raw.Kind())
+	}
+}
+
 func normalizeJSONNumbers(value any) (any, error) {
 	switch value := value.(type) {
-	case json.Number:
+	case rawJSONNumber:
 		return normalizeJSONNumber(value)
 	case []any:
 		for index := range value {
@@ -213,10 +291,11 @@ func normalizeJSONNumbers(value any) (any, error) {
 	}
 }
 
-func normalizeJSONNumber(number json.Number) (any, error) {
-	rational, ok := new(big.Rat).SetString(number.String())
+func normalizeJSONNumber(number rawJSONNumber) (any, error) {
+	raw := string(number)
+	rational, ok := new(big.Rat).SetString(raw)
 	if !ok {
-		return nil, &unsupportedJSONNumberError{number: number.String(), reason: "cannot be represented"}
+		return nil, &unsupportedJSONNumberError{number: raw, reason: "cannot be represented"}
 	}
 	if rational.IsInt() {
 		integer := rational.Num()
@@ -226,11 +305,11 @@ func normalizeJSONNumber(number json.Number) (any, error) {
 		if integer.Sign() >= 0 && integer.BitLen() <= 64 {
 			return integer.Uint64(), nil
 		}
-		return nil, &unsupportedJSONNumberError{number: number.String(), reason: "is outside the supported 64-bit integer range"}
+		return nil, &unsupportedJSONNumberError{number: raw, reason: "is outside the supported 64-bit integer range"}
 	}
 	floating, _ := rational.Float64()
 	if math.IsInf(floating, 0) {
-		return nil, &unsupportedJSONNumberError{number: number.String(), reason: "is outside the supported floating-point range"}
+		return nil, &unsupportedJSONNumberError{number: raw, reason: "is outside the supported floating-point range"}
 	}
 	return floating, nil
 }
@@ -256,17 +335,6 @@ func validateToolArgumentStruct(value any) (err error) {
 		}
 	}()
 	return toolArgumentValidator.Struct(value)
-}
-
-func requireJSONEOF(decoder *json.Decoder) error {
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return errMultipleJSONValues
-		}
-		return err
-	}
-	return nil
 }
 
 func applyValidationTags(schema *jsonschema.Schema, typ reflect.Type) error {
@@ -437,7 +505,7 @@ func jsonEmptyValue(typ reflect.Type) (any, bool) {
 // kinds with no scalar textual form.
 func parseJSONExampleValue(typ reflect.Type, raw string) (any, error) {
 	var value any
-	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+	if err := jsonv2.Unmarshal([]byte(raw), &value); err != nil {
 		return nil, fmt.Errorf("must be valid JSON for %s: %w", typ, err)
 	}
 	return value, nil
@@ -675,7 +743,7 @@ func isVacuousSchema(schema *jsonschema.Schema) bool {
 	if schema == nil {
 		return true
 	}
-	data, err := json.Marshal(schema)
+	data, err := jsonv2.Marshal(schema)
 	if err != nil {
 		return false
 	}
@@ -683,7 +751,7 @@ func isVacuousSchema(schema *jsonschema.Schema) bool {
 		return true
 	}
 	var keywords map[string]any
-	if err := json.Unmarshal(data, &keywords); err != nil {
+	if err := jsonv2.Unmarshal(data, &keywords); err != nil {
 		return false
 	}
 	for keyword := range keywords {

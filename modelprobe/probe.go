@@ -2,7 +2,7 @@ package modelprobe
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -201,7 +201,7 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 	check.Evidence.FinishReason = response.FinishReason
 	check.Evidence.ResponsePreview = preview(response.Content)
 	var value any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(response.Content)), &value); err != nil {
+	if err := jsonv2.Unmarshal([]byte(strings.TrimSpace(response.Content)), &value); err != nil {
 		check.Outcome = OutcomeNegative
 		check.Evidence.Error = "response is not valid JSON: " + err.Error()
 		return check

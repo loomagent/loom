@@ -17,7 +17,7 @@ package openrouter
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"strings"
 
@@ -300,7 +300,7 @@ func translateReasoning(resolved loom.ResolvedReasoning) (map[string]any, error)
 // extractReasoning 提取推理输出。OpenRouter 统一用 "reasoning" 字段(ExtraFields),
 // 个别上游可能透传 deepseek 风格的 reasoning_content — 优先取后者(已结构化),
 // 否则从 ExtraFields 解 "reasoning"。
-func extractReasoning(reasoningContent string, extra map[string]json.RawMessage) string {
+func extractReasoning[T ~[]byte](reasoningContent string, extra map[string]T) string {
 	if reasoningContent != "" {
 		return reasoningContent
 	}
@@ -309,7 +309,7 @@ func extractReasoning(reasoningContent string, extra map[string]json.RawMessage)
 		return ""
 	}
 	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
+	if err := jsonv2.Unmarshal(raw, &s); err != nil {
 		// "reasoning" 不是 string(如 null 或对象),忽略
 		return ""
 	}
@@ -372,9 +372,9 @@ func translateTools(tools []*loom.ToolInfo) ([]goOpenai.Tool, error) {
 		if t == nil {
 			continue
 		}
-		var params json.RawMessage
+		var params []byte
 		if t.Parameters != nil {
-			b, err := json.Marshal(t.Parameters)
+			b, err := jsonv2.Marshal(t.Parameters)
 			if err != nil {
 				return nil, fmt.Errorf("工具 %q 参数 schema marshal 失败: %w", t.Name, err)
 			}

@@ -2,7 +2,8 @@ package loom
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"reflect"
@@ -212,12 +213,12 @@ func StructuredSchemaObject(schema *jsonschema.Schema) (map[string]any, error) {
 	if schema == nil {
 		return nil, errors.New("schema 不能为 nil")
 	}
-	data, err := json.Marshal(schema)
+	data, err := jsonv2.Marshal(schema)
 	if err != nil {
 		return nil, err
 	}
 	var out map[string]any
-	if err := json.Unmarshal(data, &out); err != nil {
+	if err := jsonv2.Unmarshal(data, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -251,7 +252,7 @@ func withStructuredOutputRequest(req ChatRequest, caps ModelCapabilities, name, 
 }
 
 func appendStructuredPrompt(messages []Message, schema *jsonschema.Schema, description string) []Message {
-	schemaJSON, err := json.MarshalIndent(schema, "", "  ")
+	schemaJSON, err := jsonv2.Marshal(schema, jsontext.WithIndent("  "))
 	if err != nil {
 		schemaJSON = []byte("{}")
 	}
@@ -291,14 +292,14 @@ func parseStructuredResponse[T any](content string, schema *jsonschema.Resolved,
 		return zero, err
 	}
 	var instance any
-	if err := json.Unmarshal(raw, &instance); err != nil {
+	if err := jsonv2.Unmarshal(raw, &instance); err != nil {
 		return zero, fmt.Errorf("解析 JSON: %w", err)
 	}
 	if err := schema.Validate(instance); err != nil {
 		return zero, fmt.Errorf("校验 JSON schema: %w", err)
 	}
 	var out T
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := jsonv2.Unmarshal(raw, &out); err != nil {
 		return zero, fmt.Errorf("反序列化结构体: %w", err)
 	}
 	if validate != nil {
@@ -318,7 +319,7 @@ func extractJSONValue(content string) ([]byte, error) {
 	if content == "" {
 		return nil, errors.New("输出为空")
 	}
-	if json.Valid([]byte(content)) {
+	if jsontext.Value(content).IsValid() {
 		return []byte(content), nil
 	}
 	startObj := strings.Index(content, "{")
@@ -336,7 +337,7 @@ func extractJSONValue(content string) ([]byte, error) {
 		return nil, errors.New("未找到 JSON 值")
 	}
 	raw := strings.TrimSpace(content[start : end+1])
-	if !json.Valid([]byte(raw)) {
+	if !jsontext.Value(raw).IsValid() {
 		return nil, errors.New("提取到的 JSON 无效")
 	}
 	return []byte(raw), nil

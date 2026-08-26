@@ -2,7 +2,7 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"strings"
 	"testing"
 
@@ -23,7 +23,7 @@ func TestTool_WriteThenRead(t *testing.T) {
 		Path  string `json:"path"`
 		Bytes int    `json:"bytes"`
 	}
-	if err := json.Unmarshal([]byte(out), &wResult); err != nil {
+	if err := jsonv2.Unmarshal([]byte(out), &wResult); err != nil {
 		t.Fatalf("write result not JSON: %v; out=%q", err, out)
 	}
 	if wResult.Path != "/a.md" || wResult.Bytes != 11 {
@@ -64,7 +64,7 @@ func TestTool_LsRoot(t *testing.T) {
 			IsDir bool   `json:"is_dir"`
 		} `json:"entries"`
 	}
-	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+	if err := jsonv2.Unmarshal([]byte(out), &parsed); err != nil {
 		t.Fatalf("ls result not JSON: %v; out=%q", err, out)
 	}
 	if len(parsed.Entries) != 2 {
@@ -92,7 +92,7 @@ func TestTool_EditFile_HappyPath(t *testing.T) {
 		Path     string `json:"path"`
 		Replaced int    `json:"replaced"`
 	}
-	if err := json.Unmarshal([]byte(out), &res); err != nil {
+	if err := jsonv2.Unmarshal([]byte(out), &res); err != nil {
 		t.Fatalf("edit result not JSON: %v", err)
 	}
 	if res.Replaced != 1 {

@@ -1,7 +1,7 @@
 package loom
 
 import (
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"slices"
 
@@ -45,18 +45,18 @@ func buildArgumentGuidance[T any](schema *jsonschema.Schema, resolved *jsonschem
 	if err := resolved.Validate(example); err != nil {
 		return reject("assembled example does not satisfy JSON Schema: %w", err)
 	}
-	data, err := json.Marshal(example)
+	data, err := jsonv2.Marshal(example)
 	if err != nil {
 		return reject("marshal assembled example: %w", err)
 	}
 	var typed T
-	if err := json.Unmarshal(data, &typed); err != nil {
+	if err := jsonv2.Unmarshal(data, &typed); err != nil {
 		return reject("decode assembled example into argument struct: %w", err)
 	}
 	if err := validateToolArgumentStruct(typed); err != nil {
 		return reject("assembled example does not satisfy struct validation: %w", err)
 	}
-	data, err = json.Marshal(typed)
+	data, err = jsonv2.Marshal(typed)
 	if err != nil {
 		return reject("marshal validated argument example: %w", err)
 	}

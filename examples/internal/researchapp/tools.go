@@ -2,7 +2,7 @@ package researchapp
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"strings"
 	"time"
@@ -77,7 +77,7 @@ func newSearchTool(searcher web.WebSearcher) loom.Tool {
 			if err := session.Checkpoint(ctx); err != nil {
 				return "", err
 			}
-			data, err := json.Marshal(map[string]any{"results": out})
+			data, err := jsonv2.Marshal(map[string]any{"results": out})
 			if err != nil {
 				return "", err
 			}
@@ -118,7 +118,7 @@ func newReaderTool(reader web.WebReader) loom.Tool {
 			if err := session.Checkpoint(ctx); err != nil {
 				return "", err
 			}
-			data, err := json.Marshal(map[string]any{"srcId": refs[0].ID, "url": input.URL, "rawPath": entry.RawPath,
+			data, err := jsonv2.Marshal(map[string]any{"srcId": refs[0].ID, "url": input.URL, "rawPath": entry.RawPath,
 				"publishedAt": publishedTime(published.At), "markdown": document.Markdown})
 			if err != nil {
 				return "", err

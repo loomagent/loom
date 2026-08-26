@@ -5,7 +5,7 @@ package unifuncs
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -205,7 +205,7 @@ func (c *Client) readOnce(ctx context.Context, target string) (string, error) {
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	body, err := json.Marshal(map[string]any{"url": target, "format": "md", "liteMode": true, "readTimeout": c.timeout.Milliseconds()})
+	body, err := jsonv2.Marshal(map[string]any{"url": target, "format": "md", "liteMode": true, "readTimeout": c.timeout.Milliseconds()})
 	if err != nil {
 		return "", fmt.Errorf("unifuncs: marshal request: %w", err)
 	}

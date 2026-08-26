@@ -2,7 +2,7 @@ package proreportbench
 
 import (
 	"bufio"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -171,7 +171,7 @@ func readSearchBatches(path string, m *ArtifactMetrics) error {
 	seenSources := map[string]struct{}{}
 	return readJSONL(path, m, func(line []byte) error {
 		var r record
-		if err := json.Unmarshal(line, &r); err != nil {
+		if err := jsonv2.Unmarshal(line, &r); err != nil {
 			return err
 		}
 		m.SearchBatchCount++
@@ -201,7 +201,7 @@ func readReadings(path string, m *ArtifactMetrics) error {
 	domains := map[string]struct{}{}
 	return readJSONL(path, m, func(line []byte) error {
 		var r record
-		if err := json.Unmarshal(line, &r); err != nil {
+		if err := jsonv2.Unmarshal(line, &r); err != nil {
 			return err
 		}
 		m.ReadingCount++
@@ -225,7 +225,7 @@ func readProgress(path string, m *ArtifactMetrics) error {
 	}
 	return readJSONL(path, m, func(line []byte) error {
 		var r record
-		if err := json.Unmarshal(line, &r); err != nil {
+		if err := jsonv2.Unmarshal(line, &r); err != nil {
 			return err
 		}
 		m.ProgressRoundCount++
@@ -305,7 +305,7 @@ func readJSONFile(path string, m *ArtifactMetrics, out any) error {
 		}
 		return fmt.Errorf("read %s: %w", path, err)
 	}
-	if err := json.Unmarshal(data, out); err != nil {
+	if err := jsonv2.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("decode %s: %w", path, err)
 	}
 	return nil

@@ -1,7 +1,8 @@
 package proreportbench
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
 	"slices"
@@ -78,7 +79,7 @@ type CountDelta struct {
 
 func LoadUnifuncsMarkers(r io.Reader) ([]Marker, error) {
 	var markers []Marker
-	if err := json.NewDecoder(r).Decode(&markers); err != nil {
+	if err := jsonv2.UnmarshalRead(r, &markers); err != nil {
 		return nil, fmt.Errorf("decode unifuncs markers: %w", err)
 	}
 	return markers, nil
@@ -100,8 +101,8 @@ func SummarizeUnifuncs(markers []Marker) TraceSummary {
 }
 
 func SummarizeProReportJSON(r io.Reader) (TraceSummary, error) {
-	var raw json.RawMessage
-	if err := json.NewDecoder(r).Decode(&raw); err != nil {
+	raw, err := jsontext.NewDecoder(r).ReadValue()
+	if err != nil {
 		return TraceSummary{}, fmt.Errorf("decode proreport trace json: %w", err)
 	}
 	if len(raw) == 0 {
@@ -109,7 +110,7 @@ func SummarizeProReportJSON(r io.Reader) (TraceSummary, error) {
 	}
 
 	var markers []Marker
-	if err := json.Unmarshal(raw, &markers); err == nil && len(markers) > 0 {
+	if err := jsonv2.Unmarshal(raw, &markers); err == nil && len(markers) > 0 {
 		return SummarizeUnifuncs(markers), nil
 	}
 
@@ -118,13 +119,13 @@ func SummarizeProReportJSON(r io.Reader) (TraceSummary, error) {
 	}
 
 	var turn loom.Turn
-	if err := json.Unmarshal(raw, &turn); err == nil && len(turn.Items) > 0 {
+	if err := jsonv2.Unmarshal(raw, &turn); err == nil && len(turn.Items) > 0 {
 		events := eventsFromItems(turn.Items)
 		return summarize(events), nil
 	}
 
 	var items []loom.Item
-	if err := json.Unmarshal(raw, &items); err == nil && len(items) > 0 {
+	if err := jsonv2.Unmarshal(raw, &items); err == nil && len(items) > 0 {
 		events := eventsFromItems(items)
 		return summarize(events), nil
 	}
@@ -192,9 +193,9 @@ func eventsFromItems(items []loom.Item) []TraceEvent {
 	return events
 }
 
-func eventsFromGenericJSON(raw json.RawMessage) []TraceEvent {
+func eventsFromGenericJSON(raw jsontext.Value) []TraceEvent {
 	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
+	if err := jsonv2.Unmarshal(raw, &value); err != nil {
 		return nil
 	}
 	return eventsFromGenericValue(value)

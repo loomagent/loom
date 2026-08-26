@@ -3,7 +3,7 @@ package gettime
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"time"
 
@@ -37,7 +37,7 @@ func invoke(ctx context.Context, _ loom.NoArguments) (string, error) {
 	defer span.End()
 
 	response := At(time.Now())
-	out, err := json.Marshal(response)
+	out, err := jsonv2.Marshal(response)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

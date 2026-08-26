@@ -4,7 +4,7 @@ package serper
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -98,7 +98,7 @@ func (c *Client) Search(ctx context.Context, request web.SearchRequest) (web.Sea
 	if query == "" {
 		return web.SearchResponse{}, errors.New("serper: query is required")
 	}
-	payload, err := json.Marshal(searchRequest{Query: query, NumResults: request.Limit})
+	payload, err := jsonv2.Marshal(searchRequest{Query: query, NumResults: request.Limit})
 	if err != nil {
 		return web.SearchResponse{}, fmt.Errorf("serper: marshal request: %w", err)
 	}
@@ -121,7 +121,7 @@ func (c *Client) Search(ctx context.Context, request web.SearchRequest) (web.Sea
 		return web.SearchResponse{}, HTTPError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 	var parsed searchResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	if err := jsonv2.Unmarshal(body, &parsed); err != nil {
 		return web.SearchResponse{}, fmt.Errorf("serper: decode response: %w", err)
 	}
 	if message := strings.TrimSpace(parsed.Message); message != "" && len(parsed.Organic) == 0 {

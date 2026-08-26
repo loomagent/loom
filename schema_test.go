@@ -72,6 +72,8 @@ func TestDecodeToolArgumentsValidatesGeneratedSchema(t *testing.T) {
 		{"bad enum", `{"query":"loom","mode":"slow"}`, `"mode" must be one of ["fast","deep"]`},
 		{"unknown property", `{"query":"loom","mode":"fast","extra":true}`, `"extra" is not an accepted field`},
 		{"multiple values", `{"query":"loom","mode":"fast"} {}`, "exactly one JSON object"},
+		{"duplicate property", `{"query":"first","query":"second","mode":"fast"}`, "duplicate object member name"},
+		{"invalid UTF-8", "{\"query\":\"\xff\",\"mode\":\"fast\"}", "invalid UTF-8"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := DecodeToolArguments[request](test.raw)
@@ -309,16 +311,12 @@ func TestDecodeToolArgumentsPreservesLargeIntegerPrecision(t *testing.T) {
 	}
 }
 
-func TestDecodeToolArgumentsNormalizesIntegralExponent(t *testing.T) {
+func TestDecodeToolArgumentsRejectsExponentForInteger(t *testing.T) {
 	type request struct {
 		Value int64 `json:"value"`
 	}
-	got, err := DecodeToolArguments[request](`{"value":1e3}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Value != 1000 {
-		t.Fatalf("value = %d, want 1000", got.Value)
+	if _, err := DecodeToolArguments[request](`{"value":1e3}`); err == nil || !strings.Contains(err.Error(), `"value" must be an integer`) {
+		t.Fatalf("error = %v, want strict v2 integer diagnostic", err)
 	}
 }
 

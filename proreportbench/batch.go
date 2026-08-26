@@ -1,7 +1,8 @@
 package proreportbench
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io/fs"
 	"os"
@@ -295,9 +296,9 @@ func MarshalJSON(v any, compact bool) ([]byte, error) {
 	var data []byte
 	var err error
 	if compact {
-		data, err = json.Marshal(v)
+		data, err = jsonv2.Marshal(v)
 	} else {
-		data, err = json.MarshalIndent(v, "", "  ")
+		data, err = jsonv2.Marshal(v, jsontext.WithIndent("  "))
 	}
 	if err != nil {
 		return nil, err

@@ -2,7 +2,7 @@ package researchapp
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"testing"
 
 	"github.com/loomagent/loom/loomfs"
@@ -87,7 +87,7 @@ func TestResearchToolsKeepStableReferencesAcrossTurns(t *testing.T) {
 func sourceID(t *testing.T, raw string) string {
 	t.Helper()
 	var object map[string]any
-	if err := json.Unmarshal([]byte(raw), &object); err != nil {
+	if err := jsonv2.Unmarshal([]byte(raw), &object); err != nil {
 		t.Fatal(err)
 	}
 	if id, _ := object["srcId"].(string); id != "" {

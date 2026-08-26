@@ -2,7 +2,8 @@ package serper
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,7 +17,7 @@ func TestSearch(t *testing.T) {
 			t.Fatalf("API key header = %q", r.Header.Get("X-API-KEY"))
 		}
 		var request map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if err := jsonv2.UnmarshalDecode(jsontext.NewDecoder(r.Body), &request); err != nil {
 			t.Fatal(err)
 		}
 		if request["q"] != "loom agents" || request["num"] != float64(3) {

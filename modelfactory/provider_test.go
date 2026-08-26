@@ -1,7 +1,7 @@
 package modelfactory
 
 import (
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"reflect"
 	"testing"
@@ -80,7 +80,7 @@ func TestProviderJSON(t *testing.T) {
 		Provider Provider `json:"provider"`
 	}
 
-	data, err := json.Marshal(document{Provider: ProviderDeepSeek})
+	data, err := jsonv2.Marshal(document{Provider: ProviderDeepSeek})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestProviderJSON(t *testing.T) {
 	}
 
 	var got document
-	if err := json.Unmarshal([]byte(`{"provider":"invalid"}`), &got); !errors.Is(err, ErrInvalidProvider) {
+	if err := jsonv2.Unmarshal([]byte(`{"provider":"invalid"}`), &got); !errors.Is(err, ErrInvalidProvider) {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 }

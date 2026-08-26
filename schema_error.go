@@ -1,7 +1,8 @@
 package loom
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"math/big"
@@ -160,8 +161,7 @@ func newJSONToolArgumentError(tool string, guidance argumentGuidance, err error)
 	if errors.Is(err, errMultipleJSONValues) {
 		message = "input must contain exactly one JSON object"
 	} else {
-		var numberError *unsupportedJSONNumberError
-		if errors.As(err, &numberError) {
+		if _, ok := errors.AsType[*unsupportedJSONNumberError](err); ok {
 			message = "unsupported numeric value: " + err.Error()
 		}
 	}
@@ -178,22 +178,22 @@ func newJSONToolArgumentError(tool string, guidance argumentGuidance, err error)
 // newTypeMismatchToolArgumentError reports a value whose JSON type does not fit
 // the argument field it decodes into. The document itself parsed cleanly, so
 // calling it malformed would send the model hunting for a syntax error that is
-// not there. Only the JSON field path is reported — the Go struct name that
-// json.UnmarshalTypeError renders in its own message is deliberately dropped,
-// since it means nothing to a model and leaks server internals.
-func newTypeMismatchToolArgumentError(tool string, guidance argumentGuidance, typeError *json.UnmarshalTypeError) error {
+// not there. Only the JSON field path is reported; Go type internals are not
+// exposed to the model.
+func newTypeMismatchToolArgumentError(tool string, guidance argumentGuidance, typeError *jsonv2.SemanticError) error {
 	label := "arguments"
-	if typeError.Field != "" {
-		label = quoteField(typeError.Field)
+	field := strings.TrimPrefix(string(typeError.JSONPointer), "/")
+	if field != "" {
+		label = quoteField(field)
 	}
-	message := label + " must be " + jsonTypeNameForGoType(typeError.Type)
-	if typeError.Value != "" {
-		message += ", but got " + typeError.Value
+	message := label + " must be " + jsonTypeNameForGoType(typeError.GoType)
+	if typeError.JSONKind != jsontext.KindInvalid {
+		message += ", but got " + typeError.JSONKind.String()
 	}
 	return &ToolArgumentError{
 		Tool:              tool,
 		Kind:              ToolArgumentErrorSchema,
-		Issues:            clampIssues([]ToolArgumentIssue{{Field: typeError.Field, Rule: "type", Message: message}}),
+		Issues:            clampIssues([]ToolArgumentIssue{{Field: field, Rule: "type", Message: message}}),
 		ExpectedArguments: guidance.expected,
 		ExampleArguments:  guidance.example,
 		Err:               typeError,
@@ -260,8 +260,8 @@ func newStructToolArgumentError(tool string, guidance argumentGuidance, err erro
 }
 
 func explainValidatorError(err error) []ToolArgumentIssue {
-	var validationErrors validator.ValidationErrors
-	if !errors.As(err, &validationErrors) {
+	validationErrors, ok := errors.AsType[validator.ValidationErrors](err)
+	if !ok {
 		return []ToolArgumentIssue{{Rule: "validate", Message: "tool argument validation is misconfigured"}}
 	}
 	issues := make([]ToolArgumentIssue, 0, len(validationErrors))
@@ -803,8 +803,8 @@ func equalJSONValue(left, right any) bool {
 func jsonNumericValue(value any) (*big.Rat, bool) {
 	rational := new(big.Rat)
 	switch value := value.(type) {
-	case json.Number:
-		if _, ok := rational.SetString(value.String()); !ok {
+	case rawJSONNumber:
+		if _, ok := rational.SetString(string(value)); !ok {
 			return nil, false
 		}
 		return rational, true
@@ -1027,7 +1027,7 @@ func formatNumber(value float64) string {
 }
 
 func compactJSON(value any) string {
-	data, err := json.Marshal(value)
+	data, err := jsonv2.Marshal(value)
 	if err != nil {
 		return "[]"
 	}

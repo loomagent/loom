@@ -2,7 +2,7 @@ package react
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -172,7 +172,7 @@ func TestRunExecutesToolsAndFinishes(t *testing.T) {
 		{Content: "done", FinishReason: loom.FinishReasonStop},
 	}}
 	tools := loom.NewToolRegistry(loom.NewTool(loom.MustToolContract[echoTextArguments]("echo"), "echo", func(_ context.Context, args echoTextArguments) (string, error) {
-		data, err := json.Marshal(args)
+		data, err := jsonv2.Marshal(args)
 		return string(data), err
 	}))
 

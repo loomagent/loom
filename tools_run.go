@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 )
 
@@ -55,7 +55,7 @@ type ToolExecResult struct {
 // RunToolByName 代码编排场景:业务方主动调一个工具,args 是任意 Go 值。
 //
 // 与 ExecuteToolCalls 区别:
-//   - args 是 Go struct/map,内部 json.Marshal,业务方不手拼 JSON
+//   - args 是 Go struct/map,内部 jsonv2.Marshal,业务方不手拼 JSON
 //   - callID 由 loom 自动生成("call_0" / "call_1" /...turn 内递增)
 //   - 单调一次,不接受批量
 //
@@ -72,7 +72,7 @@ func RunToolByName(
 	name string,
 	args any,
 ) (string, error) {
-	argsJSON, err := json.Marshal(args)
+	argsJSON, err := jsonv2.Marshal(args)
 	if err != nil {
 		return "", fmt.Errorf("loom.RunToolByName: marshal args: %w", err)
 	}
