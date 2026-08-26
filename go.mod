@@ -51,4 +51,4 @@ require (
 	gopkg.in/yaml.v2 v2.2.8 // indirect
 )
 
-replace github.com/kaptinlin/jsonschema => github.com/solarhell/jsonschema v0.0.0-20260826054950-cebe00da379c
+replace github.com/kaptinlin/jsonschema => github.com/solarhell/jsonschema v0.0.0-20260826060629-30fa0f25249b
