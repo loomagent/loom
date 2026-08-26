@@ -1,7 +1,7 @@
 package loom
 
 import (
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,7 +24,7 @@ func TestExplainSchemaErrorUsesSchemaNotCauseText(t *testing.T) {
 
 	schema := MustSchemaFor[request]()
 	var instance any
-	if err := json.Unmarshal([]byte(`{"query":"","limit":6,"items":[{"name":"x"}],"meta":{"a":1,"b":2},"extra":true}`), &instance); err != nil {
+	if err := jsonv2.Unmarshal([]byte(`{"query":"","limit":6,"items":[{"name":"x"}],"meta":{"a":1,"b":2},"extra":true}`), &instance); err != nil {
 		t.Fatal(err)
 	}
 	resolved, err := schema.Resolve(nil)
@@ -211,7 +211,7 @@ func TestRequiredIssueSurvivesManyUnknownFields(t *testing.T) {
 	for index := range 20 {
 		payload[fmt.Sprintf("a%02d", index)] = index
 	}
-	raw, err := json.Marshal(payload)
+	raw, err := jsonv2.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestIssuesAreBoundedIndependentlyOfError(t *testing.T) {
 		A string `json:"a,omitempty"`
 	}
 	huge := strings.Repeat("x", 100_000)
-	raw, err := json.Marshal(map[string]any{huge: 1})
+	raw, err := jsonv2.Marshal(map[string]any{huge: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,7 +2,7 @@ package loom
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"testing"
 )
@@ -102,7 +102,7 @@ func TestRunToolByName_Success(t *testing.T) {
 	reg := NewToolRegistry()
 	_ = reg.Register(NewTool(MustToolContract[queryToolArguments]("query"), "q",
 		func(_ context.Context, args queryToolArguments) (string, error) {
-			data, err := json.Marshal(args)
+			data, err := jsonv2.Marshal(args)
 			return string(data), err
 		},
 	))

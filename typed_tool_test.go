@@ -2,6 +2,7 @@ package loom
 
 import (
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"strings"
 	"sync"
@@ -13,7 +14,7 @@ import (
 
 type typedToolRequest struct {
 	Query string `json:"query" jsonschema:"Search query." validate:"min=1,notblank" example:"loom agent runtime"`
-	Limit int    `json:"limit,omitempty" validate:"omitempty,min=0"`
+	Limit int    `json:"limit,omitzero" validate:"omitempty,min=0"`
 }
 
 func TestNewToolBindsCompiledContract(t *testing.T) {
@@ -196,6 +197,15 @@ func BenchmarkToolArgumentDecode(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			if _, err := DecodeToolArguments[typedToolRequest](raw); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("stdlib_v2", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			var request typedToolRequest
+			if err := jsonv2.Unmarshal([]byte(raw), &request); err != nil {
 				b.Fatal(err)
 			}
 		}

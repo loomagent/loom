@@ -2,7 +2,7 @@ package loom
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"strings"
 
@@ -165,12 +165,12 @@ func cloneSchema(schema *jsonschema.Schema) *jsonschema.Schema {
 	if schema == nil {
 		return nil
 	}
-	data, err := json.Marshal(schema)
+	data, err := jsonv2.Marshal(schema)
 	if err != nil {
 		return schema.CloneSchemas()
 	}
 	var clone jsonschema.Schema
-	if err := json.Unmarshal(data, &clone); err != nil {
+	if err := jsonv2.Unmarshal(data, &clone); err != nil {
 		return schema.CloneSchemas()
 	}
 	return &clone

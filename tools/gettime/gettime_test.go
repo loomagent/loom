@@ -2,7 +2,7 @@ package gettime
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"testing"
 	"time"
@@ -37,7 +37,7 @@ func TestToolUsesEmptyArgumentContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got Response
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
+	if err := jsonv2.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Timezone != "Asia/Shanghai" {

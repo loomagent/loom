@@ -2,7 +2,7 @@ package modelprobe
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
 	"slices"
@@ -156,7 +156,7 @@ func TestReportJSONUsesStableFieldNames(t *testing.T) {
 		},
 		Checks: []Check{},
 	}
-	data, err := json.Marshal(report)
+	data, err := jsonv2.Marshal(report)
 	if err != nil {
 		t.Fatal(err)
 	}

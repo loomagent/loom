@@ -18,7 +18,7 @@ package deepseek
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -360,9 +360,9 @@ func translateTools(tools []*loom.ToolInfo) ([]goseek.Tool, error) {
 		if t == nil {
 			continue
 		}
-		var params json.RawMessage
+		var params []byte
 		if t.Parameters != nil {
-			b, err := json.Marshal(t.Parameters)
+			b, err := jsonv2.Marshal(t.Parameters)
 			if err != nil {
 				return nil, fmt.Errorf("工具 %q 参数 schema marshal 失败: %w", t.Name, err)
 			}

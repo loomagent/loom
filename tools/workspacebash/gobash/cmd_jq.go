@@ -4,14 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"io"
 
 	"github.com/itchyny/gojq"
 )
 
 // cmdJq 用 gojq 跑 jq filter。支持 -r(raw 字符串)、-c(紧凑)、-n(null 输入)。
-// 输入文件既支持单个 JSON 也支持 NDJSON(.jsonl):用 json.Decoder 逐值解码后逐个喂 filter,
+// 输入文件既支持单个 JSON 也支持 NDJSON(.jsonl):用 jsontext.Decoder 逐值解码后逐个喂 filter,
 // 这是 workspace 里 queries.jsonl / sources.jsonl / index.jsonl 的主力路径。
 // 不支持 --arg / --slurpfile / -f(从文件读 filter)。
 func cmdJq(ctx context.Context, env CmdEnv, args []string) int {
@@ -76,13 +77,13 @@ func cmdJq(ctx context.Context, env CmdEnv, args []string) int {
 			w.Flush()
 			return ioErrExit(env, "jq", e)
 		}
-		dec := json.NewDecoder(bytes.NewReader(data))
+		dec := jsontext.NewDecoder(bytes.NewReader(data))
 		for {
 			if err := ctx.Err(); err != nil {
 				return ioErrExit(env, "jq", err)
 			}
 			var input any
-			if e := dec.Decode(&input); e != nil {
+			if e := jsonv2.UnmarshalDecode(dec, &input); e != nil {
 				if e == io.EOF {
 					break
 				}
@@ -124,16 +125,16 @@ func writeJqValue(w io.Writer, v any, raw, compact bool) error {
 }
 
 func marshalIndent(v any) ([]byte, error) {
-	// gojq.Marshal 保证与 jq 一致的数字/排序语义;再用 json.Indent 美化。
+	// gojq.Marshal 保证与 jq 一致的数字/排序语义;再用 jsontext.Value.Indent 美化。
 	compact, err := gojq.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
-	var buf bytes.Buffer
-	if err := json.Indent(&buf, compact, "", "  "); err != nil {
+	formatted := jsontext.Value(append([]byte(nil), compact...))
+	if err := formatted.Indent(jsontext.WithIndent("  ")); err != nil {
 		return compact, nil //nolint:nilerr // 缩进失败退回紧凑输出,不丢内容
 	}
-	return buf.Bytes(), nil
+	return formatted, nil
 }
 
 // readCapped 读全量但限 maxReadBytes,超限返回 errReadLimit(jq 需整体解析,内存受此软闸约束)。

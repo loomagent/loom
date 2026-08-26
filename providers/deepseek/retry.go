@@ -42,8 +42,7 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 	if errors.Is(err, loom.ErrSensitiveContentRisk) {
 		return loom.ErrorClassPermanent
 	}
-	var apiErr *goseek.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*goseek.APIError](err); ok {
 		switch apiErr.StatusCode {
 		case http.StatusTooManyRequests:
 			return loom.ErrorClassRateLimit
@@ -65,8 +64,8 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 // RetryAfter extracts DeepSeek's response header for shared credential-level
 // cooldown. Both delta-seconds and HTTP-date forms are accepted per RFC 9110.
 func (classifier) RetryAfter(err error) time.Duration {
-	var apiErr *goseek.APIError
-	if !errors.As(err, &apiErr) {
+	apiErr, ok := errors.AsType[*goseek.APIError](err)
+	if !ok {
 		return 0
 	}
 	value := strings.TrimSpace(apiErr.Header.Get("Retry-After"))
@@ -84,6 +83,6 @@ func (classifier) RetryAfter(err error) time.Duration {
 }
 
 func (classifier) IsServiceUnavailable(err error) bool {
-	var apiErr *goseek.APIError
-	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusServiceUnavailable
+	apiErr, ok := errors.AsType[*goseek.APIError](err)
+	return ok && apiErr.StatusCode == http.StatusServiceUnavailable
 }

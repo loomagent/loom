@@ -35,8 +35,7 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 	if apiErr, ok := errors.AsType[*arkmodel.APIError](err); ok {
 		return classifyHTTPStatus(apiErr.HTTPStatusCode)
 	}
-	var reqErr *arkmodel.RequestError
-	if errors.As(err, &reqErr) {
+	if reqErr, ok := errors.AsType[*arkmodel.RequestError](err); ok {
 		return classifyHTTPStatus(reqErr.HTTPStatusCode)
 	}
 	return loom.ErrorClassTransient
@@ -63,6 +62,6 @@ func (classifier) IsServiceUnavailable(err error) bool {
 	if apiErr, ok := errors.AsType[*arkmodel.APIError](err); ok {
 		return apiErr.HTTPStatusCode == 503
 	}
-	var reqErr *arkmodel.RequestError
-	return errors.As(err, &reqErr) && reqErr.HTTPStatusCode == 503
+	reqErr, ok := errors.AsType[*arkmodel.RequestError](err)
+	return ok && reqErr.HTTPStatusCode == 503
 }

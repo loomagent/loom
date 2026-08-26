@@ -2,7 +2,7 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"strconv"
@@ -121,7 +121,7 @@ func NewWriteFile(b Backend) loom.Tool {
 			return failTool(span, err)
 		}
 		span.SetStatus(codes.Ok, "")
-		out, _ := json.Marshal(map[string]any{
+		out, _ := jsonv2.Marshal(map[string]any{
 			"path":  in.Path,
 			"bytes": len(in.Content),
 		})
@@ -152,7 +152,7 @@ func NewEditFile(b Backend) loom.Tool {
 		}
 		span.SetAttributes(attribute.Int64("workspace.replaced", int64(replaced)))
 		span.SetStatus(codes.Ok, "")
-		out, _ := json.Marshal(map[string]any{
+		out, _ := jsonv2.Marshal(map[string]any{
 			"path":     in.Path,
 			"replaced": replaced,
 		})
@@ -218,7 +218,7 @@ func marshalLsResult(infos []FileInfo) string {
 		}
 		entries = append(entries, e)
 	}
-	out, _ := json.Marshal(map[string]any{"entries": entries})
+	out, _ := jsonv2.Marshal(map[string]any{"entries": entries})
 	return string(out)
 }
 

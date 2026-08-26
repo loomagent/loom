@@ -2,7 +2,8 @@ package loomfs
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -60,12 +61,12 @@ func (w *Workspace) appendEvents(events []JournalEvent) error {
 	if err != nil {
 		return fmt.Errorf("loomfs: open journal: %w", err)
 	}
-	enc := json.NewEncoder(f)
+	enc := jsontext.NewEncoder(f)
 	for _, ev := range events {
 		if ev.At.IsZero() {
 			ev.At = time.Now()
 		}
-		if err := enc.Encode(ev); err != nil {
+		if err := jsonv2.MarshalEncode(enc, ev); err != nil {
 			_ = f.Close()
 			return fmt.Errorf("loomfs: write journal: %w", err)
 		}
@@ -122,7 +123,7 @@ func (w *Workspace) loadJournalLocked() ([]JournalEvent, error) {
 	events := make([]JournalEvent, 0, 128)
 	if err := forEachJSONLLine(f, func(line []byte) error {
 		var ev JournalEvent
-		if err := json.Unmarshal(line, &ev); err != nil {
+		if err := jsonv2.Unmarshal(line, &ev); err != nil {
 			return fmt.Errorf("loomfs: parse journal: %w", err)
 		}
 		events = append(events, ev)

@@ -2,7 +2,7 @@ package web
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"slices"
 	"strings"
 	"testing"
@@ -33,7 +33,7 @@ func TestSearchTool(t *testing.T) {
 		t.Fatalf("tool name = %q, err = %v", info.Name, err)
 	}
 	var response SearchResponse
-	if err := json.Unmarshal([]byte(out), &response); err != nil || len(response.Results) != 1 {
+	if err := jsonv2.Unmarshal([]byte(out), &response); err != nil || len(response.Results) != 1 {
 		t.Fatalf("output = %s, err=%v", out, err)
 	}
 }
@@ -86,7 +86,7 @@ func TestReaderTool(t *testing.T) {
 		t.Fatalf("tool name = %q, err = %v", info.Name, err)
 	}
 	var document Document
-	if err := json.Unmarshal([]byte(out), &document); err != nil {
+	if err := jsonv2.Unmarshal([]byte(out), &document); err != nil {
 		t.Fatal(err)
 	}
 	if document.URL != provider.request.URL || document.Markdown != "# Page" {

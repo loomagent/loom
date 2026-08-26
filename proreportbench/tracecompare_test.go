@@ -2,7 +2,7 @@ package proreportbench
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"testing"
 
 	"github.com/loomagent/loom"
@@ -70,7 +70,7 @@ func TestSummarizeProReportJSONLoadsTurn(t *testing.T) {
 			}},
 		}},
 	}
-	data, err := json.Marshal(turn)
+	data, err := jsonv2.Marshal(turn)
 	if err != nil {
 		t.Fatal(err)
 	}

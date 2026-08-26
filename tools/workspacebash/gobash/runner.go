@@ -133,8 +133,7 @@ func classifyRunError(ctx context.Context, err error) (uint64, bool) {
 	if err == nil {
 		return exitOK, false
 	}
-	var status interp.ExitStatus
-	if errors.As(err, &status) {
+	if status, ok := errors.AsType[interp.ExitStatus](err); ok {
 		return uint64(status), false
 	}
 	// 其它内部错误(interp 异常)落成 exit 1。

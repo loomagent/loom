@@ -2,7 +2,8 @@ package loomfs
 
 import (
 	"bufio"
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
 	"net/url"
@@ -46,9 +47,9 @@ func writeJSONL(path string, values anySlice) error {
 	if err != nil {
 		return err
 	}
-	enc := json.NewEncoder(f)
+	enc := jsontext.NewEncoder(f)
 	for _, v := range values.items() {
-		if err := enc.Encode(v); err != nil {
+		if err := jsonv2.MarshalEncode(enc, v); err != nil {
 			_ = f.Close()
 			return err
 		}

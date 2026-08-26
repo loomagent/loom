@@ -2,7 +2,7 @@ package calculator
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"testing"
 )
 
@@ -30,7 +30,7 @@ func TestTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got response
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
+	if err := jsonv2.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Expression != "6 * 7" || got.Result != "42" {

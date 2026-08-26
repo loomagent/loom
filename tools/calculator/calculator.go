@@ -3,7 +3,7 @@ package calculator
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"strings"
 
@@ -50,7 +50,7 @@ func invoke(ctx context.Context, input request) (string, error) {
 	}
 	span.SetAttributes(attribute.String("calculator.result", result))
 
-	out, err := json.Marshal(response{Expression: input.Expression, Result: result})
+	out, err := jsonv2.Marshal(response{Expression: input.Expression, Result: result})
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

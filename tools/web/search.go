@@ -2,7 +2,7 @@ package web
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -105,7 +105,7 @@ func NewSearchTool(searcher WebSearcher, options SearchToolOptions) (loom.Tool, 
 		if err != nil {
 			return "", fmt.Errorf("web search: %w", err)
 		}
-		data, err := json.Marshal(response)
+		data, err := jsonv2.Marshal(response)
 		if err != nil {
 			return "", fmt.Errorf("web search: marshal response: %w", err)
 		}

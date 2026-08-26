@@ -2,7 +2,7 @@ package loom
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 
 	"go.opentelemetry.io/otel"
@@ -271,7 +271,7 @@ func finalizeStepSpan(span trace.Span, fnErr error) {
 // marshalForSpan 把 prompt / completion / messages 序列化成 JSON 字符串,
 // 失败时返 fallback 字符串(不让序列化错误污染整 span)。
 func marshalForSpan(v any) string {
-	b, err := json.Marshal(v)
+	b, err := jsonv2.Marshal(v)
 	if err != nil {
 		return "<marshal error: " + err.Error() + ">"
 	}

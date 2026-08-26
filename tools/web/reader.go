@@ -3,7 +3,7 @@ package web
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/url"
@@ -88,7 +88,7 @@ func NewReaderTool(reader WebReader, options ReaderToolOptions) (loom.Tool, erro
 		if document.URL == "" {
 			document.URL = input.URL
 		}
-		data, err := json.Marshal(document)
+		data, err := jsonv2.Marshal(document)
 		if err != nil {
 			return "", fmt.Errorf("web reader: marshal document: %w", err)
 		}

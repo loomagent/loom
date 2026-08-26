@@ -17,7 +17,7 @@ package ark
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -373,9 +373,9 @@ func translateTools(tools []*loom.ToolInfo) []*arkmodel.Tool {
 		if t == nil {
 			continue
 		}
-		var params json.RawMessage
+		var params []byte
 		if t.Parameters != nil {
-			b, err := json.Marshal(t.Parameters)
+			b, err := jsonv2.Marshal(t.Parameters)
 			if err == nil {
 				params = b
 			}
