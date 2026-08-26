@@ -200,34 +200,6 @@ By default, request errors remain inconclusive and never silently become an
 "unsupported" capability. Applications may provide an `ErrorClassifier` when
 their provider exposes a reliable unsupported-parameter error classification.
 
-## Workspace tools
-
-The workspace package provides `ls`, `read_file`, `write_file`, and `edit_file`
-as Loom tools over a small storage interface. Its in-memory and local filesystem
-backends enforce read-before-write for existing files:
-
-```go
-backend := workspace.NewInMemoryBackend()
-tools := loom.NewToolRegistry()
-if err := workspace.RegisterAll(tools, backend); err != nil {
-	return err
-}
-```
-
-Applications can implement `workspace.Backend` to add their own persistent
-storage without introducing an ORM dependency into Loom.
-
-For a persistent local workspace, pass the root explicitly. The backend confines
-all access beneath that directory, including symbolic-link resolution:
-
-```go
-backend, err := workspace.OpenLocalBackend("./agent-workspace")
-if err != nil {
-	return err
-}
-defer backend.Close()
-```
-
 ## Prompt templates
 
 `prompttemplate` validates that required placeholders occur exactly once before

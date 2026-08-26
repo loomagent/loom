@@ -29,9 +29,6 @@ func TestEnsureBatchDeduplicatesPreservesOrderAndMerges(t *testing.T) {
 	if !refs[0].Created || refs[3].Created {
 		t.Fatalf("Created double counted: %+v", refs)
 	}
-	if refs[0].RawPath != RawPath(1) || refs[3].RawPath != RawPath(1) {
-		t.Fatalf("raw paths = %+v", refs)
-	}
 	sources, err := store.Sources(context.Background(), registry.Namespace())
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +52,7 @@ func TestEnsureBatchUpgradesExistingWithoutReallocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first[0].Seq != second[0].Seq || second[0].Created || second[0].RawPath != "raw/SRC-1.md" {
+	if first[0].Seq != second[0].Seq || second[0].Created {
 		t.Fatalf("refs first=%+v second=%+v", first, second)
 	}
 	sources, _ := store.Sources(context.Background(), "conversation")

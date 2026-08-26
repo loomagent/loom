@@ -75,7 +75,6 @@ type Source struct {
 	Tier          string        `json:"tier,omitempty"`
 	Discovery     Discovery     `json:"discovery,omitempty"`
 	HasContent    bool          `json:"has_content,omitempty"`
-	RawPath       string        `json:"raw_path,omitempty"`
 }
 
 // Candidate is a normalized, unique input passed to Store. Stores may assume
@@ -92,12 +91,11 @@ type StoredRef struct {
 }
 
 // Ref is returned to callers one-for-one with their original inputs. Duplicate
-// inputs share Seq, ID, and RawPath. Created is true only on the first input
+// inputs share Seq and ID. Created is true only on the first input
 // that created the canonical source, so counting Created never double-counts.
 type Ref struct {
 	Seq     uint64 `json:"seq,omitempty"`
 	ID      string `json:"id,omitempty"`
-	RawPath string `json:"raw_path,omitempty"`
 	Created bool   `json:"created,omitempty"`
 }
 

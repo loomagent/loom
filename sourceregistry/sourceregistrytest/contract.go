@@ -86,9 +86,6 @@ func TestStore(t *testing.T, factory Factory) {
 		if updated.Source.Title != "original" || updated.Source.Summary != "summary" || !updated.Source.HasContent {
 			t.Fatalf("merged source = %+v", updated.Source)
 		}
-		if updated.Source.RawPath != sourceregistry.RawPath(updated.Source.Seq) {
-			t.Fatalf("RawPath = %q", updated.Source.RawPath)
-		}
 		if count := countSources(t, store, namespace); count != 1 {
 			t.Fatalf("Count = %d, want 1", count)
 		}
