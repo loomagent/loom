@@ -6,7 +6,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/google/jsonschema-go v0.4.3
-	github.com/kaptinlin/jsonschema v0.9.8
+	github.com/kaptinlin/jsonschema v0.9.9
 	github.com/openai/openai-go/v3 v3.52.0
 	github.com/storynap/goseek v0.0.0-20260426102406-7214f6b941a0
 	github.com/volcengine/volcengine-go-sdk v1.2.40
@@ -41,5 +41,3 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v2 v2.2.8 // indirect
 )
-
-replace github.com/kaptinlin/jsonschema => github.com/solarhell/jsonschema v0.0.0-20260826060629-30fa0f25249b
