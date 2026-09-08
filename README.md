@@ -23,7 +23,7 @@ interfaces.
 go get github.com/loomagent/loom
 ```
 
-Loom currently requires Go 1.26 or newer.
+Loom currently requires Go 1.27 or newer.
 
 ## Quick start
 
