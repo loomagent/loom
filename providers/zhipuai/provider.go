@@ -163,7 +163,7 @@ func (s *streamAdapter) Recv() (*loom.Chunk, error) {
 		return nil, io.EOF
 	}
 	if !s.inner.Next() {
-		defer s.Close()
+		defer func() { _ = s.Close() }() // Preserve the stream terminal error; closing is cleanup.
 		if err := s.inner.Err(); err != nil {
 			return nil, normalizeError(err)
 		}

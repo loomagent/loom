@@ -152,6 +152,8 @@ const (
 // Canonical returns the three-state capability, normalizing legacy default variants.
 func (s ReasoningSupport) Canonical() ReasoningSupport {
 	switch s {
+	case ReasoningSupportNone, ReasoningSupportAlwaysOn, ReasoningSupportToggleable:
+		return s
 	case ReasoningSupportToggleableDefaultOn, ReasoningSupportToggleableDefaultOff:
 		return ReasoningSupportToggleable
 	default:

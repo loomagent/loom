@@ -58,7 +58,7 @@ func TestChatAndToolHistory(t *testing.T) {
 			t.Error("stop must be an array even for a single item")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"model":"glm-5.3","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"reasoning_content":"next","tool_calls":[{"id":"call-2","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18,"prompt_tokens_details":{"cached_tokens":3}}}`)
+		_, _ = fmt.Fprint(w, `{"model":"glm-5.3","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"reasoning_content":"next","tool_calls":[{"id":"call-2","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18,"prompt_tokens_details":{"cached_tokens":3}}}`)
 	})
 	req := request()
 	req.Stop = []string{"END"}
@@ -87,9 +87,9 @@ func TestStreamProtocol(t *testing.T) {
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]},"finish_reason":"tool_calls"}]}`,
 			`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18,"completion_tokens_details":{"reasoning_tokens":4}}}`,
 		} {
-			fmt.Fprintf(w, "data: %s\n\n", chunk)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk)
 		}
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	})
 	req := request()
 	req.Tools = []*loom.ToolInfo{{Name: "lookup"}}
@@ -97,7 +97,7 @@ func TestStreamProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	var reasoning string
 	var usage loom.Usage
 	args := map[int]string{}
@@ -132,16 +132,16 @@ func TestStreamFailuresAndNoReplay(t *testing.T) {
 			m := testModel(t, func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				w.Header().Set("Content-Type", "text/event-stream")
-				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
+				_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
 				if terminal != "" {
-					fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":%q}]}\n\n", terminal)
+					_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":%q}]}\n\n", terminal)
 				}
 			})
 			stream, err := m.Stream(context.Background(), request())
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer stream.Close()
+			defer func() { _ = stream.Close() }()
 			if _, err = stream.Recv(); err != nil {
 				t.Fatal(err)
 			}
@@ -222,7 +222,7 @@ func TestBusinessErrorsAndSDKRetryDisabled(t *testing.T) {
 				w.Header().Set("X-Request-ID", "req-1")
 				w.Header().Set("Retry-After", "2")
 				w.WriteHeader(tc.status)
-				fmt.Fprintf(w, `{"error":{"code":%q,"message":"test failure"}}`, tc.code)
+				_, _ = fmt.Fprintf(w, `{"error":{"code":%q,"message":"test failure"}}`, tc.code)
 			})
 			// raw call isolates SDK retries from Loom's separately tested policy.
 			req, err := m.buildRequest(request())
