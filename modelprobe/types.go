@@ -41,7 +41,9 @@ const (
 	ErrorUnsupported  ErrorDisposition = "unsupported"
 )
 
-// ErrorClassifier classifies provider errors. It is only applied to explicit
+// ErrorClassifier classifies server-side provider errors. Local adapter validation
+// errors are always inconclusive, even when the classifier says unsupported.
+// It is only applied to explicit
 // feature requests; failure of the default-behavior request is always
 // inconclusive. A nil classifier treats every error as inconclusive.
 type ErrorClassifier func(error) ErrorDisposition
@@ -58,6 +60,12 @@ const (
 // Evidence contains machine-readable observations from one request. Response
 // content is truncated because reports are commonly persisted or logged.
 type Evidence struct {
+	// Acceptance is independent of observable reasoning and native semantics.
+	Acceptance          string           `json:"acceptance,omitempty"` // accepted, rejected, local_rejected, unknown
+	RequestedReasoning  ReasoningRequest `json:"requested_reasoning"`
+	SentParameters      map[string]any   `json:"sent_parameters,omitempty"`
+	SentParametersKnown bool             `json:"sent_parameters_known"`
+
 	ReasoningTokensKnown bool              `json:"reasoning_tokens_known"`
 	ReasoningTokens      uint64            `json:"reasoning_tokens,omitempty"`
 	ReasoningContent     bool              `json:"reasoning_content,omitempty"`
@@ -86,9 +94,11 @@ type Coverage struct {
 }
 
 // ObservedCapabilities is the stable JSON representation derived by Probe.
-// AcceptedReasoningEfforts means each parameter was accepted and produced
-// observable reasoning; it does not claim statistically different budgets.
+// In schema v2 AcceptedReasoningEfforts records accepted requests, independently
+// of reasoning evidence. Schema v1 also required observable reasoning.
+// Neither version establishes independently implemented native budgets.
 type ObservedCapabilities struct {
+	ReasoningObservedEfforts []loom.ReasoningEffort    `json:"reasoning_observed_efforts,omitempty"`
 	Reasoning                loom.ReasoningSupport     `json:"reasoning"`
 	AcceptedReasoningEfforts []loom.ReasoningEffort    `json:"accepted_reasoning_efforts"`
 	StructuredOutput         loom.StructuredOutputMode `json:"structured_output"`
@@ -96,19 +106,27 @@ type ObservedCapabilities struct {
 
 // Report is a serializable behavioral capability profile.
 type Report struct {
-	SchemaVersion int                  `json:"schema_version"`
-	Model         string               `json:"model,omitempty"`
-	Observed      ObservedCapabilities `json:"observed"`
-	Coverage      Coverage             `json:"coverage"`
-	Checks        []Check              `json:"checks"`
+	EffortCoverage *EffortCoverage      `json:"effort_coverage,omitempty"`
+	SchemaVersion  int                  `json:"schema_version"`
+	Model          string               `json:"model,omitempty"`
+	Observed       ObservedCapabilities `json:"observed"`
+	Coverage       Coverage             `json:"coverage"`
+	Checks         []Check              `json:"checks"`
 }
 
 // Options controls probing. Calls are deliberately sequential to reduce rate
 // limit pressure and make provider-side behavior easier to audit.
 type Options struct {
 	PerCallTimeout time.Duration
-	// ReasoningEfforts defaults to low, medium, high, and max when nil.
-	// A non-nil empty slice disables effort probing.
+	// DeclaredCapabilities supplies manual/catalog-snapshot effort declarations.
+	// It never changes the synthetic models or fills in business defaults.
+	DeclaredCapabilities *loom.ModelCapabilities
+	// DeclarationSource is an optional provenance label for that snapshot.
+	DeclarationSource     string
+	DeclarationSourceURLs []string
+	// ReasoningEfforts nil uses the known contract, then DeclaredCapabilities.
+	// There is no global candidate list. A non-nil empty slice skips efforts.
+	// Explicit candidates may include aliases for diagnostic experiments.
 	ReasoningEfforts []loom.ReasoningEffort
 	ErrorClassifier  ErrorClassifier
 }
@@ -119,4 +137,34 @@ type Mismatch struct {
 	Field    string `json:"field"`
 	Declared string `json:"declared"`
 	Observed string `json:"observed"`
+}
+
+// EffortCoverage records the exact universe and scope of this audit. A nil value
+// on a historical report means coverage was not recorded; do not upgrade it.
+// CandidateCoverageComplete means all supplied/declaration candidates got
+// accepted/rejected server responses. Complete additionally requires an official
+// model contract: manual/latest aliases retain partial native coverage.
+// Neither flag proves independent native implementations.
+type EffortCoverage struct {
+	CandidateCoverageComplete bool                    `json:"candidate_coverage_complete"`
+	UniverseKnown             bool                    `json:"universe_known"`
+	CandidateSource           string                  `json:"candidate_source"`
+	Source                    string                  `json:"source"`
+	SourceURLs                []string                `json:"source_urls,omitempty"`
+	Contract                  *loom.ReasoningContract `json:"contract,omitempty"`
+	Declared                  []loom.ReasoningEffort  `json:"declared"`
+	Candidates                []loom.ReasoningEffort  `json:"candidates"`
+	Tested                    []loom.ReasoningEffort  `json:"tested"`
+	Untested                  []loom.ReasoningEffort  `json:"untested"`
+	Unresolved                []loom.ReasoningEffort  `json:"unresolved"`
+	Complete                  bool                    `json:"complete"`
+	NativeIndependenceProven  bool                    `json:"native_independence_proven"`
+	Limitations               []string                `json:"limitations"`
+}
+
+// ReasoningRequest is the stable report representation of a requested switch
+// and optional raw effort; SentParameters records actual adapter serialization.
+type ReasoningRequest struct {
+	Mode   loom.ReasoningMode   `json:"mode"`
+	Effort loom.ReasoningEffort `json:"effort,omitempty"`
 }

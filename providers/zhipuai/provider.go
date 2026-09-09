@@ -206,7 +206,8 @@ func (s *streamAdapter) Close() error {
 }
 
 // buildRequest 把 loom.ChatRequest 翻译成 go-openai 请求结构。
-func (m *Model) buildRequest(req loom.ChatRequest) (openai.ChatCompletionNewParams, error) {
+func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewParams, err error) {
+	defer func() { err = loom.LocalRequestError(err) }()
 	messages, err := translateMessages(req.Messages)
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: 翻译 messages: %w", err)
@@ -234,7 +235,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (openai.ChatCompletionNewPara
 	if err := loom.CheckRequestAgainstCapabilities(m.capabilities, req); err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: %w", err)
 	}
-	resolved, err := loom.ResolveReasoning(m.capabilities, req.Reasoning)
+	resolved, err := loom.ResolveModelReasoning("zhipuai", m.name, m.capabilities, req.Reasoning)
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: %w", err)
 	}

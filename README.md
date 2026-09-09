@@ -186,12 +186,55 @@ report, err := modelprobe.Probe(ctx, modelprobe.BuilderFunc(
 		cfg.Capabilities = &capabilities
 		return modelfactory.Build(cfg)
 	},
-), modelprobe.Options{})
+), modelprobe.Options{
+    DeclaredCapabilities: &loom.ModelCapabilities{
+        Reasoning: loom.ReasoningSupportAlwaysOn,
+        ReasoningEfforts: []loom.ReasoningEffort{"minimal", "low", "medium", "high"},
+    },
+    DeclarationSource: "reviewed OpenRouter catalog snapshot",
+    DeclarationSourceURLs: []string{"https://openrouter.ai/api/v1/models"},
+})
 ```
 
 By default, request errors remain inconclusive and never silently become an
 "unsupported" capability. Applications may provide an `ErrorClassifier` when
 their provider exposes a reliable unsupported-parameter error classification.
+Adapter-local validation errors remain inconclusive even with that classifier.
+
+Probe candidates come from `loom.LookupReasoningContract(provider, model)` for
+known exact Ark model IDs, otherwise from `Options.DeclaredCapabilities`.
+There is no fixed effort default. `Options.ReasoningEfforts` can explicitly
+restrict candidates or test compatibility aliases; an empty slice skips them.
+Reports v2 record candidate provenance, tested/untested/unresolved efforts,
+requested controls, actual adapter parameters, request acceptance, and returned
+reasoning evidence separately. `CandidateCoverageComplete` covers the supplied
+request universe; `Complete` additionally requires a documented model contract.
+Neither proves independent native implementations. Unknown/latest-version model
+aliases retain partial native coverage. Historical v1 reports keep their facts;
+missing coverage metadata is never upgraded to a complete audit.
+
+`ReasoningEffort` is an open provider-native string type. Business choices come
+from `ModelCapabilities.ReasoningEfforts`, not the list of Go constants. Use
+`ValidateModelReasoningCapabilities` for save-time validation and
+`ResolveModelReasoning` for request validation. Known aliases produce errors
+naming the equivalent canonical effort; off aliases require explicit disabled
+mode. For Ark GA IDs `deepseek-v4-pro-ga-260813` and
+`deepseek-v4-flash-ga-260731`, canonical efforts are `low/high/max` and `medium`
+is an alias of `low`. Preview IDs `deepseek-v4-pro-260425` and
+`deepseek-v4-flash-260425` have `high/max`. Seed exact IDs have `low/medium/high`;
+`max` aliases `high`. Contracts expose their official source URLs. They do not
+match future versions or infer mappings for private endpoints or aliases such as
+`doubao-seed-evolving-latest-version`.
+
+OpenRouter accepts the gateway wire values `minimal/low/medium/high/xhigh/max`,
+subject to the model's explicit declaration. `minimal` keeps reasoning enabled;
+`exclude` is not a disable control. No runtime model-catalog request is made, no
+provider default fills a missing selection, and no token budget is converted to
+an effort. A declared reasoning model without effort selection uses only the
+explicit switch and rejects invented efforts. Known reasoning models cannot be
+declared `none`: that would omit the disable control and expose server defaults.
+Only isolated models built with `ReasoningProbeCapabilities` bypass contracts to
+observe provider defaults and alias behavior.
 
 ## Prompt templates
 

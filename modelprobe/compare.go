@@ -14,10 +14,20 @@ func Compare(declared loom.ModelCapabilities, report Report) []Mismatch {
 	if report.Coverage.ReasoningSupport && declared.Reasoning.Canonical() != report.Observed.Reasoning.Canonical() {
 		mismatches = append(mismatches, Mismatch{Field: "reasoning_support", Declared: string(declared.Reasoning), Observed: string(report.Observed.Reasoning)})
 	}
-	if report.Coverage.AcceptedReasoningEfforts && report.Observed.Reasoning != loom.ReasoningSupportNone &&
-		!sameEffortSet(declared.ReasoningEfforts, report.Observed.AcceptedReasoningEfforts) {
-		mismatches = append(mismatches, Mismatch{Field: "reasoning_efforts", Declared: joinEfforts(declared.ReasoningEfforts), Observed: joinEfforts(report.Observed.AcceptedReasoningEfforts)})
+	// Legacy reports did not record a candidate universe. Preserve their facts
+	// but never use the old fixed-four coverage flag to infer a complete set.
+	if report.SchemaVersion >= 2 && report.EffortCoverage != nil && report.EffortCoverage.Complete {
+		var accepted []loom.ReasoningEffort
+		for _, effort := range report.Observed.AcceptedReasoningEfforts {
+			if slices.Contains(report.EffortCoverage.Declared, effort) {
+				accepted = append(accepted, effort)
+			}
+		}
+		if !sameEffortSet(declared.ReasoningEfforts, accepted) {
+			mismatches = append(mismatches, Mismatch{Field: "reasoning_efforts", Declared: joinEfforts(declared.ReasoningEfforts), Observed: joinEfforts(accepted)})
+		}
 	}
+
 	if report.Coverage.StructuredOutput && declared.StructuredOutput != report.Observed.StructuredOutput {
 		mismatches = append(mismatches, Mismatch{Field: "structured_output", Declared: string(declared.StructuredOutput), Observed: string(report.Observed.StructuredOutput)})
 	}

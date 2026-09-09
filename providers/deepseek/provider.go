@@ -227,7 +227,8 @@ func (s *streamAdapter) Close() error {
 
 // buildRequest 把 loom.ChatRequest 翻译成 goseek 请求结构。
 // 仅 schema marshal 失败时返错(json.Marshal *jsonschema.Schema 走自定义 MarshalJSON)。
-func (m *Model) buildRequest(req loom.ChatRequest) (goseek.ChatCompletionRequest, error) {
+func (m *Model) buildRequest(req loom.ChatRequest) (_ goseek.ChatCompletionRequest, err error) {
+	defer func() { err = loom.LocalRequestError(err) }()
 	out := goseek.ChatCompletionRequest{
 		Model:       m.name,
 		Messages:    translateMessages(req.Messages),
@@ -246,7 +247,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (goseek.ChatCompletionRequest
 	if err := loom.CheckRequestAgainstCapabilities(m.capabilities, req); err != nil {
 		return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: %w", err)
 	}
-	resolved, err := loom.ResolveReasoning(m.capabilities, req.Reasoning)
+	resolved, err := loom.ResolveModelReasoning("deepseek", m.name, m.capabilities, req.Reasoning)
 	if err != nil {
 		return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: %w", err)
 	}

@@ -37,7 +37,7 @@ func TestResolveReasoningMatrix(t *testing.T) {
 
 		// ===== 非法值 =====
 		{name: "未知Mode", caps: "", mode: "auto", wantErr: "未知 Reasoning.Mode"},
-		{name: "未知Effort", caps: "", mode: ReasoningModeEnabled, effort: "ultra", wantErr: "未知 Reasoning.Effort"},
+		{name: "未知Effort", caps: "", mode: ReasoningModeEnabled, effort: "bad effort", wantErr: "invalid Reasoning.Effort"},
 
 		// ===== Effort 交叉校验 =====
 		{name: "Disabled带Effort矛盾", caps: ReasoningSupportToggleableDefaultOn, mode: ReasoningModeDisabled, effort: ReasoningEffortHigh, wantErr: "矛盾"},
@@ -119,13 +119,9 @@ func TestResolveReasoningEfforts(t *testing.T) {
 		}
 	})
 
-	t.Run("能力未声明档位时透传", func(t *testing.T) {
-		got, err := ResolveReasoning(capsNoEfforts, Reasoning{Mode: ReasoningModeEnabled, Effort: ReasoningEffortMax})
-		if err != nil {
-			t.Fatalf("期望透传成功,实际报错: %v", err)
-		}
-		if got.Effort != ReasoningEffortMax {
-			t.Fatalf("Effort = %q, want max", got.Effort)
+	t.Run("已声明无档位拒绝虚构强度", func(t *testing.T) {
+		if _, err := ResolveReasoning(capsNoEfforts, Reasoning{Mode: ReasoningModeEnabled, Effort: ReasoningEffortMax}); err == nil {
+			t.Fatal("must reject effort on a model declared without effort selection")
 		}
 	})
 
