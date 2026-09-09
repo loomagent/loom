@@ -59,13 +59,13 @@ func LookupReasoningContract(provider, model string) (ReasoningContract, bool) {
 		"doubao-seed-2-0-mini-260215", "doubao-seed-2-0-code-preview-260215",
 		"doubao-seed-1-8-251228", "doubao-seed-1-6-251015", "doubao-seed-character-260628":
 		c.Efforts = []ReasoningEffort{"low", "medium", "high"}
-		c.Aliases = map[ReasoningEffort]ReasoningEffort{"xhigh": "high", "max": "high"}
+		c.Aliases = map[ReasoningEffort]ReasoningEffort{"xhigh": "high", "max": "high"} //nolint:exhaustive // Sparse aliases intentionally exclude canonical efforts and off values.
 	case "deepseek-v4-pro-ga-260813", "deepseek-v4-flash-ga-260731":
 		c.Efforts = []ReasoningEffort{"low", "high", "max"}
-		c.Aliases = map[ReasoningEffort]ReasoningEffort{"medium": "low", "xhigh": "high"}
+		c.Aliases = map[ReasoningEffort]ReasoningEffort{"medium": "low", "xhigh": "high"} //nolint:exhaustive // Sparse aliases intentionally exclude canonical efforts and off values.
 	case "deepseek-v4-pro-260425", "deepseek-v4-flash-260425", "glm-5-2-260617":
 		c.Efforts = []ReasoningEffort{"high", "max"}
-		c.Aliases = map[ReasoningEffort]ReasoningEffort{"low": "high", "medium": "high", "xhigh": "max"}
+		c.Aliases = map[ReasoningEffort]ReasoningEffort{"low": "high", "medium": "high", "xhigh": "max"} //nolint:exhaustive // Sparse aliases intentionally exclude canonical efforts and off values.
 	default:
 		return ReasoningContract{}, false
 	}
@@ -79,8 +79,8 @@ func ValidateModelReasoningCapabilities(provider, model string, caps ModelCapabi
 	if caps.reasoningProbe {
 		return nil
 	}
-	switch caps.Reasoning.Canonical() {
-	case "", ReasoningSupportNone, ReasoningSupportToggleable, ReasoningSupportAlwaysOn:
+	switch caps.Reasoning {
+	case "", ReasoningSupportNone, ReasoningSupportToggleable, ReasoningSupportAlwaysOn, ReasoningSupportToggleableDefaultOn, ReasoningSupportToggleableDefaultOff:
 	default:
 		return fmt.Errorf("loom: unknown reasoning capability %q", caps.Reasoning)
 	}
@@ -122,7 +122,7 @@ func ValidReasoningEffort(effort ReasoningEffort) bool {
 		return false
 	}
 	for _, r := range effort {
-		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' && r != '-' {
 			return false
 		}
 	}

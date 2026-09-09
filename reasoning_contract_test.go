@@ -12,12 +12,12 @@ func TestReasoningContracts(t *testing.T) {
 		efforts []ReasoningEffort
 		aliases map[ReasoningEffort]ReasoningEffort
 	}{
-		{"doubao-seed-evolving", []ReasoningEffort{"low", "medium", "high"}, map[ReasoningEffort]ReasoningEffort{"max": "high", "xhigh": "high"}},
-		{"doubao-seed-2-1-pro-260628", []ReasoningEffort{"low", "medium", "high"}, map[ReasoningEffort]ReasoningEffort{"max": "high"}},
+		{"doubao-seed-evolving", []ReasoningEffort{"low", "medium", "high"}, map[ReasoningEffort]ReasoningEffort{"max": "high", "xhigh": "high"}}, //nolint:exhaustive // Sparse aliases intentionally exclude canonical efforts and off values.
+		{"doubao-seed-2-1-pro-260628", []ReasoningEffort{"low", "medium", "high"}, map[ReasoningEffort]ReasoningEffort{"max": "high"}},            //nolint:exhaustive // Sparse aliases intentionally exclude canonical efforts and off values.
 		{"doubao-seed-2-1-turbo-260628", []ReasoningEffort{"low", "medium", "high"}, nil},
-		{"deepseek-v4-pro-ga-260813", []ReasoningEffort{"low", "high", "max"}, map[ReasoningEffort]ReasoningEffort{"medium": "low", "xhigh": "high"}},
+		{"deepseek-v4-pro-ga-260813", []ReasoningEffort{"low", "high", "max"}, map[ReasoningEffort]ReasoningEffort{"medium": "low", "xhigh": "high"}}, //nolint:exhaustive // Sparse aliases intentionally exclude canonical efforts and off values.
 		{"deepseek-v4-flash-ga-260731", []ReasoningEffort{"low", "high", "max"}, nil},
-		{"deepseek-v4-pro-260425", []ReasoningEffort{"high", "max"}, map[ReasoningEffort]ReasoningEffort{"medium": "high", "xhigh": "max"}},
+		{"deepseek-v4-pro-260425", []ReasoningEffort{"high", "max"}, map[ReasoningEffort]ReasoningEffort{"medium": "high", "xhigh": "max"}}, //nolint:exhaustive // Sparse aliases intentionally exclude canonical efforts and off values.
 		{"deepseek-v4-flash-260425", []ReasoningEffort{"high", "max"}, nil},
 		{"glm-5-2-260617", []ReasoningEffort{"high", "max"}, nil},
 	} {
