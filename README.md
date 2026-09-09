@@ -222,6 +222,9 @@ reasoning requires an explicitly selected effort when the model declares efforts
 disabled reasoning rejects any effort. A confirmed model with no adjustable
 strengths uses only the explicit switch. Imported model records that have not been
 reviewed must set `ReasoningEffortsUnconfirmed: true`; they cannot enable reasoning.
+`OfficialDefaultReasoningEffort` records the reviewed official default. It must
+belong to the declared effort list when supplied. It never fills a missing task
+choice or changes an existing selection.
 Only isolated `ReasoningProbeCapabilities` models intentionally omit controls to
 observe provider defaults. Probe results never change business declarations.
 

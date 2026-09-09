@@ -38,3 +38,18 @@ func TestDeclarationValidationDoesNotInferModelCapabilities(t *testing.T) {
 		t.Fatal("non-reasoning model has efforts")
 	}
 }
+
+func TestOfficialDefaultIsMetadataNotAnImplicitRequestChoice(t *testing.T) {
+	caps := ModelCapabilities{Reasoning: ReasoningSupportToggleable, ReasoningEfforts: []ReasoningEffort{"minimal", "high"}, OfficialDefaultReasoningEffort: "high"}
+	if _, err := ResolveModelReasoning("ark", "manual-model", caps, Reasoning{Mode: ReasoningModeEnabled}); err == nil {
+		t.Fatal("official default silently filled missing task effort")
+	}
+	resolved, err := ResolveModelReasoning("ark", "manual-model", caps, Reasoning{Mode: ReasoningModeEnabled, Effort: "minimal"})
+	if err != nil || resolved.Effort != "minimal" {
+		t.Fatalf("explicit choice replaced: %+v %v", resolved, err)
+	}
+	caps.OfficialDefaultReasoningEffort = "medium"
+	if err := ValidateModelReasoningCapabilities("ark", "manual-model", caps); err == nil {
+		t.Fatal("undeclared official default accepted")
+	}
+}

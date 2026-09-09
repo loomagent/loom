@@ -2,6 +2,7 @@ package loom
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -26,6 +27,9 @@ func ValidateModelReasoningCapabilities(provider, model string, caps ModelCapabi
 			return fmt.Errorf("loom: duplicate declared reasoning effort %q", effort)
 		}
 		seen[effort] = true
+	}
+	if caps.OfficialDefaultReasoningEffort != "" && !slices.Contains(caps.ReasoningEfforts, caps.OfficialDefaultReasoningEffort) {
+		return fmt.Errorf("loom: official default reasoning effort %q is not declared in %v", caps.OfficialDefaultReasoningEffort, caps.ReasoningEfforts)
 	}
 	if caps.Reasoning == ReasoningSupportNone && len(caps.ReasoningEfforts) > 0 {
 		return fmt.Errorf("loom: reasoning=none cannot declare reasoning efforts")

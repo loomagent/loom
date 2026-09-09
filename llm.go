@@ -181,6 +181,9 @@ type ModelCapabilities struct {
 	// programmatic capabilities are declarations; database imports must opt out
 	// until an administrator confirms them. It never selects a default effort.
 	ReasoningEffortsUnconfirmed bool
+
+	// OfficialDefaultReasoningEffort records a reviewed provider default, never a request fallback.
+	OfficialDefaultReasoningEffort ReasoningEffort
 	// MaxOutputTokens 单次输出 token 上限,0 = 未知。
 	MaxOutputTokens uint64
 	// MaxContextTokens 上下文窗口 token 上限,0 = 未知。
