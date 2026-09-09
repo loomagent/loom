@@ -195,7 +195,7 @@ func TestProbeNoFixedFourDefaultOrNativeIndependenceClaim(t *testing.T) {
 	}
 }
 
-func TestProbeContractCoverageSubsetAndAliases(t *testing.T) {
+func TestProbeConfiguredCoverageSubset(t *testing.T) {
 	b := &fakeBuilder{name: "ark/deepseek-v4-pro-ga-260813", handler: func(_ loom.ModelCapabilities, _ loom.ChatRequest) (*loom.ChatResponse, error) {
 		return reasoningResponse(2), nil
 	}}
@@ -209,12 +209,12 @@ func TestProbeContractCoverageSubsetAndAliases(t *testing.T) {
 		{[]loom.ReasoningEffort{}, false, []loom.ReasoningEffort{"low", "high", "max"}},
 		{[]loom.ReasoningEffort{"low", "high", "max", "medium"}, true, nil},
 	} {
-		r, err := Probe(context.Background(), b, Options{ReasoningEfforts: tc.efforts})
+		r, err := Probe(context.Background(), b, Options{ReasoningEfforts: tc.efforts, DeclaredCapabilities: &loom.ModelCapabilities{Reasoning: loom.ReasoningSupportToggleable, ReasoningEfforts: []loom.ReasoningEffort{"low", "high", "max"}}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		c := r.EffortCoverage
-		if c.Complete != tc.complete || !slices.Equal(c.Untested, tc.missing) || c.NativeIndependenceProven || c.Contract.Aliases["medium"] != "low" {
+		if c.Complete != tc.complete || !slices.Equal(c.Untested, tc.missing) || c.NativeIndependenceProven {
 			t.Fatalf("coverage=%+v", c)
 		}
 		if tc.efforts == nil && !slices.Equal(c.Candidates, []loom.ReasoningEffort{"low", "high", "max"}) {
@@ -236,7 +236,7 @@ func TestProbeRequestsAcceptedWithoutNativeOrReasoningProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(r.Observed.AcceptedReasoningEfforts, []loom.ReasoningEffort{"minimal", "xhigh"}) || len(r.Observed.ReasoningObservedEfforts) != 0 || !r.EffortCoverage.CandidateCoverageComplete || r.EffortCoverage.Complete || r.EffortCoverage.NativeIndependenceProven {
+	if !slices.Equal(r.Observed.AcceptedReasoningEfforts, []loom.ReasoningEffort{"minimal", "xhigh"}) || len(r.Observed.ReasoningObservedEfforts) != 0 || !r.EffortCoverage.CandidateCoverageComplete || !r.EffortCoverage.Complete || r.EffortCoverage.NativeIndependenceProven {
 		t.Fatalf("report=%+v", r)
 	}
 	if r.Checks[1].Outcome != OutcomeError {
@@ -279,13 +279,13 @@ func TestProbeCancellationPreservesUncoveredEfforts(t *testing.T) {
 		}
 		return reasoningResponse(1), nil
 	}}
-	r, err := Probe(ctx, b, Options{})
+	r, err := Probe(ctx, b, Options{DeclaredCapabilities: &loom.ModelCapabilities{Reasoning: loom.ReasoningSupportToggleable, ReasoningEfforts: []loom.ReasoningEffort{"low", "high", "max"}}})
 	if !errors.Is(err, context.Canceled) || r.EffortCoverage.Complete || !slices.Equal(r.EffortCoverage.Untested, []loom.ReasoningEffort{"high", "max"}) {
 		t.Fatalf("report=%+v error=%v", r, err)
 	}
 }
 
-func TestLatestAliasRetainsManualPartialNativeCoverage(t *testing.T) {
+func TestModelAliasUsesSameManualCoverageRules(t *testing.T) {
 	b := &fakeBuilder{name: "ark/doubao-seed-evolving-latest-version", handler: func(_ loom.ModelCapabilities, _ loom.ChatRequest) (*loom.ChatResponse, error) {
 		return reasoningResponse(1), nil
 	}}
@@ -295,7 +295,7 @@ func TestLatestAliasRetainsManualPartialNativeCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := r.EffortCoverage
-	if !c.CandidateCoverageComplete || c.Complete || c.Contract != nil || c.Source != "model_declaration" || c.NativeIndependenceProven {
+	if !c.CandidateCoverageComplete || !c.Complete || c.Source != "model_declaration" || c.NativeIndependenceProven {
 		t.Fatalf("inferred official alias semantics: %+v", c)
 	}
 }

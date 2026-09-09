@@ -261,20 +261,8 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ goseek.ChatCompletionReque
 	default:
 		return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: 未知 reasoning send %q", resolved.Send)
 	}
-	switch resolved.Effort {
-	case loom.ReasoningEffortHigh:
-		out.ReasoningEffort = goseek.ReasoningEffortHigh
-	case loom.ReasoningEffortMax:
-		out.ReasoningEffort = goseek.ReasoningEffortMax
-	case loom.ReasoningEffortLow, loom.ReasoningEffortMedium:
-		// deepseek API 只有 high/max 两档(doubao 专属档位),正常情况下
-		// ResolveReasoning 已按 capabilities.ReasoningEfforts 提前拦截。
-		return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: deepseek 不支持 reasoning effort %q(支持 high/max)", resolved.Effort)
-	case loom.ReasoningEffortDefault:
-		// 不传,goseek 用默认
-	default:
-		return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: 未知 reasoning effort %q", resolved.Effort)
-	}
+	out.ReasoningEffort = goseek.ReasoningEffort(resolved.Effort)
+
 	if req.StructuredOutput != nil {
 		switch req.StructuredOutput.Mode {
 		case loom.StructuredOutputJSONObject:

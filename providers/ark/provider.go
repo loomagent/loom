@@ -228,6 +228,8 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ arkmodel.CreateChatComplet
 	default:
 		return arkmodel.CreateChatCompletionRequest{}, fmt.Errorf("loom/ark: 未知 reasoning send %q", resolved.Send)
 	}
+	// Raw effort is administrator-declared; service_tier is a separate parameter.
+	// Reference: https://console.volcengine.com/ark/region:cn-beijing/docs/82379/2662855?lang=zh
 	if resolved.Effort != loom.ReasoningEffortDefault {
 		out.ReasoningEffort = new(arkmodel.ReasoningEffort(resolved.Effort))
 	}

@@ -118,13 +118,13 @@ type Report struct {
 // limit pressure and make provider-side behavior easier to audit.
 type Options struct {
 	PerCallTimeout time.Duration
-	// DeclaredCapabilities supplies manual/catalog-snapshot effort declarations.
+	// DeclaredCapabilities supplies administrator-supplied effort declarations.
 	// It never changes the synthetic models or fills in business defaults.
 	DeclaredCapabilities *loom.ModelCapabilities
 	// DeclarationSource is an optional provenance label for that snapshot.
 	DeclarationSource     string
 	DeclarationSourceURLs []string
-	// ReasoningEfforts nil uses the known contract, then DeclaredCapabilities.
+	// ReasoningEfforts nil uses DeclaredCapabilities.
 	// There is no global candidate list. A non-nil empty slice skips efforts.
 	// Explicit candidates may include aliases for diagnostic experiments.
 	ReasoningEfforts []loom.ReasoningEffort
@@ -142,24 +142,23 @@ type Mismatch struct {
 // EffortCoverage records the exact universe and scope of this audit. A nil value
 // on a historical report means coverage was not recorded; do not upgrade it.
 // CandidateCoverageComplete means all supplied/declaration candidates got
-// accepted/rejected server responses. Complete additionally requires an official
-// model contract: manual/latest aliases retain partial native coverage.
+// accepted/rejected server responses. Complete means all configured candidates
+// were tested; it does not certify native model semantics.
 // Neither flag proves independent native implementations.
 type EffortCoverage struct {
-	CandidateCoverageComplete bool                    `json:"candidate_coverage_complete"`
-	UniverseKnown             bool                    `json:"universe_known"`
-	CandidateSource           string                  `json:"candidate_source"`
-	Source                    string                  `json:"source"`
-	SourceURLs                []string                `json:"source_urls,omitempty"`
-	Contract                  *loom.ReasoningContract `json:"contract,omitempty"`
-	Declared                  []loom.ReasoningEffort  `json:"declared"`
-	Candidates                []loom.ReasoningEffort  `json:"candidates"`
-	Tested                    []loom.ReasoningEffort  `json:"tested"`
-	Untested                  []loom.ReasoningEffort  `json:"untested"`
-	Unresolved                []loom.ReasoningEffort  `json:"unresolved"`
-	Complete                  bool                    `json:"complete"`
-	NativeIndependenceProven  bool                    `json:"native_independence_proven"`
-	Limitations               []string                `json:"limitations"`
+	CandidateCoverageComplete bool                   `json:"candidate_coverage_complete"`
+	UniverseKnown             bool                   `json:"universe_known"`
+	CandidateSource           string                 `json:"candidate_source"`
+	Source                    string                 `json:"source"`
+	SourceURLs                []string               `json:"source_urls,omitempty"`
+	Declared                  []loom.ReasoningEffort `json:"declared"`
+	Candidates                []loom.ReasoningEffort `json:"candidates"`
+	Tested                    []loom.ReasoningEffort `json:"tested"`
+	Untested                  []loom.ReasoningEffort `json:"untested"`
+	Unresolved                []loom.ReasoningEffort `json:"unresolved"`
+	Complete                  bool                   `json:"complete"`
+	NativeIndependenceProven  bool                   `json:"native_independence_proven"`
+	Limitations               []string               `json:"limitations"`
 }
 
 // ReasoningRequest is the stable report representation of a requested switch

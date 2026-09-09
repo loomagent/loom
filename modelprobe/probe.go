@@ -358,14 +358,7 @@ func outcomeForCheckError(name string, err error, classify ErrorClassifier) Outc
 
 func effortCoverage(name string, options Options) *EffortCoverage {
 	c := &EffortCoverage{Source: "unknown", Limitations: []string{"Request acceptance and returned reasoning do not prove independent native efforts."}}
-	provider, model := loom.SplitModelName(name)
-	if contract, ok := loom.LookupReasoningContract(provider, model); ok {
-		c.UniverseKnown = true
-		c.Contract = &contract
-		c.Source = contract.Source
-		c.SourceURLs = slices.Clone(contract.SourceURLs)
-		c.Declared = slices.Clone(contract.Efforts)
-	} else if options.DeclaredCapabilities != nil {
+	if options.DeclaredCapabilities != nil {
 		c.UniverseKnown = options.DeclaredCapabilities.Reasoning != "" || options.DeclaredCapabilities.ReasoningEfforts != nil
 		c.Source = "model_declaration"
 		if options.DeclarationSource != "" {
@@ -373,9 +366,9 @@ func effortCoverage(name string, options Options) *EffortCoverage {
 		}
 		c.SourceURLs = slices.Clone(options.DeclarationSourceURLs)
 		c.Declared = slices.Clone(options.DeclaredCapabilities.ReasoningEfforts)
-		c.Limitations = append(c.Limitations, "Manual or gateway declarations have partial/unknown native coverage; they are not independently verified native semantics.")
+		c.Limitations = append(c.Limitations, "Only administrator-supplied efforts are tested; successful calls do not certify native semantics.")
 	} else {
-		c.Limitations = append(c.Limitations, "No model contract or effort declaration; native effort coverage is unknown.")
+		c.Limitations = append(c.Limitations, "No explicit effort declaration; no effort candidates will be guessed.")
 	}
 	c.CandidateSource = c.Source
 	c.Candidates = slices.Clone(c.Declared)
@@ -398,7 +391,7 @@ func finalizeEffortCoverage(report *Report) {
 		}
 	}
 	c.CandidateCoverageComplete = c.UniverseKnown && len(c.Untested) == 0 && len(c.Unresolved) == 0
-	c.Complete = c.Contract != nil && c.CandidateCoverageComplete
+	c.Complete = c.CandidateCoverageComplete
 	report.Coverage.AcceptedReasoningEfforts = c.CandidateCoverageComplete
 }
 

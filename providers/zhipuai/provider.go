@@ -301,12 +301,8 @@ func translateReasoning(resolved loom.ResolvedReasoning) (map[string]any, error)
 	default:
 		return nil, fmt.Errorf("unknown reasoning send %q", resolved.Send)
 	}
-	switch resolved.Effort {
-	case loom.ReasoningEffortDefault:
-	case loom.ReasoningEffortLow, loom.ReasoningEffortMedium, loom.ReasoningEffortHigh, loom.ReasoningEffortMax:
+	if resolved.Effort != "" {
 		extra["reasoning_effort"] = string(resolved.Effort)
-	default:
-		return nil, fmt.Errorf("unknown reasoning effort %q", resolved.Effort)
 	}
 	return extra, nil
 }

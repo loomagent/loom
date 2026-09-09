@@ -176,6 +176,14 @@ type ModelCapabilities struct {
 	Reasoning ReasoningSupport
 	// ReasoningEfforts 支持的推理强度档位,空 = 不支持调档。
 	ReasoningEfforts []ReasoningEffort
+
+	// ReasoningEffortsUnconfirmed marks imported, unreviewed metadata. Explicit
+	// programmatic capabilities are declarations; database imports must opt out
+	// until an administrator confirms them. It never selects a default effort.
+	ReasoningEffortsUnconfirmed bool
+
+	// OfficialDefaultReasoningEffort records a reviewed provider default, never a request fallback.
+	OfficialDefaultReasoningEffort ReasoningEffort
 	// MaxOutputTokens 单次输出 token 上限,0 = 未知。
 	MaxOutputTokens uint64
 	// MaxContextTokens 上下文窗口 token 上限,0 = 未知。
@@ -277,6 +285,10 @@ func CheckRequestAgainstCapabilities(caps ModelCapabilities, req ChatRequest) er
 //   - 声明与能力矛盾(none×enabled / always_on×disabled / 档位越界)报错而非静默忽略;
 //   - 能力未声明(caps.Reasoning=="")只做必传校验,纯透传。
 func ResolveReasoning(caps ModelCapabilities, r Reasoning) (ResolvedReasoning, error) {
+	if r.Mode == ReasoningModeEnabled && caps.ReasoningEffortsUnconfirmed {
+		return ResolvedReasoning{}, fmt.Errorf("loom: 原生推理档位尚未由管理员确认，不能开启推理")
+	}
+
 	switch r.Mode {
 	case ReasoningModeEnabled, ReasoningModeDisabled:
 		// 合法,继续
