@@ -11,7 +11,7 @@ import (
 // and a probe report. Fields without coverage are intentionally ignored.
 func Compare(declared loom.ModelCapabilities, report Report) []Mismatch {
 	var mismatches []Mismatch
-	if report.Coverage.ReasoningSupport && declared.Reasoning != report.Observed.Reasoning {
+	if report.Coverage.ReasoningSupport && declared.Reasoning.Canonical() != report.Observed.Reasoning.Canonical() {
 		mismatches = append(mismatches, Mismatch{Field: "reasoning_support", Declared: string(declared.Reasoning), Observed: string(report.Observed.Reasoning)})
 	}
 	if report.Coverage.AcceptedReasoningEfforts && report.Observed.Reasoning != loom.ReasoningSupportNone &&

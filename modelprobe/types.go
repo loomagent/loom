@@ -58,11 +58,12 @@ const (
 // Evidence contains machine-readable observations from one request. Response
 // content is truncated because reports are commonly persisted or logged.
 type Evidence struct {
-	ReasoningTokens  uint64            `json:"reasoning_tokens,omitempty"`
-	ReasoningContent bool              `json:"reasoning_content,omitempty"`
-	FinishReason     loom.FinishReason `json:"finish_reason,omitempty"`
-	ResponsePreview  string            `json:"response_preview,omitempty"`
-	Error            string            `json:"error,omitempty"`
+	ReasoningTokensKnown bool              `json:"reasoning_tokens_known"`
+	ReasoningTokens      uint64            `json:"reasoning_tokens,omitempty"`
+	ReasoningContent     bool              `json:"reasoning_content,omitempty"`
+	FinishReason         loom.FinishReason `json:"finish_reason,omitempty"`
+	ResponsePreview      string            `json:"response_preview,omitempty"`
+	Error                string            `json:"error,omitempty"`
 }
 
 // Check records one request and its interpretation. Positive means the

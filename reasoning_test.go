@@ -129,13 +129,32 @@ func TestResolveReasoningEfforts(t *testing.T) {
 		}
 	})
 
-	t.Run("不带Effort合法", func(t *testing.T) {
-		got, err := ResolveReasoning(capsWithEfforts, Reasoning{Mode: ReasoningModeEnabled})
-		if err != nil {
-			t.Fatalf("期望成功,实际报错: %v", err)
-		}
-		if got.Effort != ReasoningEffortDefault {
-			t.Fatalf("Effort = %q, want 空", got.Effort)
+	t.Run("已声明档位必须显式选择", func(t *testing.T) {
+		if _, err := ResolveReasoning(capsWithEfforts, Reasoning{Mode: ReasoningModeEnabled}); err == nil {
+			t.Fatal("missing effort must fail")
 		}
 	})
+	t.Run("探测能力未声明时允许省略", func(t *testing.T) {
+		if _, err := ResolveReasoning(ModelCapabilities{}, Reasoning{Mode: ReasoningModeEnabled}); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestToggleableCanonicalCompatibility(t *testing.T) {
+	for _, support := range []ReasoningSupport{ReasoningSupportToggleable, ReasoningSupportToggleableDefaultOn, ReasoningSupportToggleableDefaultOff} {
+		if support.Canonical() != ReasoningSupportToggleable {
+			t.Fatalf("canonical(%q)", support)
+		}
+		caps := ModelCapabilities{Reasoning: support, ReasoningEfforts: []ReasoningEffort{ReasoningEffortLow}}
+		if _, err := ResolveReasoning(caps, Reasoning{Mode: ReasoningModeEnabled}); err == nil {
+			t.Fatal("missing effort accepted")
+		}
+		if _, err := ResolveReasoning(caps, Reasoning{Mode: ReasoningModeEnabled, Effort: ReasoningEffortLow}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ResolveReasoning(caps, Reasoning{Mode: ReasoningModeDisabled}); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

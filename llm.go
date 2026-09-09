@@ -72,7 +72,9 @@ type Usage struct {
 	CompletionTokens uint64
 	CachedTokens     uint64
 	ReasoningTokens  uint64
-	TotalTokens      uint64
+	// ReasoningTokensKnown distinguishes an explicit zero from missing provider telemetry.
+	ReasoningTokensKnown bool
+	TotalTokens          uint64
 }
 
 // ReasoningEffort 推理预算等级。具体含义由 provider 翻译;
@@ -133,17 +135,29 @@ const (
 	StructuredOutputJSONSchema  StructuredOutputMode = "json_schema" // 可传 JSON Schema
 )
 
-// ReasoningSupport 模型推理支持形态(四态)。
-// 四态合一建模而非拆 supports + default_on 两个 bool,
-// 避免出现「不支持推理但默认开启」的非法组合。
+// ReasoningSupport describes whether reasoning is unsupported, required, or toggleable.
+// Provider defaults are diagnostic evidence, not application configuration.
 type ReasoningSupport string
 
 const (
-	ReasoningSupportNone                 ReasoningSupport = "none"                   // 不支持推理
-	ReasoningSupportAlwaysOn             ReasoningSupport = "always_on"              // 永远推理,不可关
-	ReasoningSupportToggleableDefaultOn  ReasoningSupport = "toggleable_default_on"  // 可开关,服务端默认开
-	ReasoningSupportToggleableDefaultOff ReasoningSupport = "toggleable_default_off" // 可开关,服务端默认关
+	ReasoningSupportNone       ReasoningSupport = "none"
+	ReasoningSupportAlwaysOn   ReasoningSupport = "always_on"
+	ReasoningSupportToggleable ReasoningSupport = "toggleable"
+	// Deprecated: use ReasoningSupportToggleable. Accepted for backwards compatibility.
+	ReasoningSupportToggleableDefaultOn ReasoningSupport = "toggleable_default_on"
+	// Deprecated: use ReasoningSupportToggleable. Accepted for backwards compatibility.
+	ReasoningSupportToggleableDefaultOff ReasoningSupport = "toggleable_default_off"
 )
+
+// Canonical returns the three-state capability, normalizing legacy default variants.
+func (s ReasoningSupport) Canonical() ReasoningSupport {
+	switch s {
+	case ReasoningSupportToggleableDefaultOn, ReasoningSupportToggleableDefaultOff:
+		return ReasoningSupportToggleable
+	default:
+		return s
+	}
+}
 
 // ModelCapabilities 是模型在初始化时声明的能力。
 //
@@ -280,13 +294,16 @@ func ResolveReasoning(caps ModelCapabilities, r Reasoning) (ResolvedReasoning, e
 		switch caps.Reasoning {
 		case ReasoningSupportNone:
 			return ResolvedReasoning{}, fmt.Errorf("loom: 模型不支持推理(reasoning_support=none),不能要求 enabled")
-		case ReasoningSupportAlwaysOn,
+		case ReasoningSupportAlwaysOn, ReasoningSupportToggleable,
 			ReasoningSupportToggleableDefaultOn,
 			ReasoningSupportToggleableDefaultOff,
 			"":
 			// 显式发送 enabled(always_on 时无害且更显式;能力未声明时透传)
 		default:
 			return ResolvedReasoning{}, fmt.Errorf("loom: 未知 reasoning_support %q", caps.Reasoning)
+		}
+		if r.Effort == ReasoningEffortDefault && len(caps.ReasoningEfforts) > 0 {
+			return ResolvedReasoning{}, fmt.Errorf("loom: 启用推理时必须显式指定 reasoning effort (支持: %v)", caps.ReasoningEfforts)
 		}
 		if r.Effort != ReasoningEffortDefault &&
 			len(caps.ReasoningEfforts) > 0 &&
@@ -305,7 +322,7 @@ func ResolveReasoning(caps ModelCapabilities, r Reasoning) (ResolvedReasoning, e
 			return ResolvedReasoning{Send: ReasoningSendOmit}, nil
 		case ReasoningSupportAlwaysOn:
 			return ResolvedReasoning{}, fmt.Errorf("loom: 该模型推理不可关闭(reasoning_support=always_on),不能要求 disabled")
-		case ReasoningSupportToggleableDefaultOn,
+		case ReasoningSupportToggleable, ReasoningSupportToggleableDefaultOn,
 			ReasoningSupportToggleableDefaultOff,
 			"":
 			return ResolvedReasoning{Send: ReasoningSendDisabled}, nil

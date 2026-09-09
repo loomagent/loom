@@ -8,7 +8,7 @@ import (
 )
 
 func TestProviderValues(t *testing.T) {
-	want := []Provider{ProviderArk, ProviderDeepSeek, ProviderOpenRouter}
+	want := []Provider{ProviderArk, ProviderDeepSeek, ProviderOpenRouter, ProviderZhipuAI}
 	got := ProviderValues()
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ProviderValues() = %v, want %v", got, want)

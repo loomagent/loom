@@ -14,6 +14,7 @@ import (
 	"github.com/loomagent/loom/providers/ark"
 	"github.com/loomagent/loom/providers/deepseek"
 	"github.com/loomagent/loom/providers/openrouter"
+	"github.com/loomagent/loom/providers/zhipuai"
 )
 
 // ErrInvalidConfig reports configuration that cannot construct a model.
@@ -61,6 +62,8 @@ func Build(cfg Config) (loom.ChatModel, error) {
 		err   error
 	)
 	switch cfg.Provider {
+	case ProviderZhipuAI:
+		model, err = zhipuai.New(zhipuai.Config{APIKey: cfg.APIKey, ModelName: cfg.Model, BaseURL: cfg.BaseURL, Retry: cfg.Retry, Capabilities: cfg.Capabilities})
 	case ProviderArk:
 		model, err = ark.New(ark.Config{
 			APIKey:       cfg.APIKey,
