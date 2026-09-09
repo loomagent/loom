@@ -45,7 +45,20 @@ func (e *APIError) RejectsCapability(field string) bool {
 		return false
 	}
 	msg := strings.ToLower(e.Message)
-	if !strings.Contains(msg, strings.ToLower(field)) {
+	fieldNames := []string{strings.ToLower(field)}
+	switch field {
+	case "thinking":
+		fieldNames = append(fieldNames, "思考", "推理开关")
+	case "reasoning_effort":
+		fieldNames = append(fieldNames, "推理强度", "思考强度")
+	case "response_format":
+		fieldNames = append(fieldNames, "响应格式", "输出格式")
+	}
+	matched := false
+	for _, name := range fieldNames {
+		matched = matched || strings.Contains(msg, name)
+	}
+	if !matched {
 		return false
 	}
 	for _, marker := range []string{"not support", "unsupported", "不支持", "only support", "仅支持", "invalid", "非法", "invalid value"} {

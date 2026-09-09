@@ -252,3 +252,13 @@ func TestCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLocalizedCapabilityRejection(t *testing.T) {
+	err := &APIError{StatusCode: 400, Code: "1210", Message: "该模型始终思考，不支持关闭思考；请使用 low、high 或 max。"}
+	if !err.RejectsCapability("thinking") {
+		t.Fatal("localized thinking rejection not recognized")
+	}
+	if err.RejectsCapability("reasoning_effort") || err.RejectsCapability("response_format") {
+		t.Fatal("unrelated capability rejected")
+	}
+}
