@@ -17,6 +17,7 @@ var ErrInvalidProvider = errors.New("modelfactory: invalid provider")
 type Provider string
 
 const (
+	ProviderZhipuAI    Provider = "zhipuai"
 	ProviderArk        Provider = "ark"
 	ProviderDeepSeek   Provider = "deepseek"
 	ProviderOpenRouter Provider = "openrouter"
@@ -26,6 +27,7 @@ var providerValues = [...]Provider{
 	ProviderArk,
 	ProviderDeepSeek,
 	ProviderOpenRouter,
+	ProviderZhipuAI,
 }
 
 var (
@@ -41,7 +43,7 @@ func (p Provider) String() string {
 // Valid reports whether p is one of the providers supported by Build.
 func (p Provider) Valid() bool {
 	switch p {
-	case ProviderArk, ProviderDeepSeek, ProviderOpenRouter:
+	case ProviderArk, ProviderDeepSeek, ProviderOpenRouter, ProviderZhipuAI:
 		return true
 	default:
 		return false

@@ -15,7 +15,7 @@ interfaces.
 - Fan-out to multiple pluggable `Sink` implementations
 - Provider-neutral `ChatModel` abstraction
 - OpenTelemetry tracing with content capture disabled by default
-- Built-in providers for Ark, DeepSeek, and OpenRouter
+- Built-in providers for Ark, DeepSeek, OpenRouter, and Zhipu AI
 
 ## Install
 
@@ -315,3 +315,54 @@ change between minor versions. Production users should pin an exact version.
 go test ./...
 go vet ./...
 ```
+
+## Zhipu AI (domestic pay-as-you-go API)
+
+Use `modelfactory.ProviderZhipuAI` (`zhipuai`) or `providers/zhipuai.New`.
+The default endpoint is `https://open.bigmodel.cn/api/paas/v4`; this integration
+covers the domestic Chat Completions API, not Z.AI or Coding Plan.
+
+```go
+model, err := modelfactory.Build(modelfactory.Config{
+    Provider: modelfactory.ProviderZhipuAI,
+    APIKey: os.Getenv("ZHIPU_API_KEY"),
+    Model: "glm-5.3",
+    Capabilities: &loom.ModelCapabilities{
+        Reasoning: loom.ReasoningSupportAlwaysOn,
+        ReasoningEfforts: []loom.ReasoningEffort{
+            loom.ReasoningEffortLow, loom.ReasoningEffortHigh, loom.ReasoningEffortMax,
+        },
+        StructuredOutput: loom.StructuredOutputJSONObject,
+    },
+})
+if err != nil {
+    return err
+}
+response, err := model.Chat(ctx, loom.ChatRequest{
+    Messages: []loom.Message{{Role: loom.RoleUser, Content: "Explain your answer briefly."}},
+    Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortLow},
+})
+// Handle err and consume response.
+```
+
+GLM-5.3's documented reasoning modes are always-on with low/high/max effort.
+Capabilities are caller supplied; a nil capability declaration forwards explicit
+controls for probing instead of hardcoding behavior based on a model name.
+The provider supports JSON Object output and automatic function selection;
+JSON Schema and forced tool selection return `loom.ErrUnsupportedCapability`.
+It preserves `reasoning_content` across tool calls and enables `tool_stream`
+for streaming tool requests. Missing reasoning-token telemetry is not evidence
+that thinking is disabled (`Usage.ReasoningTokensKnown` distinguishes missing
+telemetry from an explicit zero).
+
+SDK retries are disabled so Loom owns retry budgets. `zhipuai.APIError` retains
+HTTP status and business code; balance errors such as 1113 fail immediately,
+1302 uses bounded rate-limit backoff, and 1305 uses finite transient retries.
+See [Zhipu API documentation](https://docs.bigmodel.cn/cn/api/introduction) and
+[GLM-5.3](https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3).
+
+Reasoning capabilities use three states: `none`, `always_on`, and `toggleable`.
+Legacy `toggleable_default_on/off` values remain accepted and normalize through
+`ReasoningSupport.Canonical()`. Application requests explicitly select reasoning;
+when declared effort levels exist, enabling reasoning also requires an explicit
+supported effort. Probe reports retain the server-default observation separately.

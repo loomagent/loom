@@ -75,7 +75,7 @@ func TestProbeBuildsSyntheticModelsAndDerivesCapabilities(t *testing.T) {
 	if report.SchemaVersion != 1 || report.Model != "fake/model" {
 		t.Fatalf("report identity = %+v", report)
 	}
-	if report.Observed.Reasoning != loom.ReasoningSupportToggleableDefaultOn || !report.Coverage.ReasoningSupport {
+	if report.Observed.Reasoning != loom.ReasoningSupportToggleable || !report.Coverage.ReasoningSupport {
 		t.Fatalf("reasoning = %q coverage=%+v", report.Observed.Reasoning, report.Coverage)
 	}
 	wantEfforts := []loom.ReasoningEffort{loom.ReasoningEffortLow, loom.ReasoningEffortHigh}
@@ -134,8 +134,8 @@ func TestDeriveReasoningSupport(t *testing.T) {
 		defaultOn, enable, disable bool
 		want                       loom.ReasoningSupport
 	}{
-		{true, true, true, loom.ReasoningSupportToggleableDefaultOn},
-		{false, true, true, loom.ReasoningSupportToggleableDefaultOff},
+		{true, true, true, loom.ReasoningSupportToggleable},
+		{false, true, true, loom.ReasoningSupportToggleable},
 		{true, true, false, loom.ReasoningSupportAlwaysOn},
 		{false, false, false, loom.ReasoningSupportNone},
 	}

@@ -16,6 +16,11 @@ func TestBuild(t *testing.T) {
 		wantName string
 	}{
 		{
+			name:     "zhipuai",
+			cfg:      Config{Provider: ProviderZhipuAI, APIKey: "key", Model: "glm-5.3", Capabilities: caps},
+			wantName: "zhipuai/glm-5.3",
+		},
+		{
 			name: "ark",
 			cfg: Config{
 				Provider:     ProviderArk,
@@ -71,6 +76,7 @@ func TestBuildRejectsInvalidConfig(t *testing.T) {
 		{name: "zero provider", cfg: Config{APIKey: "key"}, wantErr: ErrInvalidProvider},
 		{name: "unknown provider", cfg: Config{Provider: "other", APIKey: "key"}, wantErr: ErrInvalidProvider},
 		{name: "missing API key", cfg: Config{Provider: ProviderDeepSeek}, wantErr: ErrInvalidConfig},
+		{name: "zhipuai missing model", cfg: Config{Provider: ProviderZhipuAI, APIKey: "key"}, wantErr: ErrInvalidConfig},
 		{name: "ark missing model", cfg: Config{Provider: ProviderArk, APIKey: "key"}, wantErr: ErrInvalidConfig},
 		{name: "openrouter missing model", cfg: Config{Provider: ProviderOpenRouter, APIKey: "key"}, wantErr: ErrInvalidConfig},
 	}

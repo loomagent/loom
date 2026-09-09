@@ -11,6 +11,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/loomagent/loom"
+	"github.com/loomagent/loom/providers/zhipuai"
 )
 
 const (
@@ -138,12 +139,12 @@ func probeReasoning(ctx context.Context, model loom.ChatModel, timeout time.Dura
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	response, err := model.Chat(callCtx, loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "What is 1 + 1? Reply briefly."}},
+		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "Three boxes are labeled apples, oranges, and mixed; every label is wrong. Explain how drawing one fruit from one box identifies all three boxes."}},
 		Reasoning: reasoning,
 	})
 	check := Check{Name: name, DurationMS: time.Since(started).Milliseconds()}
 	if err != nil {
-		check.Outcome = outcomeForError(err, classify)
+		check.Outcome = outcomeForCheckError(name, err, classify)
 		check.Evidence.Error = err.Error()
 		return check
 	}
@@ -152,11 +153,17 @@ func probeReasoning(ctx context.Context, model loom.ChatModel, timeout time.Dura
 		check.Evidence.Error = "model returned a nil response"
 		return check
 	}
+	check.Evidence.ReasoningTokensKnown = response.Usage.ReasoningTokensKnown
 	check.Evidence.ReasoningTokens = response.Usage.ReasoningTokens
 	check.Evidence.ReasoningContent = strings.TrimSpace(response.ReasoningContent) != ""
 	check.Evidence.FinishReason = response.FinishReason
 	check.Evidence.ResponsePreview = preview(response.Content)
 	reasoningObserved := check.Evidence.ReasoningTokens > 0 || check.Evidence.ReasoningContent
+	if strings.HasPrefix(model.Name(), "zhipuai/") && (response.FinishReason != loom.FinishReasonStop || !reasoningObserved) {
+		check.Outcome = OutcomeError
+		check.Evidence.Error = "insufficient evidence: no positive reasoning signal or response did not finish normally"
+		return check
+	}
 	if reasoningObserved == positiveWhenReasoning {
 		check.Outcome = OutcomePositive
 	} else {
@@ -185,11 +192,14 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	request.Messages = []loom.Message{{Role: loom.RoleUser, Content: `Return exactly one JSON object with this shape: {"ok": true}`}}
+	if schema != nil {
+		request.Messages[0].Content = "Return an object conforming to the supplied response schema."
+	}
 	request.Reasoning = reasoning
 	response, err := model.Chat(callCtx, request)
 	check := Check{Name: name, DurationMS: time.Since(started).Milliseconds()}
 	if err != nil {
-		check.Outcome = outcomeForError(err, classify)
+		check.Outcome = outcomeForCheckError(name, err, classify)
 		check.Evidence.Error = err.Error()
 		return check
 	}
@@ -233,19 +243,16 @@ func probeSchema() *jsonschema.Schema {
 }
 
 // DeriveReasoningSupport maps completed default, enable, and disable
-// observations to Loom's four-state reasoning model.
+// observations to Loom's three-state reasoning model.
 func DeriveReasoningSupport(defaultOn, canEnable, canDisable bool) loom.ReasoningSupport {
 	switch {
 	case canEnable && canDisable:
-		if defaultOn {
-			return loom.ReasoningSupportToggleableDefaultOn
-		}
-		return loom.ReasoningSupportToggleableDefaultOff
+		return loom.ReasoningSupportToggleable
 	case canEnable && !canDisable:
 		return loom.ReasoningSupportAlwaysOn
 	case !canEnable && canDisable:
 		if defaultOn {
-			return loom.ReasoningSupportToggleableDefaultOn
+			return loom.ReasoningSupportToggleable
 		}
 		return loom.ReasoningSupportNone
 	default:
@@ -310,4 +317,27 @@ func preview(content string) string {
 		return string(runes[:maxPreviewRunes])
 	}
 	return content
+}
+
+// A provider rejection must identify the tested field; billing, authentication,
+// availability and unrelated invalid parameters are inconclusive.
+func outcomeForCheckError(name string, err error, classify ErrorClassifier) Outcome {
+	if name == CheckReasoningDefault {
+		return OutcomeError
+	}
+	var apiErr *zhipuai.APIError
+	if errors.As(err, &apiErr) {
+		field := "thinking"
+		if strings.HasPrefix(name, "reasoning.effort.") {
+			field = "reasoning_effort"
+		}
+		if strings.HasPrefix(name, "structured_output.") {
+			field = "response_format"
+		}
+		if apiErr.RejectsCapability(field) {
+			return OutcomeNegative
+		}
+		return OutcomeError
+	}
+	return outcomeForError(err, classify)
 }
