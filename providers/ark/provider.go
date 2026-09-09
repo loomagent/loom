@@ -204,10 +204,9 @@ func (s *streamAdapter) Close() error {
 // thinking 绑死在 endpoint 配置、请求参数不生效的旧 endpoint,应在模型
 // capabilities 中声明为 always_on/none,ResolveReasoning 会兜住(报错或 omit),
 // 不会发出无效参数。
-// Reasoning.Effort 映射到 reasoning_effort(doubao-seed 2.0 支持 low/medium/high;
-// minimal=不思考不建模,用 Mode=Disabled 表达;max 是 deepseek 专属档位,ark 报错,
-// 正常情况下 ResolveReasoning 已按 capabilities.ReasoningEfforts 提前拦截)。
-func (m *Model) buildRequest(req loom.ChatRequest) (arkmodel.CreateChatCompletionRequest, error) {
+// Reasoning.Effort is sent unchanged after provider/model contract validation.
+func (m *Model) buildRequest(req loom.ChatRequest) (_ arkmodel.CreateChatCompletionRequest, err error) {
+	defer func() { err = loom.LocalRequestError(err) }()
 	out := arkmodel.CreateChatCompletionRequest{
 		Model:    m.name,
 		Messages: translateMessages(req.Messages),
@@ -215,7 +214,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (arkmodel.CreateChatCompletio
 	if err := loom.CheckRequestAgainstCapabilities(m.capabilities, req); err != nil {
 		return arkmodel.CreateChatCompletionRequest{}, fmt.Errorf("loom/ark: %w", err)
 	}
-	resolved, err := loom.ResolveReasoning(m.capabilities, req.Reasoning)
+	resolved, err := loom.ResolveModelReasoning("ark", m.name, m.capabilities, req.Reasoning)
 	if err != nil {
 		return arkmodel.CreateChatCompletionRequest{}, fmt.Errorf("loom/ark: %w", err)
 	}
@@ -229,20 +228,10 @@ func (m *Model) buildRequest(req loom.ChatRequest) (arkmodel.CreateChatCompletio
 	default:
 		return arkmodel.CreateChatCompletionRequest{}, fmt.Errorf("loom/ark: 未知 reasoning send %q", resolved.Send)
 	}
-	switch resolved.Effort {
-	case loom.ReasoningEffortLow:
-		out.ReasoningEffort = new(arkmodel.ReasoningEffortLow)
-	case loom.ReasoningEffortMedium:
-		out.ReasoningEffort = new(arkmodel.ReasoningEffortMedium)
-	case loom.ReasoningEffortHigh:
-		out.ReasoningEffort = new(arkmodel.ReasoningEffortHigh)
-	case loom.ReasoningEffortMax:
-		return arkmodel.CreateChatCompletionRequest{}, fmt.Errorf("loom/ark: ark 不支持 reasoning effort %q(支持 low/medium/high)", resolved.Effort)
-	case loom.ReasoningEffortDefault:
-		// 不传,走模型默认
-	default:
-		return arkmodel.CreateChatCompletionRequest{}, fmt.Errorf("loom/ark: 未知 reasoning effort %q", resolved.Effort)
+	if resolved.Effort != loom.ReasoningEffortDefault {
+		out.ReasoningEffort = new(arkmodel.ReasoningEffort(resolved.Effort))
 	}
+
 	if req.Temperature != nil {
 		out.Temperature = new(float32(*req.Temperature))
 	}

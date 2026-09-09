@@ -77,14 +77,15 @@ type Usage struct {
 	TotalTokens          uint64
 }
 
-// ReasoningEffort 推理预算等级。具体含义由 provider 翻译;
-// 各模型支持的档位子集由 ModelCapabilities.ReasoningEfforts 声明,
-// ResolveReasoning 负责能力校验(deepseek: high/max;doubao: low/medium/high)。
-// "minimal=不思考"类档位不建模 — 不思考用 ReasoningModeDisabled 表达。
+// ReasoningEffort is a provider-native effort string, not a closed enum.
+// ModelCapabilities.ReasoningEfforts supplies the selectable business values.
+// Off/alias semantics are provider+model specific; minimal can mean enabled.
 type ReasoningEffort string
 
 const (
-	ReasoningEffortDefault ReasoningEffort = ""       // provider 默认
+	ReasoningEffortDefault ReasoningEffort = "" // 未选择档位;不是业务默认值
+	ReasoningEffortMinimal ReasoningEffort = "minimal"
+	ReasoningEffortXHigh   ReasoningEffort = "xhigh"
 	ReasoningEffortLow     ReasoningEffort = "low"    // 较低推理预算
 	ReasoningEffortMedium  ReasoningEffort = "medium" // 中等推理预算
 	ReasoningEffortHigh    ReasoningEffort = "high"   // 较高推理预算
@@ -167,6 +168,7 @@ func (s ReasoningSupport) Canonical() ReasoningSupport {
 // 任何默认值。裸构造(不传 Capabilities)时一律是零值"未声明",
 // 各能力校验对未声明跳过、纯透传。
 type ModelCapabilities struct {
+	reasoningProbe   bool // only ReasoningProbeCapabilities enables diagnostic bypass
 	StructuredOutput StructuredOutputMode
 
 	// Reasoning 推理支持形态。零值("")表示未声明 — ResolveReasoning 对未声明
@@ -284,11 +286,8 @@ func ResolveReasoning(caps ModelCapabilities, r Reasoning) (ResolvedReasoning, e
 		return ResolvedReasoning{}, fmt.Errorf("loom: 未知 Reasoning.Mode %q", r.Mode)
 	}
 
-	switch r.Effort {
-	case ReasoningEffortDefault, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortMax:
-		// 合法,继续
-	default:
-		return ResolvedReasoning{}, fmt.Errorf("loom: 未知 Reasoning.Effort %q", r.Effort)
+	if r.Effort != "" && !ValidReasoningEffort(r.Effort) {
+		return ResolvedReasoning{}, fmt.Errorf("loom: invalid Reasoning.Effort %q", r.Effort)
 	}
 
 	switch r.Mode {
@@ -308,7 +307,7 @@ func ResolveReasoning(caps ModelCapabilities, r Reasoning) (ResolvedReasoning, e
 			return ResolvedReasoning{}, fmt.Errorf("loom: 启用推理时必须显式指定 reasoning effort (支持: %v)", caps.ReasoningEfforts)
 		}
 		if r.Effort != ReasoningEffortDefault &&
-			len(caps.ReasoningEfforts) > 0 &&
+			(caps.Reasoning != "" || caps.ReasoningEfforts != nil) &&
 			!slices.Contains(caps.ReasoningEfforts, r.Effort) {
 			return ResolvedReasoning{}, fmt.Errorf("loom: 模型不支持推理强度档位 %q(支持: %v)", r.Effort, caps.ReasoningEfforts)
 		}

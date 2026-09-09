@@ -25,3 +25,11 @@ func TestCompareConfirmedFields(t *testing.T) {
 		t.Fatalf("mismatches = %+v", got)
 	}
 }
+
+func TestCompareDoesNotUpgradeHistoricalEffortCoverage(t *testing.T) {
+	r := Report{SchemaVersion: 1, Coverage: Coverage{AcceptedReasoningEfforts: true}, Observed: ObservedCapabilities{AcceptedReasoningEfforts: []loom.ReasoningEffort{"low", "medium", "high", "max"}}}
+	declared := loom.ModelCapabilities{ReasoningEfforts: []loom.ReasoningEffort{"minimal", "xhigh"}}
+	if got := Compare(declared, r); len(got) != 0 {
+		t.Fatalf("legacy complete assumption: %+v", got)
+	}
+}

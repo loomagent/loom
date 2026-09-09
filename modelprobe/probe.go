@@ -5,6 +5,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,13 +19,6 @@ const (
 	defaultPerCallTimeout = 90 * time.Second
 	maxPreviewRunes       = 240
 )
-
-var defaultEfforts = []loom.ReasoningEffort{
-	loom.ReasoningEffortLow,
-	loom.ReasoningEffortMedium,
-	loom.ReasoningEffortHigh,
-	loom.ReasoningEffortMax,
-}
 
 // Probe runs a behavioral capability audit. Builder is called twice: once
 // with reasoning declared unsupported so a disabled request omits the provider
@@ -41,22 +35,15 @@ func Probe(ctx context.Context, builder Builder, options Options) (Report, error
 	if timeout <= 0 {
 		timeout = defaultPerCallTimeout
 	}
-	efforts := options.ReasoningEfforts
-	if efforts == nil {
-		efforts = append([]loom.ReasoningEffort(nil), defaultEfforts...)
-	}
-	if err := validateEfforts(efforts); err != nil {
-		return Report{}, err
-	}
 
-	omitModel, err := builder.Build(ctx, loom.ModelCapabilities{Reasoning: loom.ReasoningSupportNone})
+	omitModel, err := builder.Build(ctx, loom.ReasoningProbeCapabilities(true))
 	if err != nil {
 		return Report{}, fmt.Errorf("modelprobe: build omit-parameter model: %w", err)
 	}
 	if omitModel == nil {
 		return Report{}, errors.New("modelprobe: Builder returned a nil omit-parameter model")
 	}
-	rawModel, err := builder.Build(ctx, loom.ModelCapabilities{})
+	rawModel, err := builder.Build(ctx, loom.ReasoningProbeCapabilities(false))
 	if err != nil {
 		return Report{}, fmt.Errorf("modelprobe: build passthrough model: %w", err)
 	}
@@ -67,12 +54,19 @@ func Probe(ctx context.Context, builder Builder, options Options) (Report, error
 		return Report{}, fmt.Errorf("modelprobe: Builder returned different models %q and %q", omitModel.Name(), rawModel.Name())
 	}
 
-	report := Report{SchemaVersion: 1, Model: rawModel.Name(), Checks: []Check{}}
+	coverage := effortCoverage(rawModel.Name(), options)
+	efforts := coverage.Candidates
+	if err := validateEfforts(efforts); err != nil {
+		return Report{}, err
+	}
+	report := Report{SchemaVersion: 2, Model: rawModel.Name(), Checks: []Check{}, EffortCoverage: coverage}
+
 	defaultCheck := probeReasoning(ctx, omitModel, timeout, CheckReasoningDefault, loom.Reasoning{Mode: loom.ReasoningModeDisabled}, true, nil)
 	disableCheck := probeReasoning(ctx, rawModel, timeout, CheckReasoningDisable, loom.Reasoning{Mode: loom.ReasoningModeDisabled}, false, options.ErrorClassifier)
 	enableCheck := probeReasoning(ctx, rawModel, timeout, CheckReasoningEnable, loom.Reasoning{Mode: loom.ReasoningModeEnabled}, true, options.ErrorClassifier)
 	report.Checks = append(report.Checks, defaultCheck, disableCheck, enableCheck)
 	if err := ctx.Err(); err != nil {
+		finalizeEffortCoverage(&report)
 		return report, err
 	}
 
@@ -85,28 +79,30 @@ func Probe(ctx context.Context, builder Builder, options Options) (Report, error
 		)
 	}
 
-	if enableCheck.Outcome == OutcomePositive {
-		allEffortsConclusive := true
-		for _, effort := range efforts {
-			check := probeReasoning(ctx, rawModel, timeout, "reasoning.effort."+string(effort), loom.Reasoning{
-				Mode: loom.ReasoningModeEnabled, Effort: effort,
-			}, true, options.ErrorClassifier)
-			check.Effort = effort
-			report.Checks = append(report.Checks, check)
-			if err := ctx.Err(); err != nil {
-				return report, err
-			}
-			if check.Outcome == OutcomeError {
-				allEffortsConclusive = false
-			} else if check.Outcome == OutcomePositive {
-				report.Observed.AcceptedReasoningEfforts = append(report.Observed.AcceptedReasoningEfforts, effort)
-			}
+	// Effort requests are independent experiments: enabled-without-effort may
+	// fail even when explicitly selected efforts work.
+	for _, effort := range efforts {
+		if err := ctx.Err(); err != nil {
+			finalizeEffortCoverage(&report)
+			return report, err
 		}
-		report.Coverage.AcceptedReasoningEfforts = allEffortsConclusive
-	} else if enableCheck.Outcome == OutcomeNegative {
-		// Efforts are conclusively empty when reasoning cannot be enabled.
-		report.Coverage.AcceptedReasoningEfforts = true
+		check := probeReasoning(ctx, rawModel, timeout, "reasoning.effort."+string(effort), loom.Reasoning{
+			Mode: loom.ReasoningModeEnabled, Effort: effort,
+		}, true, options.ErrorClassifier)
+		check.Effort = effort
+		report.Checks = append(report.Checks, check)
+		coverage.Tested = append(coverage.Tested, effort)
+		if check.Evidence.Acceptance == "accepted" {
+			report.Observed.AcceptedReasoningEfforts = append(report.Observed.AcceptedReasoningEfforts, effort)
+		}
+		if check.Outcome == OutcomePositive {
+			report.Observed.ReasoningObservedEfforts = append(report.Observed.ReasoningObservedEfforts, effort)
+		}
+		if check.Evidence.Acceptance != "accepted" && check.Evidence.Acceptance != "rejected" {
+			coverage.Unresolved = append(coverage.Unresolved, effort)
+		}
 	}
+	finalizeEffortCoverage(&report)
 
 	structuredModel := omitModel
 	structuredReasoning := loom.Reasoning{Mode: loom.ReasoningModeDisabled}
@@ -129,6 +125,7 @@ func Probe(ctx context.Context, builder Builder, options Options) (Report, error
 		)
 	}
 	if err := ctx.Err(); err != nil {
+		finalizeEffortCoverage(&report)
 		return report, err
 	}
 	return report, nil
@@ -138,14 +135,16 @@ func probeReasoning(ctx context.Context, model loom.ChatModel, timeout time.Dura
 	started := time.Now()
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	evidence := requestEvidence(model, reasoning)
 	response, err := model.Chat(callCtx, loom.ChatRequest{
 		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "Three boxes are labeled apples, oranges, and mixed; every label is wrong. Explain how drawing one fruit from one box identifies all three boxes."}},
 		Reasoning: reasoning,
 	})
-	check := Check{Name: name, DurationMS: time.Since(started).Milliseconds()}
+	check := Check{Name: name, DurationMS: time.Since(started).Milliseconds(), Evidence: evidence}
 	if err != nil {
 		check.Outcome = outcomeForCheckError(name, err, classify)
 		check.Evidence.Error = err.Error()
+		check.Evidence.Acceptance = errorAcceptance(err, check.Outcome)
 		return check
 	}
 	if response == nil {
@@ -153,17 +152,26 @@ func probeReasoning(ctx context.Context, model loom.ChatModel, timeout time.Dura
 		check.Evidence.Error = "model returned a nil response"
 		return check
 	}
+	check.Evidence.Acceptance = "accepted"
 	check.Evidence.ReasoningTokensKnown = response.Usage.ReasoningTokensKnown
 	check.Evidence.ReasoningTokens = response.Usage.ReasoningTokens
 	check.Evidence.ReasoningContent = strings.TrimSpace(response.ReasoningContent) != ""
 	check.Evidence.FinishReason = response.FinishReason
 	check.Evidence.ResponsePreview = preview(response.Content)
 	reasoningObserved := check.Evidence.ReasoningTokens > 0 || check.Evidence.ReasoningContent
+	// Preserve the stricter GLM audit: a zero-token response from this
+	// always-on provider is not sufficient evidence of switch-off semantics.
 	if strings.HasPrefix(model.Name(), "zhipuai/") && (response.FinishReason != loom.FinishReasonStop || !reasoningObserved) {
 		check.Outcome = OutcomeError
 		check.Evidence.Error = "insufficient evidence: no positive reasoning signal or response did not finish normally"
 		return check
 	}
+	if !reasoningObserved && (!response.Usage.ReasoningTokensKnown || response.FinishReason != loom.FinishReasonStop) {
+		check.Outcome = OutcomeError
+		check.Evidence.Error = "insufficient evidence: reasoning telemetry absent or response incomplete"
+		return check
+	}
+
 	if reasoningObserved == positiveWhenReasoning {
 		check.Outcome = OutcomePositive
 	} else {
@@ -196,11 +204,13 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 		request.Messages[0].Content = "Return an object conforming to the supplied response schema."
 	}
 	request.Reasoning = reasoning
+	evidence := requestEvidence(model, reasoning)
 	response, err := model.Chat(callCtx, request)
-	check := Check{Name: name, DurationMS: time.Since(started).Milliseconds()}
+	check := Check{Name: name, DurationMS: time.Since(started).Milliseconds(), Evidence: evidence}
 	if err != nil {
 		check.Outcome = outcomeForCheckError(name, err, classify)
 		check.Evidence.Error = err.Error()
+		check.Evidence.Acceptance = errorAcceptance(err, check.Outcome)
 		return check
 	}
 	if response == nil {
@@ -208,6 +218,7 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 		check.Evidence.Error = "model returned a nil response"
 		return check
 	}
+	check.Evidence.Acceptance = "accepted"
 	check.Evidence.FinishReason = response.FinishReason
 	check.Evidence.ResponsePreview = preview(response.Content)
 	var value any
@@ -278,11 +289,10 @@ func DeriveStructuredOutput(object, schema bool) loom.StructuredOutputMode {
 func validateEfforts(efforts []loom.ReasoningEffort) error {
 	seen := map[loom.ReasoningEffort]struct{}{}
 	for _, effort := range efforts {
-		switch effort {
-		case loom.ReasoningEffortLow, loom.ReasoningEffortMedium, loom.ReasoningEffortHigh, loom.ReasoningEffortMax:
-		default:
+		if !loom.ValidReasoningEffort(effort) {
 			return fmt.Errorf("modelprobe: invalid reasoning effort %q", effort)
 		}
+
 		if _, ok := seen[effort]; ok {
 			return fmt.Errorf("modelprobe: duplicate reasoning effort %q", effort)
 		}
@@ -322,6 +332,10 @@ func preview(content string) string {
 // A provider rejection must identify the tested field; billing, authentication,
 // availability and unrelated invalid parameters are inconclusive.
 func outcomeForCheckError(name string, err error, classify ErrorClassifier) Outcome {
+	var local *loom.RequestValidationError
+	if errors.As(err, &local) {
+		return OutcomeError
+	}
 	if name == CheckReasoningDefault {
 		return OutcomeError
 	}
@@ -340,4 +354,76 @@ func outcomeForCheckError(name string, err error, classify ErrorClassifier) Outc
 		return OutcomeError
 	}
 	return outcomeForError(err, classify)
+}
+
+func effortCoverage(name string, options Options) *EffortCoverage {
+	c := &EffortCoverage{Source: "unknown", Limitations: []string{"Request acceptance and returned reasoning do not prove independent native efforts."}}
+	provider, model := loom.SplitModelName(name)
+	if contract, ok := loom.LookupReasoningContract(provider, model); ok {
+		c.UniverseKnown = true
+		c.Contract = &contract
+		c.Source = contract.Source
+		c.SourceURLs = slices.Clone(contract.SourceURLs)
+		c.Declared = slices.Clone(contract.Efforts)
+	} else if options.DeclaredCapabilities != nil {
+		c.UniverseKnown = options.DeclaredCapabilities.Reasoning != "" || options.DeclaredCapabilities.ReasoningEfforts != nil
+		c.Source = "model_declaration"
+		if options.DeclarationSource != "" {
+			c.Source = options.DeclarationSource
+		}
+		c.SourceURLs = slices.Clone(options.DeclarationSourceURLs)
+		c.Declared = slices.Clone(options.DeclaredCapabilities.ReasoningEfforts)
+		c.Limitations = append(c.Limitations, "Manual or gateway declarations have partial/unknown native coverage; they are not independently verified native semantics.")
+	} else {
+		c.Limitations = append(c.Limitations, "No model contract or effort declaration; native effort coverage is unknown.")
+	}
+	c.CandidateSource = c.Source
+	c.Candidates = slices.Clone(c.Declared)
+	if options.ReasoningEfforts != nil {
+		c.CandidateSource = "explicit_candidates"
+		c.Candidates = slices.Clone(options.ReasoningEfforts)
+	}
+	return c
+}
+
+func finalizeEffortCoverage(report *Report) {
+	c := report.EffortCoverage
+	if c == nil {
+		return
+	}
+	c.Untested = nil
+	for _, e := range append(slices.Clone(c.Declared), c.Candidates...) {
+		if !slices.Contains(c.Tested, e) && !slices.Contains(c.Untested, e) {
+			c.Untested = append(c.Untested, e)
+		}
+	}
+	c.CandidateCoverageComplete = c.UniverseKnown && len(c.Untested) == 0 && len(c.Unresolved) == 0
+	c.Complete = c.Contract != nil && c.CandidateCoverageComplete
+	report.Coverage.AcceptedReasoningEfforts = c.CandidateCoverageComplete
+}
+
+// Built-in adapters expose their serialized parameters. Custom models without
+// this optional interface retain unknown wire evidence rather than a guess.
+func requestEvidence(model loom.ChatModel, r loom.Reasoning) Evidence {
+	e := Evidence{RequestedReasoning: ReasoningRequest{Mode: r.Mode, Effort: r.Effort}, Acceptance: "unknown"}
+	if inspector, ok := model.(interface {
+		ReasoningRequestParameters(loom.Reasoning) (map[string]any, error)
+	}); ok {
+		if parameters, err := inspector.ReasoningRequestParameters(r); err == nil {
+			e.SentParameters = parameters
+			e.SentParametersKnown = true
+		}
+	}
+	return e
+}
+
+func errorAcceptance(err error, outcome Outcome) string {
+	var local *loom.RequestValidationError
+	if errors.As(err, &local) {
+		return "local_rejected"
+	}
+	if outcome == OutcomeNegative {
+		return "rejected"
+	}
+	return "unknown"
 }

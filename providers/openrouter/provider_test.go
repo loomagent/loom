@@ -102,18 +102,31 @@ func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 	}
 }
 
-// TestBuildRequestReasoningEffortMaxRejected max 是 deepseek 专属档位,openrouter 报错。
-func TestBuildRequestReasoningEffortMaxRejected(t *testing.T) {
-	m, err := New(Config{APIKey: "test-key", ModelName: "x-ai/grok-4.3"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	_, err = m.buildRequest(loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
-		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortMax},
-	})
-	if err == nil || !strings.Contains(err.Error(), "不支持 reasoning effort") {
-		t.Fatalf("期望 max 档位报错,实际: %v", err)
+func TestNativeGatewayEffortsAndDisabled(t *testing.T) {
+	for _, effort := range []loom.ReasoningEffort{"minimal", "xhigh", "max"} {
+		caps := loom.ModelCapabilities{Reasoning: loom.ReasoningSupportToggleable, ReasoningEfforts: []loom.ReasoningEffort{effort}}
+		m, err := New(Config{APIKey: "test", ModelName: "declared-model", Capabilities: &caps})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := m.ReasoningRequestParameters(loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: effort})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := body["reasoning"].(map[string]any)
+		if r["enabled"] != true || r["effort"] != string(effort) {
+			t.Fatalf("changed effort semantics: %+v", body)
+		}
+		body, err = m.ReasoningRequestParameters(loom.Reasoning{Mode: loom.ReasoningModeDisabled})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r = body["reasoning"].(map[string]any)
+		if r["enabled"] != false || r["effort"] != nil {
+			t.Fatalf("disable: %+v", body)
+		}
+		if _, err := m.buildRequest(loom.ChatRequest{Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "unknown"}}); err == nil {
+			t.Fatal("undeclared effort accepted")
+		}
 	}
 }

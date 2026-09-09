@@ -57,6 +57,12 @@ func Build(cfg Config) (loom.ChatModel, error) {
 		return nil, fmt.Errorf("%w: BaseURL cannot contain only whitespace", ErrInvalidConfig)
 	}
 
+	if cfg.Capabilities != nil {
+		if err := loom.ValidateModelReasoningCapabilities(string(cfg.Provider), cfg.Model, *cfg.Capabilities); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+		}
+	}
+
 	var (
 		model loom.ChatModel
 		err   error

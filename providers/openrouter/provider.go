@@ -190,7 +190,8 @@ func (s *streamAdapter) Close() error {
 }
 
 // buildRequest 把 loom.ChatRequest 翻译成 go-openai 请求结构。
-func (m *Model) buildRequest(req loom.ChatRequest) (openai.ChatCompletionNewParams, error) {
+func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewParams, err error) {
+	defer func() { err = loom.LocalRequestError(err) }()
 	messages, err := translateMessages(req.Messages)
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: 翻译 messages: %w", err)
@@ -217,7 +218,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (openai.ChatCompletionNewPara
 	if err := loom.CheckRequestAgainstCapabilities(m.capabilities, req); err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: %w", err)
 	}
-	resolved, err := loom.ResolveReasoning(m.capabilities, req.Reasoning)
+	resolved, err := loom.ResolveModelReasoning("openrouter", m.name, m.capabilities, req.Reasoning)
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: %w", err)
 	}
@@ -286,14 +287,10 @@ func translateReasoning(resolved loom.ResolvedReasoning) (map[string]any, error)
 	case loom.ReasoningSendEnabled:
 		reasoning := map[string]any{"enabled": true}
 		switch resolved.Effort {
-		case loom.ReasoningEffortLow, loom.ReasoningEffortMedium, loom.ReasoningEffortHigh:
+		case loom.ReasoningEffortMinimal, loom.ReasoningEffortLow, loom.ReasoningEffortMedium, loom.ReasoningEffortHigh, loom.ReasoningEffortXHigh, loom.ReasoningEffortMax:
 			reasoning["effort"] = string(resolved.Effort)
-		case loom.ReasoningEffortMax:
-			// OpenRouter 统一档位只有 low/medium/high(max 是 deepseek 专属),
-			// 正常情况下 ResolveReasoning 已按 capabilities.ReasoningEfforts 提前拦截。
-			return nil, fmt.Errorf("loom/openrouter: openrouter 不支持 reasoning effort %q(支持 low/medium/high)", resolved.Effort)
 		case loom.ReasoningEffortDefault:
-			// 只开推理,档位走模型默认
+			// 无可调档位的模型,或隔离的诊断请求
 		default:
 			return nil, fmt.Errorf("loom/openrouter: 未知 reasoning effort %q", resolved.Effort)
 		}
@@ -468,6 +465,7 @@ func translateUsage(u *openai.CompletionUsage) loom.Usage {
 	}
 	if u.JSON.CompletionTokensDetails.Valid() {
 		out.ReasoningTokens = uint64(max(u.CompletionTokensDetails.ReasoningTokens, 0))
+		out.ReasoningTokensKnown = u.CompletionTokensDetails.JSON.ReasoningTokens.Valid()
 	}
 	return out
 }

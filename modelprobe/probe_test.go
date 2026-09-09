@@ -15,21 +15,28 @@ import (
 var errUnsupported = errors.New("unsupported parameter")
 
 type fakeBuilder struct {
+	name         string
 	capabilities []loom.ModelCapabilities
 	handler      func(loom.ModelCapabilities, loom.ChatRequest) (*loom.ChatResponse, error)
 }
 
 func (b *fakeBuilder) Build(_ context.Context, capabilities loom.ModelCapabilities) (loom.ChatModel, error) {
 	b.capabilities = append(b.capabilities, capabilities)
-	return &fakeModel{capabilities: capabilities, handler: b.handler}, nil
+	return &fakeModel{name: b.name, capabilities: capabilities, handler: b.handler}, nil
 }
 
 type fakeModel struct {
+	name         string
 	capabilities loom.ModelCapabilities
 	handler      func(loom.ModelCapabilities, loom.ChatRequest) (*loom.ChatResponse, error)
 }
 
-func (m *fakeModel) Name() string                         { return "fake/model" }
+func (m *fakeModel) Name() string {
+	if m.name != "" {
+		return m.name
+	}
+	return "fake/model"
+}
 func (m *fakeModel) Capabilities() loom.ModelCapabilities { return m.capabilities }
 func (m *fakeModel) Chat(_ context.Context, request loom.ChatRequest) (*loom.ChatResponse, error) {
 	return m.handler(m.capabilities, request)
@@ -58,7 +65,7 @@ func TestProbeBuildsSyntheticModelsAndDerivesCapabilities(t *testing.T) {
 			return reasoningResponse(7), nil
 		}
 	}}
-	report, err := Probe(context.Background(), builder, Options{ErrorClassifier: func(err error) ErrorDisposition {
+	report, err := Probe(context.Background(), builder, Options{DeclaredCapabilities: &loom.ModelCapabilities{Reasoning: loom.ReasoningSupportToggleable, ReasoningEfforts: []loom.ReasoningEffort{"low", "medium", "high", "max"}}, ErrorClassifier: func(err error) ErrorDisposition {
 		if errors.Is(err, errUnsupported) {
 			return ErrorUnsupported
 		}
@@ -72,13 +79,13 @@ func TestProbeBuildsSyntheticModelsAndDerivesCapabilities(t *testing.T) {
 		len(builder.capabilities[1].ReasoningEfforts) != 0 {
 		t.Fatalf("builder capabilities = %+v", builder.capabilities)
 	}
-	if report.SchemaVersion != 1 || report.Model != "fake/model" {
+	if report.SchemaVersion != 2 || report.Model != "fake/model" {
 		t.Fatalf("report identity = %+v", report)
 	}
 	if report.Observed.Reasoning != loom.ReasoningSupportToggleable || !report.Coverage.ReasoningSupport {
 		t.Fatalf("reasoning = %q coverage=%+v", report.Observed.Reasoning, report.Coverage)
 	}
-	wantEfforts := []loom.ReasoningEffort{loom.ReasoningEffortLow, loom.ReasoningEffortHigh}
+	wantEfforts := []loom.ReasoningEffort{loom.ReasoningEffortLow, loom.ReasoningEffortHigh, loom.ReasoningEffortMax}
 	if !report.Coverage.AcceptedReasoningEfforts || !slices.Equal(report.Observed.AcceptedReasoningEfforts, wantEfforts) {
 		t.Fatalf("efforts = %v coverage=%+v", report.Observed.AcceptedReasoningEfforts, report.Coverage)
 	}
@@ -172,5 +179,123 @@ func TestReportJSONUsesStableFieldNames(t *testing.T) {
 }
 
 func reasoningResponse(tokens uint64) *loom.ChatResponse {
-	return &loom.ChatResponse{Content: "2", Usage: loom.Usage{ReasoningTokens: tokens}, FinishReason: loom.FinishReasonStop}
+	return &loom.ChatResponse{Content: "2", Usage: loom.Usage{ReasoningTokens: tokens, ReasoningTokensKnown: true}, FinishReason: loom.FinishReasonStop}
+}
+
+func TestProbeNoFixedFourDefaultOrNativeIndependenceClaim(t *testing.T) {
+	b := &fakeBuilder{handler: func(_ loom.ModelCapabilities, _ loom.ChatRequest) (*loom.ChatResponse, error) {
+		return reasoningResponse(1), nil
+	}}
+	r, err := Probe(context.Background(), b, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Checks) != 5 || len(r.EffortCoverage.Candidates) != 0 || r.EffortCoverage.Complete || r.Coverage.AcceptedReasoningEfforts || r.EffortCoverage.NativeIndependenceProven {
+		t.Fatalf("unearned coverage: %+v", r)
+	}
+}
+
+func TestProbeContractCoverageSubsetAndAliases(t *testing.T) {
+	b := &fakeBuilder{name: "ark/deepseek-v4-pro-ga-260813", handler: func(_ loom.ModelCapabilities, _ loom.ChatRequest) (*loom.ChatResponse, error) {
+		return reasoningResponse(2), nil
+	}}
+	for _, tc := range []struct {
+		efforts  []loom.ReasoningEffort
+		complete bool
+		missing  []loom.ReasoningEffort
+	}{
+		{nil, true, nil},
+		{[]loom.ReasoningEffort{"high"}, false, []loom.ReasoningEffort{"low", "max"}},
+		{[]loom.ReasoningEffort{}, false, []loom.ReasoningEffort{"low", "high", "max"}},
+		{[]loom.ReasoningEffort{"low", "high", "max", "medium"}, true, nil},
+	} {
+		r, err := Probe(context.Background(), b, Options{ReasoningEfforts: tc.efforts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := r.EffortCoverage
+		if c.Complete != tc.complete || !slices.Equal(c.Untested, tc.missing) || c.NativeIndependenceProven || c.Contract.Aliases["medium"] != "low" {
+			t.Fatalf("coverage=%+v", c)
+		}
+		if tc.efforts == nil && !slices.Equal(c.Candidates, []loom.ReasoningEffort{"low", "high", "max"}) {
+			t.Fatalf("wrong candidates: %+v", c)
+		}
+	}
+}
+
+func TestProbeRequestsAcceptedWithoutNativeOrReasoningProof(t *testing.T) {
+	b := &fakeBuilder{handler: func(_ loom.ModelCapabilities, req loom.ChatRequest) (*loom.ChatResponse, error) {
+		// Many APIs require explicit effort; a failed effort-less enable must not
+		// prevent subsequent effort experiments.
+		if req.Reasoning.Mode == loom.ReasoningModeEnabled && req.Reasoning.Effort == "" {
+			return nil, errUnsupported
+		}
+		return &loom.ChatResponse{Content: "ok", FinishReason: loom.FinishReasonStop}, nil
+	}}
+	r, err := Probe(context.Background(), b, Options{DeclaredCapabilities: &loom.ModelCapabilities{ReasoningEfforts: []loom.ReasoningEffort{"minimal", "xhigh"}}, ErrorClassifier: func(error) ErrorDisposition { return ErrorUnsupported }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(r.Observed.AcceptedReasoningEfforts, []loom.ReasoningEffort{"minimal", "xhigh"}) || len(r.Observed.ReasoningObservedEfforts) != 0 || !r.EffortCoverage.CandidateCoverageComplete || r.EffortCoverage.Complete || r.EffortCoverage.NativeIndependenceProven {
+		t.Fatalf("report=%+v", r)
+	}
+	if r.Checks[1].Outcome != OutcomeError {
+		t.Fatalf("missing telemetry claimed disable success: %+v", r.Checks[1])
+	}
+}
+
+func TestProbeLocalRejectionCannotBecomeServerUnsupported(t *testing.T) {
+	b := &fakeBuilder{handler: func(_ loom.ModelCapabilities, req loom.ChatRequest) (*loom.ChatResponse, error) {
+		if req.Reasoning.Effort != "" {
+			return nil, loom.LocalRequestError(errUnsupported)
+		}
+		return reasoningResponse(1), nil
+	}}
+	r, err := Probe(context.Background(), b, Options{DeclaredCapabilities: &loom.ModelCapabilities{ReasoningEfforts: []loom.ReasoningEffort{"xhigh"}}, ErrorClassifier: func(error) ErrorDisposition { return ErrorUnsupported }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.EffortCoverage.Complete || r.Checks[3].Outcome != OutcomeError || r.Checks[3].Evidence.Acceptance != "local_rejected" || !slices.Equal(r.EffortCoverage.Unresolved, []loom.ReasoningEffort{"xhigh"}) {
+		t.Fatalf("report=%+v", r)
+	}
+}
+
+func TestProbeIgnoredDisableIsNotSuccess(t *testing.T) {
+	model := &fakeModel{handler: func(_ loom.ModelCapabilities, _ loom.ChatRequest) (*loom.ChatResponse, error) {
+		return reasoningResponse(5), nil
+	}}
+	c := probeReasoning(context.Background(), model, defaultPerCallTimeout, CheckReasoningDisable, loom.Reasoning{Mode: loom.ReasoningModeDisabled}, false, nil)
+	if c.Outcome != OutcomeNegative || c.Evidence.Acceptance != "accepted" {
+		t.Fatalf("disable=%+v", c)
+	}
+}
+
+func TestProbeCancellationPreservesUncoveredEfforts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b := &fakeBuilder{name: "ark/deepseek-v4-pro-ga-260813", handler: func(_ loom.ModelCapabilities, req loom.ChatRequest) (*loom.ChatResponse, error) {
+		if req.Reasoning.Effort == "low" {
+			cancel()
+		}
+		return reasoningResponse(1), nil
+	}}
+	r, err := Probe(ctx, b, Options{})
+	if !errors.Is(err, context.Canceled) || r.EffortCoverage.Complete || !slices.Equal(r.EffortCoverage.Untested, []loom.ReasoningEffort{"high", "max"}) {
+		t.Fatalf("report=%+v error=%v", r, err)
+	}
+}
+
+func TestLatestAliasRetainsManualPartialNativeCoverage(t *testing.T) {
+	b := &fakeBuilder{name: "ark/doubao-seed-evolving-latest-version", handler: func(_ loom.ModelCapabilities, _ loom.ChatRequest) (*loom.ChatResponse, error) {
+		return reasoningResponse(1), nil
+	}}
+	caps := loom.ModelCapabilities{Reasoning: loom.ReasoningSupportToggleable, ReasoningEfforts: []loom.ReasoningEffort{"low", "medium", "high"}}
+	r, err := Probe(context.Background(), b, Options{DeclaredCapabilities: &caps})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := r.EffortCoverage
+	if !c.CandidateCoverageComplete || c.Complete || c.Contract != nil || c.Source != "model_declaration" || c.NativeIndependenceProven {
+		t.Fatalf("inferred official alias semantics: %+v", c)
+	}
 }
