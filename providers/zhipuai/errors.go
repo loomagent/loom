@@ -58,6 +58,11 @@ func (e *APIError) RejectsCapability(field string) bool {
 	for _, name := range fieldNames {
 		matched = matched || strings.Contains(msg, name)
 	}
+	// GLM-5.3 also rejects unsupported effort values with the same localized
+	// thinking error, but explicitly lists the allowed effort values.
+	if field == "reasoning_effort" && strings.Contains(msg, "low") && strings.Contains(msg, "high") && strings.Contains(msg, "max") && (strings.Contains(msg, "请使用") || strings.Contains(msg, "仅支持") || strings.Contains(msg, "only support")) {
+		matched = true
+	}
 	if !matched {
 		return false
 	}

@@ -258,7 +258,14 @@ func TestLocalizedCapabilityRejection(t *testing.T) {
 	if !err.RejectsCapability("thinking") {
 		t.Fatal("localized thinking rejection not recognized")
 	}
-	if err.RejectsCapability("reasoning_effort") || err.RejectsCapability("response_format") {
-		t.Fatal("unrelated capability rejected")
+	if !err.RejectsCapability("reasoning_effort") {
+		t.Fatal("explicit allowed effort list not recognized")
+	}
+	if err.RejectsCapability("response_format") {
+		t.Fatal("unrelated output capability rejected")
+	}
+	err.Message = "该模型始终思考，不支持关闭思考"
+	if err.RejectsCapability("reasoning_effort") {
+		t.Fatal("thinking-only message must not reject an effort")
 	}
 }
