@@ -95,7 +95,7 @@ func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 	}
 }
 
-func TestArkNativeEffortWireAndLocalAliasRejection(t *testing.T) {
+func TestArkManuallyDeclaredEffortWireAndRejection(t *testing.T) {
 	for _, tc := range []struct {
 		model   string
 		effort  loom.ReasoningEffort
@@ -106,8 +106,11 @@ func TestArkNativeEffortWireAndLocalAliasRejection(t *testing.T) {
 		{"deepseek-v4-pro-ga-260813", "max", false},
 		{"deepseek-v4-pro-ga-260813", "medium", true},
 	} {
-		c, _ := loom.LookupReasoningContract("ark", tc.model)
-		caps := loom.ModelCapabilities{Reasoning: loom.ReasoningSupportToggleable, ReasoningEfforts: c.Efforts}
+		efforts := []loom.ReasoningEffort{"low", "high", "max"}
+		if tc.model == "doubao-seed-evolving" {
+			efforts = []loom.ReasoningEffort{"low", "medium", "high", "minimal"}
+		}
+		caps := loom.ModelCapabilities{Reasoning: loom.ReasoningSupportToggleable, ReasoningEfforts: efforts}
 		m, err := New(Config{APIKey: "test", ModelName: tc.model, Capabilities: &caps})
 		if err != nil {
 			t.Fatal(err)
@@ -136,7 +139,7 @@ func TestArkNativeEffortWireAndLocalAliasRejection(t *testing.T) {
 	}
 }
 
-func TestKnownSeedNoneDeclarationFailsBeforeNetwork(t *testing.T) {
+func TestExplicitNoneDeclarationRejectsEnabledBeforeNetwork(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -148,9 +151,9 @@ func TestKnownSeedNoneDeclarationFailsBeforeNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = model.Chat(context.Background(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hello"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
+	_, err = model.Chat(context.Background(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hello"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}})
 	var local *loom.RequestValidationError
-	if !errors.As(err, &local) || !strings.Contains(err.Error(), "contradicts its contract") {
+	if !errors.As(err, &local) {
 		t.Fatalf("expected local contradiction, got %v", err)
 	}
 	if calls.Load() != 0 {

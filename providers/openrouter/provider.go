@@ -286,13 +286,8 @@ func translateReasoning(resolved loom.ResolvedReasoning) (map[string]any, error)
 		return map[string]any{"enabled": false}, nil
 	case loom.ReasoningSendEnabled:
 		reasoning := map[string]any{"enabled": true}
-		switch resolved.Effort {
-		case loom.ReasoningEffortMinimal, loom.ReasoningEffortLow, loom.ReasoningEffortMedium, loom.ReasoningEffortHigh, loom.ReasoningEffortXHigh, loom.ReasoningEffortMax:
+		if resolved.Effort != "" {
 			reasoning["effort"] = string(resolved.Effort)
-		case loom.ReasoningEffortDefault:
-			// 无可调档位的模型,或隔离的诊断请求
-		default:
-			return nil, fmt.Errorf("loom/openrouter: 未知 reasoning effort %q", resolved.Effort)
 		}
 		return reasoning, nil
 	default:

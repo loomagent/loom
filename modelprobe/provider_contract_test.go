@@ -11,7 +11,7 @@ import (
 	"github.com/loomagent/loom/providers/ark"
 )
 
-func TestArkProbeRecordsWireAliasWithoutClaimingNativeIndependence(t *testing.T) {
+func TestArkProbeRecordsExactCandidatesWithoutGuessingNativeSemantics(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
 		if err := json.UnmarshalRead(r.Body, &req); err != nil {
@@ -28,12 +28,12 @@ func TestArkProbeRecordsWireAliasWithoutClaimingNativeIndependence(t *testing.T)
 	defer server.Close()
 	report, err := Probe(context.Background(), BuilderFunc(func(_ context.Context, caps loom.ModelCapabilities) (loom.ChatModel, error) {
 		return ark.New(ark.Config{APIKey: "test", ModelName: "deepseek-v4-pro-ga-260813", BaseURL: server.URL, Capabilities: &caps})
-	}), Options{ReasoningEfforts: []loom.ReasoningEffort{"low", "high", "max", "medium"}})
+	}), Options{DeclaredCapabilities: &loom.ModelCapabilities{Reasoning: loom.ReasoningSupportToggleable, ReasoningEfforts: []loom.ReasoningEffort{"low", "high", "max", "medium"}}, ReasoningEfforts: []loom.ReasoningEffort{"low", "high", "max", "medium"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c := report.EffortCoverage
-	if !c.Complete || c.NativeIndependenceProven || c.Contract.Aliases["medium"] != "low" || c.CandidateSource != "explicit_candidates" {
+	if !c.Complete || c.NativeIndependenceProven || c.CandidateSource != "explicit_candidates" {
 		t.Fatalf("coverage=%+v", c)
 	}
 	if report.Checks[1].Outcome != OutcomeNegative {
@@ -59,7 +59,7 @@ func TestArkProbeRecordsWireAliasWithoutClaimingNativeIndependence(t *testing.T)
 	if err := json.Unmarshal(data, &roundTrip); err != nil {
 		t.Fatal(err)
 	}
-	if roundTrip.EffortCoverage.NativeIndependenceProven || roundTrip.EffortCoverage.Contract.Aliases["medium"] != "low" {
+	if roundTrip.EffortCoverage.NativeIndependenceProven {
 		t.Fatalf("lost semantics: %+v", roundTrip)
 	}
 }
