@@ -51,6 +51,24 @@ func TestDeepSeekSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 						return
 					case "ignore":
 						content = `{"wrong":"schema ignored"}`
+					case "support":
+						var format struct {
+							Schema struct {
+								Properties map[string]struct {
+									Const any `json:"const"`
+								} `json:"properties"`
+							} `json:"schema"`
+						}
+						if err := json.Unmarshal(req.ResponseFormat.JSONSchema, &format); err != nil {
+							t.Error(err)
+							return
+						}
+						data, err := json.Marshal(map[string]any{"ok": true, "nonce": format.Schema.Properties["nonce"].Const})
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						content = string(data)
 					}
 				}
 				reasoning, tokens := "baseline", 3
@@ -89,7 +107,7 @@ func TestDeepSeekSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 			case "support":
 				want, wantOutcome = loom.StructuredOutputJSONSchema, OutcomePositive
 			case "unavailable":
-				want, wantOutcome = loom.StructuredOutputUnsupported, OutcomeError
+				want, wantOutcome = loom.StructuredOutputJSONObject, OutcomeError
 			}
 			if report.Observed.StructuredOutput != want || report.Coverage.StructuredOutput != (behavior != "unavailable") {
 				t.Fatalf("observed=%+v coverage=%+v", report.Observed, report.Coverage)

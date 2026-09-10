@@ -66,7 +66,15 @@ func (e *APIError) RejectsCapability(field string) bool {
 	if !matched {
 		return false
 	}
-	for _, marker := range []string{"not support", "unsupported", "不支持", "only support", "仅支持", "invalid", "非法", "invalid value"} {
+	markers := []string{"not support", "unsupported", "不支持", "only support", "仅支持"}
+	if field == "response_format" {
+		// An invalid schema/parameter is not evidence that the format itself is
+		// unavailable. Require an explicit capability rejection for this probe.
+		markers = append(markers, "type is unavailable", "type unavailable")
+	} else {
+		markers = append(markers, "invalid", "非法")
+	}
+	for _, marker := range markers {
 		if strings.Contains(msg, marker) {
 			return true
 		}

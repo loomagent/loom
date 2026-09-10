@@ -48,7 +48,7 @@ func (m *fakeModel) Stream(context.Context, loom.ChatRequest) (loom.Stream, erro
 func TestProbeBuildsSyntheticModelsAndDerivesCapabilities(t *testing.T) {
 	builder := &fakeBuilder{handler: func(capabilities loom.ModelCapabilities, request loom.ChatRequest) (*loom.ChatResponse, error) {
 		if request.StructuredOutput != nil || request.ResponseFormat == loom.ResponseFormatJSONObject {
-			return &loom.ChatResponse{Content: `{"ok":true}`, FinishReason: loom.FinishReasonStop}, nil
+			return &loom.ChatResponse{Content: validStructuredResponse(t, request), FinishReason: loom.FinishReasonStop}, nil
 		}
 		if capabilities.Reasoning == loom.ReasoningSupportNone {
 			return reasoningResponse(5), nil
@@ -123,9 +123,9 @@ func TestProbeDoesNotTurnOperationalFailureIntoUnsupported(t *testing.T) {
 func TestProbeSchemaRejectsNonDiscriminatingOutput(t *testing.T) {
 	model := &fakeModel{handler: func(_ loom.ModelCapabilities, request loom.ChatRequest) (*loom.ChatResponse, error) {
 		if request.StructuredOutput != nil {
-			return &loom.ChatResponse{Content: `{"ok":false}`}, nil
+			return &loom.ChatResponse{Content: `{"ok":false}`, FinishReason: loom.FinishReasonStop}, nil
 		}
-		return &loom.ChatResponse{Content: `[]`}, nil
+		return &loom.ChatResponse{Content: `[]`, FinishReason: loom.FinishReasonStop}, nil
 	}}
 	object, schema, err := probeStructuredOutput(context.Background(), model, defaultPerCallTimeout, loom.Reasoning{Mode: loom.ReasoningModeDisabled}, nil)
 	if err != nil {

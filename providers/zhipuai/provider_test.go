@@ -195,7 +195,7 @@ func TestControlsAndCapabilities(t *testing.T) {
 	}
 	req = request()
 	req.StructuredOutput = &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema}
-	if _, err := m.buildRequest(req); !errors.Is(err, loom.ErrUnsupportedCapability) {
+	if _, err := m.buildRequest(req); err == nil || errors.Is(err, loom.ErrUnsupportedCapability) {
 		t.Fatalf("schema: %v", err)
 	}
 	for _, mode := range []loom.ToolChoiceMode{loom.ToolChoiceNone, loom.ToolChoiceRequired, loom.ToolChoiceSpecific} {

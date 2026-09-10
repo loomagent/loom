@@ -250,7 +250,17 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 	if req.StructuredOutput != nil {
 		switch req.StructuredOutput.Mode {
 		case loom.StructuredOutputJSONSchema:
-			return out, fmt.Errorf("%w: zhipuai supports json_object, not json_schema", loom.ErrUnsupportedCapability)
+			if req.StructuredOutput.Schema == nil {
+				return out, fmt.Errorf("loom/zhipuai: json_schema structured output 缺少 schema")
+			}
+			out.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
+				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+					Name:        req.StructuredOutput.Name,
+					Description: param.NewOpt(req.StructuredOutput.Description),
+					Schema:      req.StructuredOutput.Schema,
+					Strict:      param.NewOpt(true),
+				},
+			}
 		case loom.StructuredOutputJSONObject:
 			out.ResponseFormat.OfJSONObject = &shared.ResponseFormatJSONObjectParam{}
 		case loom.StructuredOutputUnsupported:

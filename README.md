@@ -201,6 +201,17 @@ By default, request errors remain inconclusive and never silently become an
 their provider exposes a reliable unsupported-parameter error classification.
 Adapter-local validation errors remain inconclusive even with that classifier.
 
+Object and Schema are independent checks. Schema probes include a fresh random
+constraint only in the supplied schema and validate the complete response after
+a normal `stop`; truncated or abnormally terminated output is inconclusive.
+Reports retain the requested schema and response model for auditing. A passing
+sample demonstrates that request and output, not enforcement of every JSON Schema
+keyword. `Observed.StructuredOutput` retains the strongest observed success even
+when the other check is inconclusive; `Coverage.StructuredOutput` requires both
+checks to be conclusive. Inspect individual checks before interpreting the summary.
+If `Probe` returns an error after starting, retain its partial report: completed
+checks are preserved, and cancellation prevents further experiments.
+
 Probe candidates come only from the administrator's `Options.DeclaredCapabilities`.
 `Options.ReasoningEfforts` can explicitly restrict diagnostic candidates; an empty
 slice skips them. There is no built-in model catalogue or alias map. Reports record
@@ -380,11 +391,14 @@ response, err := model.Chat(ctx, loom.ChatRequest{
 // Handle err and consume response.
 ```
 
-GLM-5.3's documented reasoning modes are always-on with low/high/max effort.
-Capabilities are caller supplied; a nil capability declaration forwards explicit
+Capabilities in this example are caller supplied; a nil declaration forwards explicit
 controls for probing instead of hardcoding behavior based on a model name.
-The provider supports JSON Object output and automatic function selection;
-JSON Schema and forced tool selection return `loom.ErrUnsupportedCapability`.
+The adapter transports JSON Object and complete JSON Schema requests in both
+Chat and Stream, including schema name, description, constraints, and `strict:true`.
+Explicit business capability declarations still gate requests; probes bypass
+those gates to observe the endpoint's current behavior. Schema requests are never
+downgraded or replaced with prompt instructions. Forced tool selection returns
+`loom.ErrUnsupportedCapability`.
 It preserves `reasoning_content` across tool calls and enables `tool_stream`
 for streaming tool requests. Missing reasoning-token telemetry is not evidence
 that thinking is disabled (`Usage.ReasoningTokensKnown` distinguishes missing

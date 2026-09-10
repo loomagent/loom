@@ -2,6 +2,7 @@ package modelprobe
 
 import (
 	"context"
+	"crypto/rand"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -61,14 +62,23 @@ func Probe(ctx context.Context, builder Builder, options Options) (Report, error
 	}
 	report := Report{SchemaVersion: 2, Model: rawModel.Name(), Checks: []Check{}, EffortCoverage: coverage}
 
-	defaultCheck := probeReasoning(ctx, omitModel, timeout, CheckReasoningDefault, loom.Reasoning{Mode: loom.ReasoningModeDisabled}, true, nil)
-	disableCheck := probeReasoning(ctx, rawModel, timeout, CheckReasoningDisable, loom.Reasoning{Mode: loom.ReasoningModeDisabled}, false, options.ErrorClassifier)
-	enableCheck := probeReasoning(ctx, rawModel, timeout, CheckReasoningEnable, loom.Reasoning{Mode: loom.ReasoningModeEnabled}, true, options.ErrorClassifier)
-	report.Checks = append(report.Checks, defaultCheck, disableCheck, enableCheck)
-	if err := ctx.Err(); err != nil {
-		finalizeEffortCoverage(&report)
-		return report, err
+	for _, experiment := range []struct {
+		model    loom.ChatModel
+		name     string
+		mode     loom.ReasoningMode
+		positive bool
+	}{
+		{omitModel, CheckReasoningDefault, loom.ReasoningModeDisabled, true},
+		{rawModel, CheckReasoningDisable, loom.ReasoningModeDisabled, false},
+		{rawModel, CheckReasoningEnable, loom.ReasoningModeEnabled, true},
+	} {
+		if err := ctx.Err(); err != nil {
+			finalizeEffortCoverage(&report)
+			return report, err
+		}
+		report.Checks = append(report.Checks, probeReasoning(ctx, experiment.model, timeout, experiment.name, loom.Reasoning{Mode: experiment.mode}, experiment.positive, options.ErrorClassifier))
 	}
+	defaultCheck, disableCheck, enableCheck := report.Checks[0], report.Checks[1], report.Checks[2]
 
 	if allConclusive(defaultCheck, disableCheck, enableCheck) {
 		report.Coverage.ReasoningSupport = true
@@ -113,16 +123,22 @@ func Probe(ctx context.Context, builder Builder, options Options) (Report, error
 		structuredReasoning.Mode = loom.ReasoningModeEnabled
 	}
 	objectCheck, schemaCheck, err := probeStructuredOutput(ctx, structuredModel, timeout, structuredReasoning, options.ErrorClassifier)
-	if err != nil {
-		return Report{}, err
+	for _, check := range []Check{objectCheck, schemaCheck} {
+		if check.Name != "" {
+			report.Checks = append(report.Checks, check)
+		}
 	}
-	report.Checks = append(report.Checks, objectCheck, schemaCheck)
-	if allConclusive(objectCheck, schemaCheck) || schemaCheck.Outcome == OutcomePositive {
-		report.Coverage.StructuredOutput = true
+	// Keep the strongest observed success even when the other mode is unknown.
+	// Coverage requires both independent experiments; Schema cannot prove Object.
+	report.Coverage.StructuredOutput = allConclusive(objectCheck, schemaCheck)
+	if report.Coverage.StructuredOutput || objectCheck.Outcome == OutcomePositive || schemaCheck.Outcome == OutcomePositive {
 		report.Observed.StructuredOutput = DeriveStructuredOutput(
 			objectCheck.Outcome == OutcomePositive,
 			schemaCheck.Outcome == OutcomePositive,
 		)
+	}
+	if err != nil {
+		return report, err
 	}
 	if err := ctx.Err(); err != nil {
 		finalizeEffortCoverage(&report)
@@ -157,6 +173,7 @@ func probeReasoning(ctx context.Context, model loom.ChatModel, timeout time.Dura
 	check.Evidence.ReasoningTokens = response.Usage.ReasoningTokens
 	check.Evidence.ReasoningContent = strings.TrimSpace(response.ReasoningContent) != ""
 	check.Evidence.FinishReason = response.FinishReason
+	check.Evidence.ResponseModel = response.Model
 	check.Evidence.ResponsePreview = preview(response.Content)
 	reasoningObserved := check.Evidence.ReasoningTokens > 0 || check.Evidence.ReasoningContent
 	// Preserve the stricter GLM audit: a zero-token response from this
@@ -181,6 +198,9 @@ func probeReasoning(ctx context.Context, model loom.ChatModel, timeout time.Dura
 }
 
 func probeStructuredOutput(ctx context.Context, model loom.ChatModel, timeout time.Duration, reasoning loom.Reasoning, classify ErrorClassifier) (Check, Check, error) {
+	if err := ctx.Err(); err != nil {
+		return Check{}, Check{}, err
+	}
 	schema := probeSchema()
 	resolved, err := schema.Resolve(nil)
 	if err != nil {
@@ -188,11 +208,14 @@ func probeStructuredOutput(ctx context.Context, model loom.ChatModel, timeout ti
 	}
 	object := probeStructured(ctx, model, timeout, CheckStructuredJSONObject, reasoning,
 		loom.ChatRequest{ResponseFormat: loom.ResponseFormatJSONObject}, nil, classify)
+	if err := ctx.Err(); err != nil {
+		return object, Check{}, err
+	}
 	schemaCheck := probeStructured(ctx, model, timeout, CheckStructuredJSONSchema, reasoning,
 		loom.ChatRequest{StructuredOutput: &loom.StructuredOutput{
 			Mode: loom.StructuredOutputJSONSchema, Name: "loom_model_probe", Schema: schema,
 		}}, resolved, classify)
-	return object, schemaCheck, nil
+	return object, schemaCheck, ctx.Err()
 }
 
 func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Duration, name string, reasoning loom.Reasoning, request loom.ChatRequest, schema *jsonschema.Resolved, classify ErrorClassifier) Check {
@@ -205,6 +228,11 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 	}
 	request.Reasoning = reasoning
 	evidence := requestEvidence(model, reasoning)
+	evidence.RequestedResponseFormat = string(request.ResponseFormat)
+	if request.StructuredOutput != nil {
+		evidence.RequestedResponseFormat = string(request.StructuredOutput.Mode)
+		evidence.RequestedSchema = request.StructuredOutput.Schema
+	}
 	response, err := model.Chat(callCtx, request)
 	check := Check{Name: name, DurationMS: time.Since(started).Milliseconds(), Evidence: evidence}
 	if err != nil {
@@ -220,7 +248,13 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 	}
 	check.Evidence.Acceptance = "accepted"
 	check.Evidence.FinishReason = response.FinishReason
+	check.Evidence.ResponseModel = response.Model
 	check.Evidence.ResponsePreview = preview(response.Content)
+	if response.FinishReason != loom.FinishReasonStop {
+		check.Outcome = OutcomeError
+		check.Evidence.Error = "insufficient evidence: structured response did not finish normally"
+		return check
+	}
 	var value any
 	if err := jsonv2.Unmarshal([]byte(strings.TrimSpace(response.Content)), &value); err != nil {
 		check.Outcome = OutcomeNegative
@@ -245,11 +279,16 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 
 func probeSchema() *jsonschema.Schema {
 	type response struct {
-		OK bool `json:"ok" jsonschema:"Whether the probe succeeded. Must be true."`
+		OK    bool   `json:"ok" jsonschema:"Whether the probe succeeded. Must be true."`
+		Nonce string `json:"nonce"`
 	}
 	schema := loom.MustSchemaFor[response]()
 	trueValue := any(true)
 	schema.Properties["ok"].Const = &trueValue
+	// Only the response schema contains this per-experiment constraint. A fixed
+	// answer or prompt-following without reading the schema cannot pass it.
+	nonce := any(rand.Text())
+	schema.Properties["nonce"].Const = &nonce
 	return schema
 }
 
@@ -303,7 +342,7 @@ func validateEfforts(efforts []loom.ReasoningEffort) error {
 
 func allConclusive(checks ...Check) bool {
 	for _, check := range checks {
-		if check.Outcome == OutcomeError {
+		if check.Outcome != OutcomePositive && check.Outcome != OutcomeNegative {
 			return false
 		}
 	}

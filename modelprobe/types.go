@@ -6,6 +6,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
+
 	"github.com/loomagent/loom"
 )
 
@@ -60,6 +62,11 @@ const (
 // Evidence contains machine-readable observations from one request. Response
 // content is truncated because reports are commonly persisted or logged.
 type Evidence struct {
+	// Requested constraints are intent, not proof of adapter serialization or
+	// server enforcement. Retain randomized schemas so results are auditable.
+	RequestedResponseFormat string             `json:"requested_response_format,omitempty"`
+	RequestedSchema         *jsonschema.Schema `json:"requested_schema,omitempty"`
+	ResponseModel           string             `json:"response_model,omitempty"`
 	// Acceptance is independent of observable reasoning and native semantics.
 	Acceptance          string           `json:"acceptance,omitempty"` // accepted, rejected, local_rejected, unknown
 	RequestedReasoning  ReasoningRequest `json:"requested_reasoning"`
@@ -98,13 +105,16 @@ type Coverage struct {
 // of reasoning evidence. Schema v1 also required observable reasoning.
 // Neither version establishes independently implemented native budgets.
 type ObservedCapabilities struct {
-	ReasoningObservedEfforts []loom.ReasoningEffort    `json:"reasoning_observed_efforts,omitempty"`
-	Reasoning                loom.ReasoningSupport     `json:"reasoning"`
-	AcceptedReasoningEfforts []loom.ReasoningEffort    `json:"accepted_reasoning_efforts"`
-	StructuredOutput         loom.StructuredOutputMode `json:"structured_output"`
+	ReasoningObservedEfforts []loom.ReasoningEffort `json:"reasoning_observed_efforts,omitempty"`
+	Reasoning                loom.ReasoningSupport  `json:"reasoning"`
+	AcceptedReasoningEfforts []loom.ReasoningEffort `json:"accepted_reasoning_efforts"`
+	// StructuredOutput is the strongest observed success, not an exhaustive
+	// profile when Coverage.StructuredOutput is false. Consult individual Checks.
+	StructuredOutput loom.StructuredOutputMode `json:"structured_output"`
 }
 
-// Report is a serializable behavioral capability profile.
+// Report is a serializable behavioral capability profile. Probe can return a
+// partial Report alongside an error; completed checks remain valid evidence.
 type Report struct {
 	EffortCoverage *EffortCoverage      `json:"effort_coverage,omitempty"`
 	SchemaVersion  int                  `json:"schema_version"`
