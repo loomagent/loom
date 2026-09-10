@@ -2,10 +2,9 @@ package loom
 
 import "errors"
 
-// ErrUnsupportedCapability means a provider cannot honor an explicitly
-// requested model capability. Callers may use it as negative capability
-// evidence; authentication, quota, transport, and server failures must not
-// wrap this sentinel.
+// ErrUnsupportedCapability describes a local capability/configuration restriction.
+// It never establishes upstream model support; capability probes must reach the
+// provider independently of stored declarations and adapter assumptions.
 var ErrUnsupportedCapability = errors.New("loom: provider 不支持此请求")
 
 // ErrTurnClosed Turn 已封口或被外部终结,写入被拒。
