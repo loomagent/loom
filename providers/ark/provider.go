@@ -77,6 +77,7 @@ func New(cfg Config) (*Model, error) {
 		baseURL = DefaultBaseURL
 	}
 	opts := []arkruntime.ConfigOption{arkruntime.WithBaseUrl(baseURL)}
+	opts = withUsageTransport(cfg.APIKey, opts)
 	client := arkruntime.NewClientWithApiKey(cfg.APIKey, opts...)
 	retryCfg := cfg.Retry
 	if retryCfg == nil {
@@ -123,6 +124,7 @@ func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatRespo
 }
 
 func (m *Model) chatRaw(ctx context.Context, req arkmodel.CreateChatCompletionRequest) (*loom.ChatResponse, error) {
+	ctx, evidence := captureUsage(ctx)
 	out, err := m.client.CreateChatCompletion(ctx, req, m.requestOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("loom/ark: chat: %w", err)
@@ -136,7 +138,7 @@ func (m *Model) chatRaw(ctx context.Context, req arkmodel.CreateChatCompletionRe
 		ReasoningContent: derefString(choice.Message.ReasoningContent),
 		ToolCalls:        translateToolCalls(choice.Message.ToolCalls),
 		FinishReason:     translateFinishReason(choice.FinishReason),
-		Usage:            translateUsage(&out.Usage),
+		Usage:            translateUsage(&out.Usage, evidence.known()),
 		Model:            out.Model,
 	}, nil
 }
@@ -164,12 +166,15 @@ func (m *Model) streamRaw(ctx context.Context, req arkmodel.CreateChatCompletion
 	if err != nil {
 		return nil, fmt.Errorf("loom/ark: stream: %w", err)
 	}
-	return &streamAdapter{inner: stream}, nil
+	decoder := &usageUnmarshaler{inner: stream.Unmarshaler}
+	stream.Unmarshaler = decoder
+	return &streamAdapter{inner: stream, usageDecoder: decoder}, nil
 }
 
 // streamAdapter 把 arkruntime.ChatCompletionStreamReader 包装成 loom.Stream。
 type streamAdapter struct {
-	inner *arkutils.ChatCompletionStreamReader
+	inner        *arkutils.ChatCompletionStreamReader
+	usageDecoder *usageUnmarshaler
 }
 
 func (s *streamAdapter) Recv() (*loom.Chunk, error) {
@@ -179,7 +184,7 @@ func (s *streamAdapter) Recv() (*loom.Chunk, error) {
 	}
 	chunk := &loom.Chunk{Model: raw.Model}
 	if raw.Usage != nil {
-		u := translateUsage(raw.Usage)
+		u := translateUsage(raw.Usage, s.usageDecoder != nil && s.usageDecoder.evidence.known())
 		chunk.Usage = &u
 	}
 	if len(raw.Choices) > 0 {
@@ -466,16 +471,17 @@ func translateFinishReason(r arkmodel.FinishReason) loom.FinishReason {
 	}
 }
 
-func translateUsage(u *arkmodel.Usage) loom.Usage {
+func translateUsage(u *arkmodel.Usage, reasoningKnown bool) loom.Usage {
 	if u == nil {
 		return loom.Usage{}
 	}
 	return loom.Usage{
-		PromptTokens:     uint64(u.PromptTokens),
-		CompletionTokens: uint64(u.CompletionTokens),
-		TotalTokens:      uint64(u.TotalTokens),
-		CachedTokens:     uint64(u.PromptTokensDetails.CachedTokens),
-		ReasoningTokens:  uint64(u.CompletionTokensDetails.ReasoningTokens),
+		PromptTokens:         uint64(u.PromptTokens),
+		CompletionTokens:     uint64(u.CompletionTokens),
+		TotalTokens:          uint64(u.TotalTokens),
+		CachedTokens:         uint64(u.PromptTokensDetails.CachedTokens),
+		ReasoningTokens:      uint64(u.CompletionTokensDetails.ReasoningTokens),
+		ReasoningTokensKnown: reasoningKnown,
 	}
 }
 
