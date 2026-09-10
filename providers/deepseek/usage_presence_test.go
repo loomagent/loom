@@ -45,12 +45,12 @@ func TestUsagePresenceOnWire(t *testing.T) {
 					}
 					if stream {
 						w.Header().Set("Content-Type", "text/event-stream")
-						fmt.Fprint(w, "data: {\"model\":\"deepseek-future\",\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\n")
-						fmt.Fprintf(w, "data: {\"choices\":[]%s}\n\n", tc.usage)
+						_, _ = fmt.Fprint(w, "data: {\"model\":\"deepseek-future\",\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\n")
+						_, _ = fmt.Fprintf(w, "data: {\"choices\":[]%s}\n\n", tc.usage)
 						// Explicit missing telemetry after a known frame must not inherit it.
-						fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n")
+						_, _ = fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n")
 					} else {
-						fmt.Fprintf(w, `{"model":"deepseek-future","choices":[{"message":{"content":"answer"},"finish_reason":"stop"}]%s}`, tc.usage)
+						_, _ = fmt.Fprintf(w, `{"model":"deepseek-future","choices":[{"message":{"content":"answer"},"finish_reason":"stop"}]%s}`, tc.usage)
 					}
 				}))
 				defer server.Close()
@@ -65,7 +65,7 @@ func TestUsagePresenceOnWire(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					defer s.Close()
+					defer func() { _ = s.Close() }()
 					first, err := s.Recv()
 					if err != nil || first.ContentDelta != "answer" || first.Usage != nil {
 						t.Fatalf("first=%+v err=%v", first, err)

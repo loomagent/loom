@@ -41,10 +41,10 @@ func TestSchemaRequestReachesUnknownModel(t *testing.T) {
 				}
 				if streaming {
 					w.Header().Set("Content-Type", "text/event-stream")
-					fmt.Fprint(w, "data: {\"model\":\"deepseek-future\",\"choices\":[{\"delta\":{\"content\":\"{\\\"ok\\\":true}\"},\"finish_reason\":\"stop\"}]}\n\n")
-					fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"total_tokens\":12,\"completion_tokens_details\":{\"reasoning_tokens\":0}}}\n\ndata: [DONE]\n\n")
+					_, _ = fmt.Fprint(w, "data: {\"model\":\"deepseek-future\",\"choices\":[{\"delta\":{\"content\":\"{\\\"ok\\\":true}\"},\"finish_reason\":\"stop\"}]}\n\n")
+					_, _ = fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"total_tokens\":12,\"completion_tokens_details\":{\"reasoning_tokens\":0}}}\n\ndata: [DONE]\n\n")
 				} else {
-					fmt.Fprint(w, `{"model":"deepseek-future","choices":[{"message":{"content":"{\"ok\":true}"},"finish_reason":"stop"}],"usage":{"total_tokens":12,"completion_tokens_details":{"reasoning_tokens":0}}}`)
+					_, _ = fmt.Fprint(w, `{"model":"deepseek-future","choices":[{"message":{"content":"{\"ok\":true}"},"finish_reason":"stop"}],"usage":{"total_tokens":12,"completion_tokens_details":{"reasoning_tokens":0}}}`)
 				}
 			}))
 			defer server.Close()
@@ -59,7 +59,7 @@ func TestSchemaRequestReachesUnknownModel(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer stream.Close()
+				defer func() { _ = stream.Close() }()
 				var content string
 				var usage *loom.Usage
 				for {
@@ -122,7 +122,7 @@ func TestSchemaUpstreamErrorAndDeclaredBusinessGuard(t *testing.T) {
 		calls++
 		w.Header().Set("Retry-After", "7")
 		w.WriteHeader(400)
-		fmt.Fprint(w, `{"error":{"message":"This response_format type is unavailable now"}}`)
+		_, _ = fmt.Fprint(w, `{"error":{"message":"This response_format type is unavailable now"}}`)
 	}))
 	defer server.Close()
 	req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "JSON"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema, Name: "probe", Schema: &jsonschema.Schema{Type: "object"}}}
