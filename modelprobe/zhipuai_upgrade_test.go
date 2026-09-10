@@ -29,6 +29,8 @@ func TestZhipuSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 		{name: "reject", status: 400, code: "1210", message: "response_format json_schema is unsupported", outcome: OutcomeNegative},
 		{name: "unavailable format", status: 400, code: "1210", message: "This response_format type is unavailable now", outcome: OutcomeNegative},
 		{name: "invalid schema", status: 400, code: "1210", message: "response_format.json_schema.schema is invalid: missing required property", outcome: OutcomeError},
+		{name: "unsupported schema keyword", status: 400, code: "1210", message: "response_format.json_schema.schema: unsupported keyword const", outcome: OutcomeError},
+		{name: "unsupported schema constraint", status: 400, code: "1210", message: "response_format: unsupported schema constraint minimum", outcome: OutcomeError},
 		{name: "ordinary parameter", status: 400, code: "1210", message: "temperature is unsupported", outcome: OutcomeError},
 		{name: "model missing", status: 400, code: "1211", message: "model does not exist", outcome: OutcomeError},
 		{name: "unauthorized", status: 401, code: "1000", message: "authentication failed", outcome: OutcomeError},
@@ -153,6 +155,94 @@ func TestZhipuSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 			}
 			if upgrade != (tc.name == "support") {
 				t.Fatalf("unexpected capability comparison: %+v", Compare(declared, report))
+			}
+		})
+	}
+}
+
+func TestZhipuUpstreamFailurePreservesPriorStructuredEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		objectContent string
+		objectStatus  int
+		objectOutcome Outcome
+		observed      loom.StructuredOutputMode
+	}{
+		{"prior success", `{"ok":true}`, 200, OutcomePositive, loom.StructuredOutputJSONObject},
+		{"prior confirmed failure", `[]`, 200, OutcomeNegative, loom.StructuredOutputUnsupported},
+		{"both unavailable", "", 503, OutcomeError, loom.StructuredOutputUnsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var objectCalls, schemaCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					ResponseFormat struct {
+						Type string `json:"type"`
+					} `json:"response_format"`
+				}
+				if err := json.UnmarshalRead(r.Body, &req); err != nil {
+					t.Error(err)
+					w.WriteHeader(400)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				content, status := "reasoned answer", 200
+				switch req.ResponseFormat.Type {
+				case "json_object":
+					objectCalls.Add(1)
+					content, status = tc.objectContent, tc.objectStatus
+				case "json_schema":
+					schemaCalls.Add(1)
+					status = 503
+				case "":
+				default:
+					t.Errorf("unexpected response format %s", req.ResponseFormat.Type)
+					w.WriteHeader(400)
+					return
+				}
+				if status == 503 {
+					w.WriteHeader(status)
+					fmt.Fprint(w, `{"error":{"code":"1200","message":"temporarily unavailable"}}`)
+					return
+				}
+				fmt.Fprintf(w, `{"model":"glm-response-version","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%q,"reasoning_content":"observed reasoning"}}]}`, content)
+			}))
+			defer server.Close()
+			builder := BuilderFunc(func(_ context.Context, caps loom.ModelCapabilities) (loom.ChatModel, error) {
+				return zhipuai.New(zhipuai.Config{APIKey: "test", ModelName: "glm-5.3", BaseURL: server.URL, Capabilities: &caps, Retry: &loom.RetryConfig{Mode: loom.RetryModeDisabled}})
+			})
+			declared := loom.ModelCapabilities{StructuredOutput: loom.StructuredOutputJSONSchema, Reasoning: loom.ReasoningSupportAlwaysOn}
+			// Upstream errors belong to their checks. Probe can finish the audit
+			// with inconclusive checks without returning a context/run error.
+			report, err := Probe(t.Context(), builder, Options{DeclaredCapabilities: &declared, ErrorClassifier: func(error) ErrorDisposition { return ErrorUnsupported }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(report.Checks) != 5 || objectCalls.Load() != 1 || schemaCalls.Load() != 1 {
+				t.Fatalf("report=%+v object=%d schema=%d", report, objectCalls.Load(), schemaCalls.Load())
+			}
+			// Serialization must preserve earlier positive/negative evidence as
+			// well as the later HTTP failure, with no fabricated complete profile.
+			data, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stored Report
+			if err := json.Unmarshal(data, &stored); err != nil {
+				t.Fatal(err)
+			}
+			object, schema := stored.Checks[3], stored.Checks[4]
+			if object.Outcome != tc.objectOutcome || schema.Outcome != OutcomeError || schema.Evidence.Acceptance != "unknown" || !strings.Contains(schema.Evidence.Error, "HTTP 503") {
+				t.Fatalf("object=%+v schema=%+v", object, schema)
+			}
+			if stored.Observed.StructuredOutput != tc.observed || stored.Coverage.StructuredOutput || stored.Observed.StructuredOutput == loom.StructuredOutputNone {
+				t.Fatalf("unavailable checks inferred a capability profile: %+v", stored)
+			}
+			if len(Compare(declared, stored)) != 0 {
+				t.Fatalf("incomplete profile generated downgrade: %+v", Compare(declared, stored))
+			}
+			if tc.objectStatus == 200 && (object.Evidence.Acceptance != "accepted" || object.Evidence.ResponsePreview != tc.objectContent || object.Evidence.FinishReason != loom.FinishReasonStop) {
+				t.Fatalf("prior evidence lost: %+v", object)
 			}
 		})
 	}

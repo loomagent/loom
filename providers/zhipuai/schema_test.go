@@ -179,3 +179,37 @@ func TestJSONSchemaUpstreamRejectionIsNotLocal(t *testing.T) {
 		})
 	}
 }
+func TestJSONSchemaCapabilityRejectionClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		status        int
+		code, message string
+		rejected      bool
+	}{
+		{"explicit rejection", 400, "1210", "response_format json_schema is unsupported", true},
+		{"format unavailable", 400, "1210", "This response_format type is unavailable now", true},
+		{"invalid schema", 400, "1210", "response_format.json_schema.schema is invalid: missing required property", false},
+		{"unsupported schema keyword", 400, "1210", "response_format.json_schema.schema: unsupported keyword const", false},
+		{"keyword without nested path", 400, "1210", "response_format: unsupported keyword const", false},
+		{"constraint rejection", 400, "1210", "response_format: unsupported schema constraint minimum", false},
+		{"nested schema type", 400, "1210", "response_format.json_schema.schema.properties.answer: type is unsupported", false},
+		{"bracket schema path", 400, "1210", "response_format['json_schema']['schema']: only supports objects", false},
+		{"pointer schema path", 400, "1210", "/response_format/json_schema/schema/properties/answer: unsupported type", false},
+		{"localized keyword", 400, "1210", "响应格式不支持关键字 const", false},
+		{"localized constraint", 400, "1210", "输出格式不支持约束 minimum", false},
+		{"localized format rejection", 400, "1210", "输出格式不支持 json_schema", true},
+		{"unrelated parameter", 400, "1210", "temperature is unsupported", false},
+		{"unknown code", 400, "9999", "response_format is unsupported", false},
+		{"auth", 401, "1000", "authentication failed", false},
+		{"balance", 429, "1113", "insufficient balance", false},
+		{"rate limit", 429, "1302", "rate limited", false},
+		{"availability", 503, "1200", "response_format service unavailable", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &APIError{StatusCode: tc.status, Code: tc.code, Message: tc.message}
+			if got := err.RejectsCapability("response_format"); got != tc.rejected {
+				t.Fatalf("RejectsCapability=%t want=%t error=%v", got, tc.rejected, err)
+			}
+		})
+	}
+}

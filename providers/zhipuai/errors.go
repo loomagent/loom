@@ -70,6 +70,18 @@ func (e *APIError) RejectsCapability(field string) bool {
 	if field == "response_format" {
 		// An invalid schema/parameter is not evidence that the format itself is
 		// unavailable. Require an explicit capability rejection for this probe.
+		// Providers may reject one schema keyword, constraint, or nested type
+		// while accepting json_schema itself. These narrower errors are unknown
+		// format capability evidence, even when they say "unsupported".
+		path := strings.NewReplacer("/", ".", "[", ".", "]", "", "'", "", "\"", "", " ", "").Replace(msg)
+		if strings.Contains(path, "json_schema.schema") || strings.Contains(path, "response_format.schema") {
+			return false
+		}
+		for _, marker := range []string{"keyword", "constraint", "关键字", "关键词", "约束"} {
+			if strings.Contains(msg, marker) {
+				return false
+			}
+		}
 		markers = append(markers, "type is unavailable", "type unavailable")
 	} else {
 		markers = append(markers, "invalid", "非法")
