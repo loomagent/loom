@@ -1,4 +1,4 @@
-// Package deepseek 实现 loom.ChatModel,底层走 github.com/storynap/goseek。
+// Package deepseek implements loom.ChatModel using the DeepSeek wire protocol.
 //
 // 用法:
 //
@@ -21,8 +21,10 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	goseek "github.com/storynap/goseek"
 
 	"github.com/loomagent/loom"
@@ -56,7 +58,7 @@ type Config struct {
 
 // Model 一个 DeepSeek 模型实例,实现 loom.ChatModel。
 type Model struct {
-	client       *goseek.Client
+	client       *chatClient
 	name         string
 	retryCfg     *loom.RetryConfig
 	capabilities loom.ModelCapabilities
@@ -71,11 +73,7 @@ func New(cfg Config) (*Model, error) {
 		return nil, fmt.Errorf("loom/deepseek: APIKey 不能为空")
 	}
 
-	var opts []goseek.Option
-	if cfg.BaseURL != "" {
-		opts = append(opts, goseek.WithBaseURL(cfg.BaseURL))
-	}
-	client, err := goseek.NewClient(cfg.APIKey, opts...)
+	client, err := newChatClient(cfg.APIKey, cfg.BaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("loom/deepseek: 创建 client: %w", err)
 	}
@@ -121,7 +119,7 @@ func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatRespo
 }
 
 // chatRaw 单次同步 Chat 调用(无 retry,供 retry helper 反复调)。
-func (m *Model) chatRaw(ctx context.Context, dsReq goseek.ChatCompletionRequest) (*loom.ChatResponse, error) {
+func (m *Model) chatRaw(ctx context.Context, dsReq chatRequest) (*loom.ChatResponse, error) {
 	out, err := m.client.CreateChatCompletion(ctx, dsReq)
 	if err != nil {
 		return nil, fmt.Errorf("loom/deepseek: chat: %w", normalizeDeepSeekError(err))
@@ -159,7 +157,7 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 }
 
 // streamRaw 单次 Stream 调用(无 retry)。
-func (m *Model) streamRaw(ctx context.Context, dsReq goseek.ChatCompletionRequest) (loom.Stream, error) {
+func (m *Model) streamRaw(ctx context.Context, dsReq chatRequest) (loom.Stream, error) {
 	stream, err := m.client.CreateChatCompletionStream(ctx, dsReq)
 	if err != nil {
 		return nil, fmt.Errorf("loom/deepseek: stream: %w", normalizeDeepSeekError(err))
@@ -188,19 +186,19 @@ func isDeepSeekContentExistsRisk(err error) bool {
 	return strings.EqualFold(strings.TrimSpace(apiErr.Message), "Content Exists Risk")
 }
 
-// streamAdapter 把 goseek.ChatCompletionStream 包装成 loom.Stream。
+// streamAdapter maps the upstream SSE stream to loom.Stream.
 type streamAdapter struct {
-	inner *goseek.ChatCompletionStream
+	inner *ssestream.Stream[chatChunk]
 }
 
 func (s *streamAdapter) Recv() (*loom.Chunk, error) {
-	raw, err := s.inner.Recv()
-	if err != nil {
-		return nil, err // io.EOF 透传
+	if !s.inner.Next() {
+		if err := s.inner.Err(); err != nil {
+			return nil, err
+		}
+		return nil, io.EOF
 	}
-	if raw == nil {
-		return nil, nil
-	}
+	raw := s.inner.Current()
 
 	chunk := &loom.Chunk{Model: raw.Model}
 	if raw.Usage != nil {
@@ -225,17 +223,17 @@ func (s *streamAdapter) Close() error {
 	return s.inner.Close()
 }
 
-// buildRequest 把 loom.ChatRequest 翻译成 goseek 请求结构。
-// 仅 schema marshal 失败时返错(json.Marshal *jsonschema.Schema 走自定义 MarshalJSON)。
-func (m *Model) buildRequest(req loom.ChatRequest) (_ goseek.ChatCompletionRequest, err error) {
+// buildRequest validates explicit configuration and serializes the requested
+// protocol fields. It does not infer capabilities from the provider/model name.
+func (m *Model) buildRequest(req loom.ChatRequest) (_ chatRequest, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
-	out := goseek.ChatCompletionRequest{
+	out := chatRequest{ChatCompletionRequest: goseek.ChatCompletionRequest{
 		Model:       m.name,
 		Messages:    translateMessages(req.Messages),
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxTokens,
-	}
+	}}
 	switch len(req.Stop) {
 	case 0:
 		// 不传
@@ -245,11 +243,11 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ goseek.ChatCompletionReque
 		out.Stop = goseek.Stops(req.Stop...)
 	}
 	if err := loom.CheckRequestAgainstCapabilities(m.capabilities, req); err != nil {
-		return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: %w", err)
+		return chatRequest{}, fmt.Errorf("loom/deepseek: %w", err)
 	}
 	resolved, err := loom.ResolveModelReasoning("deepseek", m.name, m.capabilities, req.Reasoning)
 	if err != nil {
-		return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: %w", err)
+		return chatRequest{}, fmt.Errorf("loom/deepseek: %w", err)
 	}
 	switch resolved.Send {
 	case loom.ReasoningSendEnabled:
@@ -259,7 +257,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ goseek.ChatCompletionReque
 	case loom.ReasoningSendOmit:
 		// 不发 thinking 字段
 	default:
-		return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: 未知 reasoning send %q", resolved.Send)
+		return chatRequest{}, fmt.Errorf("loom/deepseek: 未知 reasoning send %q", resolved.Send)
 	}
 	out.ReasoningEffort = goseek.ReasoningEffort(resolved.Effort)
 
@@ -268,14 +266,25 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ goseek.ChatCompletionReque
 		case loom.StructuredOutputJSONObject:
 			out.ResponseFormat = goseek.JSONResponseFormat()
 		case loom.StructuredOutputJSONSchema:
-			return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: 不支持 json_schema structured output")
+			if req.StructuredOutput.Schema == nil {
+				return chatRequest{}, fmt.Errorf("loom/deepseek: json_schema structured output 缺少 schema")
+			}
+			out.ResponseFormat = map[string]any{
+				"type": "json_schema",
+				"json_schema": map[string]any{
+					"name":        req.StructuredOutput.Name,
+					"description": req.StructuredOutput.Description,
+					"strict":      true,
+					"schema":      req.StructuredOutput.Schema,
+				},
+			}
 		case loom.StructuredOutputUnsupported:
 			// 不传
 		case loom.StructuredOutputNone:
 			// 请求侧不允许 none(能力声明专用),CheckRequestAgainstCapabilities 已前置拦截
-			return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: StructuredOutput.Mode 不允许取 %q", req.StructuredOutput.Mode)
+			return chatRequest{}, fmt.Errorf("loom/deepseek: StructuredOutput.Mode 不允许取 %q", req.StructuredOutput.Mode)
 		default:
-			return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: 未知 structured output mode %q", req.StructuredOutput.Mode)
+			return chatRequest{}, fmt.Errorf("loom/deepseek: 未知 structured output mode %q", req.StructuredOutput.Mode)
 		}
 	} else {
 		switch req.ResponseFormat {
@@ -291,7 +300,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ goseek.ChatCompletionReque
 	}
 	tools, err := translateTools(req.Tools)
 	if err != nil {
-		return goseek.ChatCompletionRequest{}, fmt.Errorf("loom/deepseek: 翻译 tools: %w", err)
+		return chatRequest{}, fmt.Errorf("loom/deepseek: 翻译 tools: %w", err)
 	}
 	out.Tools = tools
 	if req.ToolChoice != nil {
@@ -460,7 +469,7 @@ func translateFinishReason(r goseek.FinishReason) loom.FinishReason {
 	}
 }
 
-func translateUsage(u *goseek.Usage) loom.Usage {
+func translateUsage(u *chatUsage) loom.Usage {
 	if u == nil {
 		return loom.Usage{}
 	}
@@ -470,8 +479,9 @@ func translateUsage(u *goseek.Usage) loom.Usage {
 		CachedTokens:     uint64(u.PromptCacheHitTokens),
 		TotalTokens:      uint64(u.TotalTokens),
 	}
-	if u.CompletionTokensDetails != nil {
-		out.ReasoningTokens = uint64(u.CompletionTokensDetails.ReasoningTokens)
+	if u.CompletionTokensDetails != nil && u.CompletionTokensDetails.ReasoningTokens != nil {
+		out.ReasoningTokens = *u.CompletionTokensDetails.ReasoningTokens
+		out.ReasoningTokensKnown = true
 	}
 	return out
 }
