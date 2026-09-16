@@ -1,3 +1,4 @@
+<!-- Overview, usage, and integration guidance for the Loom runtime. -->
 # Loom
 
 Loom is a lightweight, event-driven agent runtime for Go. It turns an agent's
@@ -121,6 +122,30 @@ Errors expose `ToolArgumentError` metadata and render a bounded, compact
 non-JSON `expected arguments` contract for model self-correction without
 dumping the full schema. A validated `example arguments` JSON object is included
 when the struct declares a complete example.
+
+## Structured model output
+
+`ChatStructured[T]` derives its JSON Schema with `SchemaFor[T]`, including
+supported `validate` constraints such as string lengths. It supplies the same
+schema through native `json_schema` or a `json_object` prompt and validates the
+response locally. Use `WithStructuredValidator` for additional business rules
+or constraints that cannot be represented in JSON Schema.
+
+Every response must be one complete JSON value and pass local schema validation,
+regardless of whether the model supports `json_schema`, `json_object`, or only
+text output. Markdown fences, surrounding prose, and multiple JSON values are
+rejected; JSON whitespace is accepted. No strict-mode option is required:
+
+```go
+type Result struct {
+    Summary string `json:"summary" validate:"min=1,max=200"`
+}
+
+result, response, err := loom.ChatStructured[Result](ctx, "summary", model, request)
+```
+
+Invalid JSON or schema violations use the configured output retry limit
+(`WithStructuredMaxAttempts`, two attempts by default).
 
 ## Packages
 
