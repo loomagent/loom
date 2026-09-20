@@ -4,7 +4,6 @@ go 1.27
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3
-	github.com/kaptinlin/jsonschema v0.9.9
 	github.com/openai/openai-go/v3 v3.56.0
 	github.com/volcengine/volcengine-go-sdk v1.2.51
 	go.opentelemetry.io/otel v1.46.0
@@ -17,10 +16,8 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
-	github.com/kaptinlin/jsonpointer v0.4.28 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/tidwall/gjson v1.19.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect

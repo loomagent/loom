@@ -2,28 +2,92 @@ package toolcontract
 
 import (
 	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
+	"strings"
 	"testing"
+
+	"github.com/loomagent/loom/internal/schema"
 )
 
-func TestValidatePreservesExactNumbersAndStructuredViolations(t *testing.T) {
-	validator, err := Compile([]byte(`{
+func compileJSON(t *testing.T, raw string) *Validator {
+	t.Helper()
+	var s schema.Schema
+	if err := jsonv2.Unmarshal([]byte(raw), &s); err != nil {
+		t.Fatalf("decode schema: %v", err)
+	}
+	validator, err := Compile(&s)
+	if err != nil {
+		t.Fatalf("compile schema: %v", err)
+	}
+	return validator
+}
+
+// Instance numbers keep their exact text, so integer detection must not be
+// fooled by the float64 rounding that a decoded schema value would suffer.
+func TestValidateKeepsExactIntegers(t *testing.T) {
+	validator := compileJSON(t, `{
 		"type":"object",
-		"properties":{"id":{"const":9007199254740993}},
+		"properties":{"id":{"type":"integer"}},
 		"required":["id"],
 		"additionalProperties":false
-	}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	}`)
 	if err := validator.Validate(jsontext.Value(`{"id":9007199254740993}`)); err != nil {
 		t.Fatalf("exact integer rejected: %v", err)
 	}
-	validationErr := validator.Validate(jsontext.Value(`{"id":9007199254740992,"extra":true}`))
+	validationErr := validator.Validate(jsontext.Value(`{"id":1.5,"extra":true}`))
 	if validationErr == nil {
 		t.Fatal("invalid arguments accepted")
 	}
-	assertViolation(t, validationErr.Violations, "id", "const_mismatch")
+	assertViolation(t, validationErr.Violations, "id", "type_mismatch")
 	assertViolation(t, validationErr.Violations, "", "additional_property_mismatch")
+}
+
+func TestValidateReportsEveryViolation(t *testing.T) {
+	validator := compileJSON(t, `{
+		"type":"object",
+		"properties":{
+			"name":{"type":"string","minLength":2},
+			"limit":{"type":"integer","minimum":1,"maximum":9}
+		},
+		"required":["name","limit"],
+		"additionalProperties":false
+	}`)
+	validationErr := validator.Validate(jsontext.Value(`{"name":"a","limit":0,"extra":1}`))
+	if validationErr == nil {
+		t.Fatal("invalid arguments accepted")
+	}
+	assertViolation(t, validationErr.Violations, "name", "string_too_short")
+	assertViolation(t, validationErr.Violations, "limit", "value_below_minimum")
+	assertViolation(t, validationErr.Violations, "", "additional_property_mismatch")
+}
+
+func TestValidateReportsMissingRequiredAndConstMismatch(t *testing.T) {
+	validator := compileJSON(t, `{
+		"type":"object",
+		"properties":{"kind":{"const":"a"}},
+		"required":["kind"],
+		"additionalProperties":false
+	}`)
+	validationErr := validator.Validate(jsontext.Value(`{"kind":"b"}`))
+	if validationErr == nil {
+		t.Fatal("invalid arguments accepted")
+	}
+	assertViolation(t, validationErr.Violations, "kind", "const_mismatch")
+
+	validationErr = validator.Validate(jsontext.Value(`{}`))
+	if validationErr == nil {
+		t.Fatal("missing required argument accepted")
+	}
+	// The object pointer is empty; the property name is attached later, when the
+	// violation is turned into a field diagnostic.
+	assertViolation(t, validationErr.Violations, "", "missing_required_property")
+}
+
+func TestCompileRejectsUnsupportedKeyword(t *testing.T) {
+	_, err := Compile(&schema.Schema{Ref: "#/$defs/x"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("Compile() = %v, want an unsupported-keyword error", err)
+	}
 }
 
 func TestViolationFieldDecodesJSONPointer(t *testing.T) {
