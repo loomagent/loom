@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-
-	"github.com/google/jsonschema-go/jsonschema"
 )
 
 const maxToolNameLength = 64
@@ -35,11 +33,11 @@ func ValidateToolName(name string) error {
 // 必要时给少样本示例 — 这是影响 LLM 调用准确率的关键。
 //
 // Parameters 是 JSON Schema (draft 2020-12 或 draft-07)。
-// nil 表示无入参;空 *jsonschema.Schema{} 等价于"接受任意 JSON"。
+// nil 表示无入参;空 *Schema{} 等价于"接受任意 JSON"。
 type ToolInfo struct {
 	Name            string
 	Description     string
-	Parameters      *jsonschema.Schema
+	Parameters      *Schema
 	RequiresNetwork bool
 }
 
@@ -80,7 +78,7 @@ func WithRequiresNetwork() ToolOption {
 	}
 }
 
-func newTool(name, description string, params *jsonschema.Schema, fn invokeFunc, opts ...ToolOption) Tool {
+func newTool(name, description string, params *Schema, fn invokeFunc, opts ...ToolOption) Tool {
 	info := &ToolInfo{Name: name, Description: description, Parameters: params}
 	for _, opt := range opts {
 		if opt != nil {

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-
-	"github.com/google/jsonschema-go/jsonschema"
 )
 
 // Role 消息角色。
@@ -361,7 +359,7 @@ type StructuredOutput struct {
 	Mode        StructuredOutputMode
 	Name        string
 	Description string
-	Schema      *jsonschema.Schema
+	Schema      *Schema
 }
 
 // ChatRequest 一次 LLM 调用的参数。

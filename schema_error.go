@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/jsonschema-go/jsonschema"
-
 	"github.com/loomagent/loom/internal/toolcontract"
 )
 
@@ -360,7 +358,7 @@ func quoteField(field string) string {
 	return strconv.Quote(field)
 }
 
-func summarizeExpectedArguments(schema *jsonschema.Schema) string {
+func summarizeExpectedArguments(schema *Schema) string {
 	if schema == nil || !schemaHasType(schema, "object") {
 		return ""
 	}
@@ -396,7 +394,7 @@ func summarizeExpectedArguments(schema *jsonschema.Schema) string {
 	return b.String()
 }
 
-func summarizeProperty(schema *jsonschema.Schema, required bool) string {
+func summarizeProperty(schema *Schema, required bool) string {
 	parts := []string{schemaTypeName(schema)}
 	if required {
 		parts = append(parts, "required")
@@ -410,7 +408,7 @@ func summarizeProperty(schema *jsonschema.Schema, required bool) string {
 	return strings.Join(parts, ", ")
 }
 
-func appendSchemaConstraintParts(parts []string, schema *jsonschema.Schema) []string {
+func appendSchemaConstraintParts(parts []string, schema *Schema) []string {
 	if schema == nil {
 		return parts
 	}
@@ -486,18 +484,11 @@ func appendSchemaConstraintParts(parts []string, schema *jsonschema.Schema) []st
 	return parts
 }
 
-func schemaTypeName(schema *jsonschema.Schema) string {
-	if schema == nil {
+func schemaTypeName(schema *Schema) string {
+	if schema == nil || schema.Type == "" {
 		return "value"
 	}
-	if schema.Type != "" {
-		return schema.Type
-	}
-	types := slices.DeleteFunc(slices.Clone(schema.Types), func(value string) bool { return value == "null" })
-	if len(types) == 0 {
-		return "value"
-	}
-	return strings.Join(types, " or ")
+	return schema.Type
 }
 
 func formatNumber(value float64) string {
@@ -512,7 +503,7 @@ func compactJSON(value any) string {
 	return string(data)
 }
 
-func constAlternatives(schemas []*jsonschema.Schema) ([]any, bool) {
+func constAlternatives(schemas []*Schema) ([]any, bool) {
 	values := make([]any, 0, len(schemas))
 	for _, schema := range schemas {
 		if schema == nil || schema.Const == nil {
@@ -540,7 +531,7 @@ func literalPatternConstraint(pattern string) (literal, kind string, ok bool) {
 	return literal, kind, regexp.QuoteMeta(literal) == pattern
 }
 
-func orderedPropertyNames(schema *jsonschema.Schema) []string {
+func orderedPropertyNames(schema *Schema) []string {
 	names := slices.Clone(schema.PropertyOrder)
 	seen := make(map[string]bool, len(names))
 	for _, name := range names {

@@ -10,8 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/google/jsonschema-go/jsonschema"
 )
 
 const defaultStructuredOutputAttempts uint64 = 2
@@ -221,7 +219,7 @@ func NormalizeStructuredOutputName(name string) string {
 }
 
 // StructuredSchemaObject 把 schema 转成普通 JSON object,供 provider SDK 放进 interface{} 字段。
-func StructuredSchemaObject(schema *jsonschema.Schema) (map[string]any, error) {
+func StructuredSchemaObject(schema *Schema) (map[string]any, error) {
 	if schema == nil {
 		return nil, errors.New("schema 不能为 nil")
 	}
@@ -236,7 +234,7 @@ func StructuredSchemaObject(schema *jsonschema.Schema) (map[string]any, error) {
 	return out, nil
 }
 
-func withStructuredOutputRequest(req ChatRequest, caps ModelCapabilities, name, description string, schema *jsonschema.Schema) ChatRequest {
+func withStructuredOutputRequest(req ChatRequest, caps ModelCapabilities, name, description string, schema *Schema) ChatRequest {
 	switch caps.StructuredOutput {
 	case StructuredOutputJSONSchema:
 		req.ResponseFormat = ResponseFormatDefault
@@ -263,7 +261,7 @@ func withStructuredOutputRequest(req ChatRequest, caps ModelCapabilities, name, 
 	return req
 }
 
-func appendStructuredPrompt(messages []Message, schema *jsonschema.Schema, description string) []Message {
+func appendStructuredPrompt(messages []Message, schema *Schema, description string) []Message {
 	schemaJSON, err := jsonv2.Marshal(schema, jsontext.WithIndent("  "))
 	if err != nil {
 		schemaJSON = []byte("{}")

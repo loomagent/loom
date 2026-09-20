@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/loomagent/loom"
 	"github.com/loomagent/loom/providers/zhipuai"
 )
@@ -50,9 +49,9 @@ func TestZhipuSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 					ResponseFormat *struct {
 						Type       string `json:"type"`
 						JSONSchema struct {
-							Name   string             `json:"name"`
-							Strict bool               `json:"strict"`
-							Schema *jsonschema.Schema `json:"schema"`
+							Name   string       `json:"name"`
+							Strict bool         `json:"strict"`
+							Schema *loom.Schema `json:"schema"`
 						} `json:"json_schema"`
 					} `json:"response_format"`
 				}

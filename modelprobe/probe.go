@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
-
 	"github.com/loomagent/loom"
 	"github.com/loomagent/loom/providers/zhipuai"
 )
@@ -202,10 +200,6 @@ func probeStructuredOutput(ctx context.Context, model loom.ChatModel, timeout ti
 		return Check{}, Check{}, err
 	}
 	schema := probeSchema()
-	resolved, err := schema.Resolve(nil)
-	if err != nil {
-		return Check{}, Check{}, fmt.Errorf("modelprobe: resolve probe schema: %w", err)
-	}
 	object := probeStructured(ctx, model, timeout, CheckStructuredJSONObject, reasoning,
 		loom.ChatRequest{ResponseFormat: loom.ResponseFormatJSONObject}, nil, classify)
 	if err := ctx.Err(); err != nil {
@@ -214,11 +208,11 @@ func probeStructuredOutput(ctx context.Context, model loom.ChatModel, timeout ti
 	schemaCheck := probeStructured(ctx, model, timeout, CheckStructuredJSONSchema, reasoning,
 		loom.ChatRequest{StructuredOutput: &loom.StructuredOutput{
 			Mode: loom.StructuredOutputJSONSchema, Name: "loom_model_probe", Schema: schema,
-		}}, resolved, classify)
+		}}, schema, classify)
 	return object, schemaCheck, ctx.Err()
 }
 
-func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Duration, name string, reasoning loom.Reasoning, request loom.ChatRequest, schema *jsonschema.Resolved, classify ErrorClassifier) Check {
+func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Duration, name string, reasoning loom.Reasoning, request loom.ChatRequest, schema *loom.Schema, classify ErrorClassifier) Check {
 	started := time.Now()
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -267,7 +261,7 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 		return check
 	}
 	if schema != nil {
-		if err := schema.Validate(value); err != nil {
+		if err := loom.ValidateSchema(schema, value); err != nil {
 			check.Outcome = OutcomeNegative
 			check.Evidence.Error = "response does not satisfy schema: " + err.Error()
 			return check
@@ -277,20 +271,21 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 	return check
 }
 
-func probeSchema() *jsonschema.Schema {
+func probeSchema() *loom.Schema {
 	trueValue := any(true)
 	// Only the response schema contains this per-experiment constraint. A fixed
 	// answer or prompt-following without reading the schema cannot pass it, so
 	// the schema is built per call rather than declared once as a contract.
 	nonce := any(rand.Text())
-	return &jsonschema.Schema{
+	falsy := false
+	return &loom.Schema{
 		Type: "object",
-		Properties: map[string]*jsonschema.Schema{
+		Properties: map[string]*loom.Schema{
 			"ok":    {Type: "boolean", Description: "Whether the probe succeeded. Must be true.", Const: &trueValue},
 			"nonce": {Type: "string", Const: &nonce},
 		},
 		Required:             []string{"ok", "nonce"},
-		AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}},
+		AdditionalProperties: &falsy,
 	}
 }
 

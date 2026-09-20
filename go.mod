@@ -4,7 +4,6 @@ go 1.27
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3
-	github.com/google/jsonschema-go v0.4.3
 	github.com/kaptinlin/jsonschema v0.9.9
 	github.com/openai/openai-go/v3 v3.56.0
 	github.com/volcengine/volcengine-go-sdk v1.2.51

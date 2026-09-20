@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/openai/openai-go/v3"
 
 	"github.com/loomagent/loom"
@@ -60,7 +59,7 @@ func TestSchemaRequestReachesUnknownModel(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "Use the response schema."}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "future-effort"}, StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema, Name: "future_contract", Schema: &jsonschema.Schema{Type: "object"}}}
+			req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "Use the response schema."}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "future-effort"}, StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema, Name: "future_contract", Schema: &loom.Schema{Type: "object"}}}
 			if streaming {
 				stream, err := m.Stream(t.Context(), req)
 				if err != nil {
@@ -133,7 +132,7 @@ func TestSchemaUpstreamErrorAndDeclaredBusinessGuard(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"error":{"message":"This response_format type is unavailable now"}}`)
 	}))
 	defer server.Close()
-	req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "JSON"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema, Name: "probe", Schema: &jsonschema.Schema{Type: "object"}}}
+	req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "JSON"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema, Name: "probe", Schema: &loom.Schema{Type: "object"}}}
 	m, err := New(Config{APIKey: "test", BaseURL: server.URL, ModelName: "deepseek-flash", Retry: &loom.RetryConfig{Mode: loom.RetryModeDisabled}})
 	if err != nil {
 		t.Fatal(err)

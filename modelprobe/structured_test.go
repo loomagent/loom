@@ -55,15 +55,11 @@ func TestStructuredProbeSchemaOnlyRandomConstraints(t *testing.T) {
 		if stored.Evidence.RequestedResponseFormat != "json_schema" || stored.Evidence.ResponseModel != "response-version" || stored.Evidence.RequestedSchema == nil {
 			t.Fatalf("evidence lost: %s", data)
 		}
-		resolved, err := stored.Evidence.RequestedSchema.Resolve(nil)
-		if err != nil {
-			t.Fatal(err)
-		}
 		var value any
 		if err := json.Unmarshal([]byte(stored.Evidence.ResponsePreview), &value); err != nil {
 			t.Fatal(err)
 		}
-		if err := resolved.Validate(value); err != nil {
+		if err := loom.ValidateSchema(stored.Evidence.RequestedSchema, value); err != nil {
 			t.Fatalf("stored constraints cannot validate evidence: %v", err)
 		}
 	}

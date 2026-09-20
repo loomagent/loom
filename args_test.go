@@ -51,7 +51,7 @@ func TestArgsContractSchema(t *testing.T) {
 	if got, want := schema.Required, []string{"query"}; !slices.Equal(got, want) {
 		t.Fatalf("required = %v, want %v", got, want)
 	}
-	if schema.AdditionalProperties == nil || schema.AdditionalProperties.Not == nil {
+	if schema.AdditionalProperties == nil || *schema.AdditionalProperties {
 		t.Fatal("additionalProperties must reject unknown arguments")
 	}
 	if got, want := schema.Properties["type"].Enum, []any{"search", "news"}; !slices.Equal(got, want) {
