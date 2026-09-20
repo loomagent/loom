@@ -401,7 +401,7 @@ func appendSchemaConstraintParts(parts []string, schema *Schema) []string {
 		return parts
 	}
 	if schema.Const != nil {
-		parts = append(parts, "equals "+compactJSON(*schema.Const))
+		parts = append(parts, "equals "+compactJSON(schema.Const))
 	}
 	if schema.Enum != nil {
 		parts = append(parts, "one of "+compactJSON(schema.Enum))

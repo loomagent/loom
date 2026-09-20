@@ -272,17 +272,16 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 }
 
 func probeSchema() *loom.Schema {
-	trueValue := any(true)
 	// Only the response schema contains this per-experiment constraint. A fixed
 	// answer or prompt-following without reading the schema cannot pass it, so
 	// the schema is built per call rather than declared once as a contract.
-	nonce := any(rand.Text())
+	nonce := rand.Text()
 	falsy := false
 	return &loom.Schema{
 		Type: "object",
 		Properties: map[string]*loom.Schema{
-			"ok":    {Type: "boolean", Description: "Whether the probe succeeded. Must be true.", Const: &trueValue},
-			"nonce": {Type: "string", Const: &nonce},
+			"ok":    {Type: "boolean", Description: "Whether the probe succeeded. Must be true.", Const: loom.ConstJSON(true)},
+			"nonce": {Type: "string", Const: loom.ConstJSON(nonce)},
 		},
 		Required:             []string{"ok", "nonce"},
 		AdditionalProperties: &falsy,

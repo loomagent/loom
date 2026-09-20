@@ -13,7 +13,6 @@ import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"fmt"
-	"math"
 	"math/big"
 	"regexp"
 	"sort"
@@ -195,10 +194,13 @@ func (run *validation) visit(s *schema.Schema, value any, pointer string) {
 	if s == nil {
 		return
 	}
-	if s.Const != nil && !equalJSON(value, *s.Const) {
-		run.add(pointer, "const", "const_mismatch", map[string]any{"expected": *s.Const})
+	if s.Const != nil {
+		expected := decodeValue(s.Const)
+		if !equalJSON(value, expected) {
+			run.add(pointer, "const", "const_mismatch", map[string]any{"expected": expected})
+		}
 	}
-	if len(s.Enum) > 0 && !inEnum(value, s.Enum) {
+	if s.Enum != nil && !inEnum(value, s.Enum) {
 		run.add(pointer, "enum", "value_not_in_enum", map[string]any{"allowed": s.Enum})
 	}
 	if s.Type != "" && !matchesType(s.Type, value) {
@@ -368,35 +370,71 @@ func inEnum(value any, allowed []any) bool {
 }
 
 func equalJSON(left, right any) bool {
-	if leftNumber, ok := numberRat(left); ok {
-		rightNumber, ok := numberRat(right)
-		return ok && leftNumber.Cmp(rightNumber) == 0
-	}
-	if _, ok := numberRat(right); ok {
-		return false
-	}
 	return canonicalJSON(left) == canonicalJSON(right)
 }
 
-func numberRat(value any) (*big.Rat, bool) {
+// canonicalJSON renders a decoded JSON value in a canonical form: object keys are
+// sorted, numbers are reduced to an exact rational, and arrays keep their order.
+// Marshaling and comparing text would not do: encoding/json/v2 does not order
+// map keys, so the same object would compare unequal at random, and 1 would
+// differ from 1.0.
+func canonicalJSON(value any) string {
+	var builder strings.Builder
+	writeCanonical(&builder, value)
+	return builder.String()
+}
+
+func writeCanonical(builder *strings.Builder, value any) {
 	switch typed := value.(type) {
-	case jsonNumber:
-		number, ok := new(big.Rat).SetString(string(typed))
-		return number, ok
-	case float64:
-		if math.IsInf(typed, 0) || math.IsNaN(typed) {
-			return nil, false
+	case map[string]any:
+		names := make([]string, 0, len(typed))
+		for name := range typed {
+			names = append(names, name)
 		}
-		return new(big.Rat).SetFloat64(typed), true
+		sort.Strings(names)
+		builder.WriteByte('{')
+		for index, name := range names {
+			if index > 0 {
+				builder.WriteByte(',')
+			}
+			builder.WriteString(strconv.Quote(name))
+			builder.WriteByte(':')
+			writeCanonical(builder, typed[name])
+		}
+		builder.WriteByte('}')
+	case []any:
+		builder.WriteByte('[')
+		for index, item := range typed {
+			if index > 0 {
+				builder.WriteByte(',')
+			}
+			writeCanonical(builder, item)
+		}
+		builder.WriteByte(']')
+	case jsonNumber:
+		writeCanonicalNumber(builder, string(typed))
+	case float64:
+		writeCanonicalNumber(builder, strconv.FormatFloat(typed, 'g', -1, 64))
+	case string:
+		builder.WriteString(strconv.Quote(typed))
+	case bool:
+		if typed {
+			builder.WriteString("true")
+		} else {
+			builder.WriteString("false")
+		}
+	case nil:
+		builder.WriteString("null")
 	default:
-		return nil, false
+		// decodeValue produces only the kinds above.
+		builder.WriteString("null")
 	}
 }
 
-func canonicalJSON(value any) string {
-	data, err := jsonv2.Marshal(value)
-	if err != nil {
-		return ""
+func writeCanonicalNumber(builder *strings.Builder, text string) {
+	if number, ok := new(big.Rat).SetString(text); ok {
+		builder.WriteString(number.RatString())
+		return
 	}
-	return string(data)
+	builder.WriteString(text)
 }

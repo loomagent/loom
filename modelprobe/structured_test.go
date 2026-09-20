@@ -15,7 +15,11 @@ func validStructuredResponse(t *testing.T, req loom.ChatRequest) string {
 	if req.StructuredOutput == nil {
 		return `{"ok":true}`
 	}
-	data, err := json.Marshal(map[string]any{"ok": true, "nonce": *req.StructuredOutput.Schema.Properties["nonce"].Const})
+	var nonce string
+	if err := json.Unmarshal(req.StructuredOutput.Schema.Properties["nonce"].Const, &nonce); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]any{"ok": true, "nonce": nonce})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +30,10 @@ func TestStructuredProbeSchemaOnlyRandomConstraints(t *testing.T) {
 	var nonces []string
 	model := &fakeModel{handler: func(_ loom.ModelCapabilities, req loom.ChatRequest) (*loom.ChatResponse, error) {
 		if req.StructuredOutput != nil {
-			nonce := (*req.StructuredOutput.Schema.Properties["nonce"].Const).(string)
+			var nonce string
+			if err := json.Unmarshal(req.StructuredOutput.Schema.Properties["nonce"].Const, &nonce); err != nil {
+				t.Fatalf("decode nonce: %v", err)
+			}
 			if len(nonce) < 16 {
 				t.Fatalf("weak nonce=%q", nonce)
 			}
