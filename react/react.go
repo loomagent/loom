@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -384,9 +385,7 @@ func writeFallbackNote(
 
 func snapshotState(step uint64, messages []loom.Message, tools []*loom.ToolInfo, total uint64, uses map[string]uint64) State {
 	useCopy := make(map[string]uint64, len(uses))
-	for name, count := range uses {
-		useCopy[name] = count
-	}
+	maps.Copy(useCopy, uses)
 	return State{Step: step, Messages: append([]loom.Message(nil), messages...), ToolInfos: append([]*loom.ToolInfo(nil), tools...), ToolCallsUsed: total, ToolUses: useCopy}
 }
 

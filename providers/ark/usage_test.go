@@ -13,6 +13,7 @@ import (
 )
 
 func TestUsagePresenceOnWire(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, usage string
 		known       bool

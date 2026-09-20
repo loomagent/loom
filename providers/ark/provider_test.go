@@ -117,8 +117,7 @@ func TestArkManuallyDeclaredEffortWireAndRejection(t *testing.T) {
 		}
 		body, err := m.ReasoningRequestParameters(loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: tc.effort})
 		if tc.wantErr {
-			var local *loom.RequestValidationError
-			if !errors.As(err, &local) {
+			if _, ok := errors.AsType[*loom.RequestValidationError](err); !ok {
 				t.Fatalf("expected local alias error: %v", err)
 			}
 			continue
@@ -152,8 +151,7 @@ func TestExplicitNoneDeclarationRejectsEnabledBeforeNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = model.Chat(context.Background(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hello"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}})
-	var local *loom.RequestValidationError
-	if !errors.As(err, &local) {
+	if _, ok := errors.AsType[*loom.RequestValidationError](err); !ok {
 		t.Fatalf("expected local contradiction, got %v", err)
 	}
 	if calls.Load() != 0 {

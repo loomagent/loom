@@ -93,7 +93,7 @@ May 30, 2025 was one of the referenced events.
 
 func manyLines(n int) string {
 	out := ""
-	for i := 0; i < n; i++ {
+	for range n {
 		out += "body line\n"
 	}
 	return out

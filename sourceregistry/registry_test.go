@@ -67,7 +67,7 @@ func TestMemoryStoreConcurrentAllocation(t *testing.T) {
 	const count = 100
 	var wg sync.WaitGroup
 	errs := make(chan error, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -102,16 +102,14 @@ func TestMemoryStoreConcurrentDuplicate(t *testing.T) {
 	const workers = 50
 	var wg sync.WaitGroup
 	errs := make(chan error, workers)
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			refs, err := registry.EnsureBatch(context.Background(), []Input{{URL: "https://example.com/same"}})
 			if err == nil && refs[0].Seq != 1 {
 				err = fmt.Errorf("seq=%d", refs[0].Seq)
 			}
 			errs <- err
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

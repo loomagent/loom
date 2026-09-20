@@ -5,6 +5,7 @@ package contextpolicy
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/loomagent/loom"
 	"github.com/loomagent/loom/react"
@@ -123,8 +124,6 @@ func cloneMap(in map[string]string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
+	maps.Copy(out, in)
 	return out
 }

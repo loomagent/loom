@@ -264,7 +264,7 @@ func (b *argsBuilder) schema() *Schema {
 		Type:                 "object",
 		Properties:           properties,
 		Required:             required,
-		AdditionalProperties: boolPtr(false),
+		AdditionalProperties: new(false),
 	}
 }
 

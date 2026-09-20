@@ -141,8 +141,7 @@ func TestJSONSchemaLocalValidationAndBusinessGates(t *testing.T) {
 				} else {
 					_, err = m.Chat(context.Background(), req)
 				}
-				var local *loom.RequestValidationError
-				if !errors.As(err, &local) {
+				if _, ok := errors.AsType[*loom.RequestValidationError](err); !ok {
 					t.Fatalf("stream=%t expected typed local validation error, got %v", stream, err)
 				}
 			}

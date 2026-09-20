@@ -1,0 +1,58 @@
+# golangci-lint configuration (version 2).
+#
+# The rule set encodes the project's testing principles: tests must use
+# encoding/json/v2, must advance time with synctest rather than sleeping, and
+# must use the testing package's own helpers.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - depguard
+    - forbidigo
+    - modernize
+    - thelper
+    - tparallel
+    - usetesting
+
+  settings:
+    # Tests may not import encoding/json (v1): fixtures and assertions must go
+    # through encoding/json/v2, whose strict mode is what the runtime uses.
+    depguard:
+      rules:
+        tests-use-json-v2:
+          files:
+            - "$test"
+          deny:
+            # Anchored so encoding/json/v2 and encoding/json/jsontext are not
+            # caught: depguard matches pkg as a regular expression.
+            - pkg: '^encoding/json$'
+              desc: 'use encoding/json/v2 in tests'
+
+    # A test must not wait on a real clock. Advance time with synctest.Sleep
+    # inside a synctest bubble.
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^time\.Sleep$'
+          msg: 'use synctest.Sleep inside a synctest bubble instead of time.Sleep'
+
+  exclusions:
+    rules:
+      # forbidigo guards tests only; the framework itself may need to sleep.
+      - path-except: _test\.go
+        linters: [forbidigo]
+
+      # Input and Source always carry these nested evidence objects today.
+      # Whether to omit them when empty changes the stored JSON, so it is a
+      # wire-format decision rather than a lint fix.
+      - path: sourceregistry/types\.go
+        linters: [modernize]
+        text: 'omitzero:'
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+run:
+  timeout: 5m
