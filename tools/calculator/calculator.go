@@ -28,22 +28,23 @@ type response struct {
 // New constructs a calculator Loom tool.
 func New() loom.Tool {
 	description := "Evaluate a mathematical expression in a restricted Starlark environment. Supports arithmetic, parentheses, and functions from the Starlark math module."
-	contract := loom.MustArgsContract(ToolName,
-		loom.String("expression").
-			Required().
-			MinLen(1).
-			NotBlank().
-			Example("(2 + 3) * 4").
-			Desc("Mathematical expression using Starlark syntax, for example '(2 + 3) * 4', 'math.sqrt(144)', or 'math.pow(2, 8)'."),
-	)
-	return loom.NewArgsTool(contract, description, invoke)
+	expression := loom.String("expression").
+		Required().
+		MinLen(1).
+		NotBlank().
+		Example("(2 + 3) * 4").
+		Desc("Mathematical expression using Starlark syntax, for example '(2 + 3) * 4', 'math.sqrt(144)', or 'math.pow(2, 8)'.")
+	contract := loom.MustArgsContract(ToolName, expression)
+	return loom.NewArgsTool(contract, description, func(ctx context.Context, args loom.Args) (string, error) {
+		return invoke(ctx, expression.Get(args))
+	})
 }
 
-func invoke(ctx context.Context, args loom.Args) (string, error) {
+func invoke(ctx context.Context, rawExpression string) (string, error) {
 	ctx, span := otel.Tracer("github.com/loomagent/loom/tools/calculator").Start(ctx, "calculator.evaluate")
 	defer span.End()
 
-	expression := strings.TrimSpace(args.String("expression"))
+	expression := strings.TrimSpace(rawExpression)
 	span.SetAttributes(attribute.String("calculator.expression", expression))
 
 	result, err := Evaluate(ctx, expression)

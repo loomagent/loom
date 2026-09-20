@@ -47,7 +47,7 @@ type ArgsContract struct {
 }
 
 // NewArgsContract builds and compiles the argument contract for toolName.
-func NewArgsContract(toolName string, declarations ...Arg) (*ArgsContract, error) {
+func NewArgsContract(toolName string, declarations ...Declaration) (*ArgsContract, error) {
 	if err := ValidateToolName(toolName); err != nil {
 		return nil, fmt.Errorf("loom: invalid tool name %q: %w", toolName, err)
 	}
@@ -91,7 +91,7 @@ func NewArgsContract(toolName string, declarations ...Arg) (*ArgsContract, error
 // MustArgsContract is NewArgsContract for statically declared tool contracts.
 // It panics when the declaration is invalid, which indicates a programming
 // error in the declared contract.
-func MustArgsContract(toolName string, declarations ...Arg) *ArgsContract {
+func MustArgsContract(toolName string, declarations ...Declaration) *ArgsContract {
 	contract, err := NewArgsContract(toolName, declarations...)
 	if err != nil {
 		panic(err)
@@ -120,7 +120,7 @@ func (c *ArgsContract) Decode(argumentsJSON string) (Args, error) {
 //  2. Declared field and whole-call validators, which run over the schema-valid
 //     value. They all run and their problems are collected, so the model
 //     receives every business-rule violation in one turn instead of one per
-//     retry. A validator that returns anything other than Invalid/InvalidAt
+//     retry. A validator that returns anything other than Invalid/InvalidOn
 //     aborts the decode as an internal failure.
 func (c *ArgsContract) DecodeContext(ctx context.Context, argumentsJSON string) (Args, error) {
 	// Providers commonly send an empty string rather than "{}" when a model
@@ -140,6 +140,12 @@ func (c *ArgsContract) DecodeContext(ctx context.Context, argumentsJSON string) 
 		return Args{}, newJSONToolArgumentError(c.name, c.guidance, err)
 	}
 	args := Args{values: values, declared: c.declared}
+	// JSON Schema cannot express the exact bounds of a Go integer, so a value
+	// that passes the schema may still not fit the declared handle. Check the
+	// decode once here so a handle read never fails on model input.
+	if issues := c.checkArgumentTypes(args); len(issues) > 0 {
+		return Args{}, newArgumentTypeToolArgumentError(c.name, c.guidance, issues)
+	}
 	issues, err := c.runValidators(ctx, args)
 	if err != nil {
 		return Args{}, fmt.Errorf("loom: tool %q argument validators: %w", c.name, err)
@@ -148,6 +154,46 @@ func (c *ArgsContract) DecodeContext(ctx context.Context, argumentsJSON string) 
 		return Args{}, newCustomToolArgumentError(c.name, c.guidance, issues)
 	}
 	return args, nil
+}
+
+// checkArgumentTypes decodes every present argument into the Go type its handle
+// reads, so a value the schema accepted but the handle cannot represent is a
+// model-facing type problem instead of a panic on read.
+func (c *ArgsContract) checkArgumentTypes(args Args) []ToolArgumentIssue {
+	var issues []ToolArgumentIssue
+	for _, spec := range c.order {
+		raw, present := args.values[spec.name]
+		if !present {
+			continue
+		}
+		if err := spec.decodeInto(raw); err != nil {
+			issues = append(issues, ToolArgumentIssue{
+				Field:   spec.name,
+				Rule:    "type",
+				Message: quoteField(spec.name) + " must be " + spec.kind.decodeHint(),
+			})
+		}
+	}
+	return issues
+}
+
+// decodeInto reports whether raw decodes into the Go type the kind's handle
+// reads. The target carries only its type.
+func (s *argSpec) decodeInto(raw jsontext.Value) error {
+	var target any
+	switch s.kind {
+	case argKindString:
+		target = new(string)
+	case argKindUint:
+		target = new(uint64)
+	case argKindFloat:
+		target = new(float64)
+	case argKindBool:
+		target = new(bool)
+	case argKindStrings:
+		target = new([]string)
+	}
+	return jsonv2.Unmarshal(raw, target)
 }
 
 // runValidators executes every declared validator and collects the model-facing
@@ -225,9 +271,17 @@ func (s *argSpec) schema() *jsonschema.Schema {
 				property.Pattern = pattern
 			}
 		}
-	case argKindInt:
+	case argKindUint:
 		property.Type = "integer"
-		property.Minimum = s.minimum
+		// A non-negative argument must reject negatives in the schema; JSON
+		// Schema has no separate unsigned type, so this is the only place the
+		// constraint can live.
+		if s.minimum == nil {
+			zero := 0.0
+			property.Minimum = &zero
+		} else {
+			property.Minimum = s.minimum
+		}
 		property.Maximum = s.maximum
 		property.Enum = s.enum
 	case argKindFloat:

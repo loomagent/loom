@@ -67,19 +67,18 @@ func NewReaderTool(reader WebReader, options ReaderToolOptions) (loom.Tool, erro
 	if description == "" {
 		description = "Read an HTTP or HTTPS URL and return normalized Markdown content and document metadata."
 	}
-	contract, err := loom.NewArgsContract(name,
-		loom.String("url").
-			Required().
-			MinLen(1).
-			NotBlank().
-			Example("https://example.com/article").
-			Desc("Absolute HTTP or HTTPS URL to read."),
-	)
+	urlArg := loom.String("url").
+		Required().
+		MinLen(1).
+		NotBlank().
+		Example("https://example.com/article").
+		Desc("Absolute HTTP or HTTPS URL to read.")
+	contract, err := loom.NewArgsContract(name, urlArg)
 	if err != nil {
 		return nil, err
 	}
 	return loom.NewArgsTool(contract, description, func(ctx context.Context, args loom.Args) (string, error) {
-		rawURL := strings.TrimSpace(args.String("url"))
+		rawURL := strings.TrimSpace(urlArg.Get(args))
 		parsed, err := url.ParseRequestURI(rawURL)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return "", fmt.Errorf("web reader: absolute HTTP(S) URL is required")

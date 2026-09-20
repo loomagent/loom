@@ -95,7 +95,7 @@ func TestToolArgumentErrorBoundsModelFacingOutput(t *testing.T) {
 func TestArgsTypeMismatchNamesFieldAndType(t *testing.T) {
 	contract := MustArgsContract("web_search",
 		String("query").Required().Desc("Search query."),
-		Int("top_k").Desc("Result count."),
+		Uint("top_k").Desc("Result count."),
 	)
 	_, err := contract.Decode(`{"query":"go","top_k":"5"}`)
 	if err == nil {

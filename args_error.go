@@ -29,9 +29,14 @@ func Invalid(format string, args ...any) error {
 	return &argumentProblem{message: fmt.Sprintf(format, args...)}
 }
 
-// InvalidAt is Invalid for another argument. Use it from whole-call validators
-// declared with ValidateArgs so the diagnostic points at the argument the model
-// must change rather than at the call as a whole.
+// InvalidOn is Invalid for the argument a handle names. The name comes from the
+// handle, so it cannot drift from the declared argument.
+func InvalidOn(handle Handle, format string, args ...any) error {
+	return &argumentProblem{field: handle.argumentName(), message: fmt.Sprintf(format, args...)}
+}
+
+// InvalidAt is Invalid for a named argument. It is the string-keyed escape
+// hatch; prefer InvalidOn, whose name cannot be misspelled.
 func InvalidAt(field, format string, args ...any) error {
 	return &argumentProblem{field: field, message: fmt.Sprintf(format, args...)}
 }
@@ -98,4 +103,21 @@ func newCustomToolArgumentError(tool string, guidance argumentGuidance, issues [
 	}
 }
 
-var errCustomArgumentValidation = errors.New("tool argument validation failed")
+// newArgumentTypeToolArgumentError reports a value that passed JSON Schema but
+// does not fit the Go type its handle reads, such as an integer beyond the
+// unsigned range.
+func newArgumentTypeToolArgumentError(tool string, guidance argumentGuidance, issues []ToolArgumentIssue) error {
+	return &ToolArgumentError{
+		Tool:              tool,
+		Kind:              ToolArgumentErrorSchema,
+		Issues:            clampIssues(issues),
+		ExpectedArguments: guidance.expected,
+		ExampleArguments:  guidance.example,
+		Err:               errArgumentType,
+	}
+}
+
+var (
+	errCustomArgumentValidation = errors.New("tool argument validation failed")
+	errArgumentType             = errors.New("tool argument does not fit its declared type")
+)

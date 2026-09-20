@@ -7,11 +7,10 @@ import (
 )
 
 func newEchoTool() Tool {
-	return NewArgsTool(MustArgsContract("echo",
-		String("value").Required().Desc("Value to echo back."),
-	), "echo back",
+	value := String("value").Required().Desc("Value to echo back.")
+	return NewArgsTool(MustArgsContract("echo", value), "echo back",
 		func(_ context.Context, args Args) (string, error) {
-			return `{"got":"` + args.String("value") + `"}`, nil
+			return `{"got":"` + value.Get(args) + `"}`, nil
 		},
 	)
 }
@@ -93,11 +92,10 @@ func TestExecuteToolCalls_ToolFails(t *testing.T) {
 
 func TestRunToolByName_Success(t *testing.T) {
 	reg := NewToolRegistry()
-	_ = reg.Register(NewArgsTool(MustArgsContract("query",
-		String("query").Required().Desc("Query text."),
-	), "q",
+	query := String("query").Required().Desc("Query text.")
+	_ = reg.Register(NewArgsTool(MustArgsContract("query", query), "q",
 		func(_ context.Context, args Args) (string, error) {
-			return `{"query":"` + args.String("query") + `"}`, nil
+			return `{"query":"` + query.Get(args) + `"}`, nil
 		},
 	))
 

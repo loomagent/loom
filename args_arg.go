@@ -8,13 +8,63 @@ import (
 	"strings"
 )
 
-// Arg is one declaration in an args contract: either a typed argument or a
-// whole-call validator. The interface is sealed — the set of accepted argument
-// shapes is closed, so a contract cannot silently accept something the runtime
-// has no way to read back.
-type Arg interface {
+// Declaration is one entry in an args contract: a typed argument or a whole-call
+// validator. The interface is sealed — the set of accepted shapes is closed, so
+// a contract cannot silently accept something the runtime has no way to read
+// back.
+type Declaration interface {
 	declare(*argsBuilder) error
 }
+
+// Handle names one declared argument. It is sealed: only this package can
+// implement it, so a whole-call rule can only refer to real arguments.
+type Handle interface {
+	argumentName() string
+}
+
+// HandleWith is a typed handle. Concrete handles implement it through the
+// embedded Arg[T], which is what lets a whole-call validator take typed
+// parameters instead of reading string keys out of Args.
+type HandleWith[T any] interface {
+	Handle
+	Get(args Args) T
+}
+
+// Arg is the typed base of every argument handle. Get reads the argument from
+// the validated Args without a string key or a type assertion, because the type
+// was fixed where the argument was declared.
+type Arg[T any] struct {
+	spec *argSpec
+}
+
+// Get returns the argument value, or the zero value when the model omitted it.
+func (a *Arg[T]) Get(args Args) T {
+	var out T
+	raw, ok := args.values[a.spec.name]
+	if !ok {
+		return out
+	}
+	if err := jsonv2.Unmarshal(raw, &out); err != nil {
+		// Decode checked every present argument against its Go type, so a
+		// failure here means the contract and this handle disagree.
+		panic(fmt.Sprintf("loom: read tool argument %q: %v", a.spec.name, err))
+	}
+	return out
+}
+
+// Present reports whether the model sent the argument, which distinguishes an
+// omitted optional argument from one sent as its zero value.
+func (a *Arg[T]) Present(args Args) bool {
+	_, ok := args.values[a.spec.name]
+	return ok
+}
+
+func (a *Arg[T]) argumentName() string { return a.spec.name }
+
+// FieldValidator checks one argument after schema validation. Prefer a named
+// function over a literal for anything non-trivial, so the rule can be unit
+// tested directly and is identifiable in stack traces.
+type FieldValidator[T any] func(ctx context.Context, value T) error
 
 // argSpec is the flattened description of one argument, shared by every typed
 // builder and consumed once when the contract is built. Constraints that a
@@ -62,42 +112,23 @@ func (b *argsBuilder) add(spec *argSpec) error {
 	return nil
 }
 
-// ArgsValidatorFunc is a whole-call validation function. Prefer a named
-// function over a literal so the rule has a name in stack traces and tests.
-type ArgsValidatorFunc func(ctx context.Context, args Args) error
-
-// FieldValidator checks one argument after schema validation. Prefer a named
-// function over a literal for anything non-trivial, so the rule can be unit
-// tested directly and is identifiable in stack traces.
-type FieldValidator[T any] func(ctx context.Context, value T) error
-
 // wholeValidator is one declared whole-call check together with the arguments
-// it reads.
+// it reads. Cross2 and friends build these from typed handles.
 type wholeValidator struct {
 	fields []string
-	fn     ArgsValidatorFunc
+	fn     func(ctx context.Context, args Args) error
 }
 
-// argValidator is the whole-call validator declared with ValidateArgs. It is an
-// Arg so that a contract reads as one flat declaration list.
-type argValidator struct {
-	fields []string
-	fn     ArgsValidatorFunc
-}
-
-func (v argValidator) declare(b *argsBuilder) error {
-	if len(v.fields) == 0 {
-		return fmt.Errorf("whole-call validator declares no arguments; name the arguments it reads")
-	}
-	// The declared fields are the validator's dependencies, so a typo is a
-	// contract error rather than a rule that silently never reads the argument
-	// it was written for.
+func (v wholeValidator) declare(b *argsBuilder) error {
+	// The declared fields are the rule's dependencies, so a typo is a contract
+	// error rather than a rule that silently never reads the argument it was
+	// written for.
 	for _, name := range v.fields {
 		if _, ok := b.byName[name]; !ok {
-			return fmt.Errorf("whole-call validator depends on undeclared argument %q", name)
+			return fmt.Errorf("whole-call rule depends on undeclared argument %q", name)
 		}
 	}
-	b.whole = append(b.whole, wholeValidator{fields: v.fields, fn: v.fn})
+	b.whole = append(b.whole, v)
 	return nil
 }
 
@@ -116,7 +147,7 @@ var formatPatterns = map[string]string{
 
 // String declares a string argument.
 func String(name string) *StringArg {
-	return &StringArg{spec: &argSpec{name: name, kind: argKindString}}
+	return &StringArg{Arg[string]{spec: &argSpec{name: name, kind: argKindString}}}
 }
 
 // Enum declares a string argument restricted to values.
@@ -145,7 +176,7 @@ func DateTime(name string) *StringArg { return String(name).Format("date-time") 
 func UUID(name string) *StringArg { return String(name).Format("uuid") }
 
 // StringArg declares and configures a string argument.
-type StringArg struct{ spec *argSpec }
+type StringArg struct{ Arg[string] }
 
 func (a *StringArg) declare(b *argsBuilder) error { return b.add(a.spec) }
 
@@ -194,8 +225,7 @@ func (a *StringArg) Format(format string) *StringArg {
 	return a
 }
 
-// NotBlank rejects values that are empty or contain only whitespace. It is the
-// declared-argument equivalent of the validator's notblank rule.
+// NotBlank rejects values that are empty or contain only whitespace.
 func (a *StringArg) NotBlank() *StringArg {
 	name := a.spec.name
 	a.spec.validators = append(a.spec.validators, func(_ context.Context, value jsontext.Value) error {
@@ -204,7 +234,7 @@ func (a *StringArg) NotBlank() *StringArg {
 			return err
 		}
 		if strings.TrimSpace(text) == "" {
-			return Invalid("%s must not be blank", name)
+			return InvalidOn(a, "%s must not be blank", name)
 		}
 		return nil
 	})
@@ -212,7 +242,7 @@ func (a *StringArg) NotBlank() *StringArg {
 }
 
 // Validate registers a per-field check that runs after schema validation, only
-// when the model actually sent the argument. Return Invalid or InvalidAt to
+// when the model actually sent the argument. Return Invalid or InvalidOn to
 // report a model-facing problem; any other error is treated as an internal
 // failure. A single validator may report several problems with errors.Join.
 func (a *StringArg) Validate(fn FieldValidator[string]) *StringArg {
@@ -226,46 +256,48 @@ func (a *StringArg) Validate(fn FieldValidator[string]) *StringArg {
 	return a
 }
 
-// Int declares an integer argument.
-func Int(name string) *IntArg {
-	return &IntArg{spec: &argSpec{name: name, kind: argKindInt}}
+// Uint declares a non-negative integer argument. Unsigned is deliberate: tool
+// arguments that count things cannot be negative, and rejecting negatives in
+// the schema keeps that invariant in the Go type as well.
+func Uint(name string) *UintArg {
+	return &UintArg{Arg[uint64]{spec: &argSpec{name: name, kind: argKindUint}}}
 }
 
-// IntArg declares and configures an integer argument.
-type IntArg struct{ spec *argSpec }
+// UintArg declares and configures a non-negative integer argument.
+type UintArg struct{ Arg[uint64] }
 
-func (a *IntArg) declare(b *argsBuilder) error { return b.add(a.spec) }
+func (a *UintArg) declare(b *argsBuilder) error { return b.add(a.spec) }
 
-func (a *IntArg) Required() *IntArg { a.spec.required = true; return a }
-func (a *IntArg) Desc(text string) *IntArg {
+func (a *UintArg) Required() *UintArg { a.spec.required = true; return a }
+func (a *UintArg) Desc(text string) *UintArg {
 	a.spec.description = text
 	return a
 }
 
 // Example attaches a model-facing example value; see StringArg.Example.
-func (a *IntArg) Example(value int64) *IntArg {
+func (a *UintArg) Example(value uint64) *UintArg {
 	a.spec.examples = append(a.spec.examples, value)
 	return a
 }
 
 // Min sets the inclusive lower bound.
-func (a *IntArg) Min(n int64) *IntArg {
+func (a *UintArg) Min(n uint64) *UintArg {
 	value := float64(n)
 	a.spec.minimum = &value
 	return a
 }
 
 // Max sets the inclusive upper bound.
-func (a *IntArg) Max(n int64) *IntArg {
+func (a *UintArg) Max(n uint64) *UintArg {
 	value := float64(n)
 	a.spec.maximum = &value
 	return a
 }
 
 // Validate registers a per-field check; see StringArg.Validate.
-func (a *IntArg) Validate(fn FieldValidator[int64]) *IntArg {
+func (a *UintArg) Validate(fn FieldValidator[uint64]) *UintArg {
 	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
-		var value int64
+		var value uint64
 		if err := jsonv2.Unmarshal(raw, &value); err != nil {
 			return err
 		}
@@ -276,11 +308,11 @@ func (a *IntArg) Validate(fn FieldValidator[int64]) *IntArg {
 
 // Float declares a number argument.
 func Float(name string) *FloatArg {
-	return &FloatArg{spec: &argSpec{name: name, kind: argKindFloat}}
+	return &FloatArg{Arg[float64]{spec: &argSpec{name: name, kind: argKindFloat}}}
 }
 
 // FloatArg declares and configures a number argument.
-type FloatArg struct{ spec *argSpec }
+type FloatArg struct{ Arg[float64] }
 
 func (a *FloatArg) declare(b *argsBuilder) error { return b.add(a.spec) }
 
@@ -312,11 +344,11 @@ func (a *FloatArg) Validate(fn FieldValidator[float64]) *FloatArg {
 
 // Bool declares a boolean argument.
 func Bool(name string) *BoolArg {
-	return &BoolArg{spec: &argSpec{name: name, kind: argKindBool}}
+	return &BoolArg{Arg[bool]{spec: &argSpec{name: name, kind: argKindBool}}}
 }
 
 // BoolArg declares and configures a boolean argument.
-type BoolArg struct{ spec *argSpec }
+type BoolArg struct{ Arg[bool] }
 
 func (a *BoolArg) declare(b *argsBuilder) error { return b.add(a.spec) }
 
@@ -346,11 +378,11 @@ func (a *BoolArg) Validate(fn FieldValidator[bool]) *BoolArg {
 
 // Strings declares an array-of-strings argument.
 func Strings(name string) *StringsArg {
-	return &StringsArg{spec: &argSpec{name: name, kind: argKindStrings}}
+	return &StringsArg{Arg[[]string]{spec: &argSpec{name: name, kind: argKindStrings}}}
 }
 
 // StringsArg declares and configures an array-of-strings argument.
-type StringsArg struct{ spec *argSpec }
+type StringsArg struct{ Arg[[]string] }
 
 func (a *StringsArg) declare(b *argsBuilder) error { return b.add(a.spec) }
 
@@ -362,9 +394,9 @@ func (a *StringsArg) Desc(text string) *StringsArg {
 
 // Example attaches a model-facing example value; see StringArg.Example.
 func (a *StringsArg) Example(values ...string) *StringsArg {
-	copyOfValues := make([]string, len(values))
-	copy(copyOfValues, values)
-	a.spec.examples = append(a.spec.examples, copyOfValues)
+	copied := make([]string, len(values))
+	copy(copied, values)
+	a.spec.examples = append(a.spec.examples, copied)
 	return a
 }
 
@@ -389,29 +421,76 @@ func (a *StringsArg) Validate(fn FieldValidator[[]string]) *StringsArg {
 	return a
 }
 
-// ValidateArgs declares a whole-call validator over the named arguments. The
-// fields are written first so the contract, not the closure body, says which
-// arguments the rule depends on. That buys three things: every name is checked
-// against the declared arguments when the contract is built, the rule is
-// skipped entirely when none of its fields are present, and diagnostics read in
-// declaration order.
+// Cross2 declares a whole-call rule over two typed arguments. The handles name
+// the arguments the rule reads, so every name is checked against the contract
+// at build time and the rule is skipped when none of its arguments are present.
 //
-// Prefer a named function over an inline literal, so the rule can be unit
-// tested directly and shows up by name in stack traces:
+//	loom.Cross2(dateFrom, dateTo).Using(validateDateRange)
 //
-//	loom.ValidateArgs("date_from", "date_to").Using(validateDateRange)
-func ValidateArgs(fields ...string) *ArgsValidatorBuilder {
-	return &ArgsValidatorBuilder{fields: fields}
+// Prefer a named function over an inline literal, so the rule can be unit tested
+// directly and is identifiable in stack traces.
+func Cross2[A, B any](first HandleWith[A], second HandleWith[B]) *CrossBuilder2[A, B] {
+	return &CrossBuilder2[A, B]{first: first, second: second}
 }
 
-// ArgsValidatorBuilder collects the arguments a whole-call validator depends on
-// before the check itself is attached.
-type ArgsValidatorBuilder struct {
-	fields []string
+// CrossBuilder2 binds the arguments of a two-argument whole-call rule.
+type CrossBuilder2[A, B any] struct {
+	first  HandleWith[A]
+	second HandleWith[B]
 }
 
-// Using attaches the check. It is the only way to turn a builder into an Arg,
-// so a ValidateArgs call that forgot its function fails to compile.
-func (b *ArgsValidatorBuilder) Using(fn ArgsValidatorFunc) Arg {
-	return argValidator{fields: b.fields, fn: fn}
+// Using attaches the check. It is the only way to turn a builder into a
+// Declaration, so a Cross2 that forgot its function does not compile.
+func (c *CrossBuilder2[A, B]) Using(fn func(ctx context.Context, first A, second B) error) Declaration {
+	return wholeValidator{
+		fields: []string{c.first.argumentName(), c.second.argumentName()},
+		fn: func(ctx context.Context, args Args) error {
+			return fn(ctx, c.first.Get(args), c.second.Get(args))
+		},
+	}
+}
+
+// Cross3 declares a whole-call rule over three typed arguments. See Cross2.
+func Cross3[A, B, C any](first HandleWith[A], second HandleWith[B], third HandleWith[C]) *CrossBuilder3[A, B, C] {
+	return &CrossBuilder3[A, B, C]{first: first, second: second, third: third}
+}
+
+// CrossBuilder3 binds the arguments of a three-argument whole-call rule.
+type CrossBuilder3[A, B, C any] struct {
+	first  HandleWith[A]
+	second HandleWith[B]
+	third  HandleWith[C]
+}
+
+// Using attaches the check. See CrossBuilder2.Using.
+func (c *CrossBuilder3[A, B, C]) Using(fn func(ctx context.Context, first A, second B, third C) error) Declaration {
+	return wholeValidator{
+		fields: []string{c.first.argumentName(), c.second.argumentName(), c.third.argumentName()},
+		fn: func(ctx context.Context, args Args) error {
+			return fn(ctx, c.first.Get(args), c.second.Get(args), c.third.Get(args))
+		},
+	}
+}
+
+// Cross4 declares a whole-call rule over four typed arguments. See Cross2.
+func Cross4[A, B, C, D any](first HandleWith[A], second HandleWith[B], third HandleWith[C], fourth HandleWith[D]) *CrossBuilder4[A, B, C, D] {
+	return &CrossBuilder4[A, B, C, D]{first: first, second: second, third: third, fourth: fourth}
+}
+
+// CrossBuilder4 binds the arguments of a four-argument whole-call rule.
+type CrossBuilder4[A, B, C, D any] struct {
+	first  HandleWith[A]
+	second HandleWith[B]
+	third  HandleWith[C]
+	fourth HandleWith[D]
+}
+
+// Using attaches the check. See CrossBuilder2.Using.
+func (c *CrossBuilder4[A, B, C, D]) Using(fn func(ctx context.Context, first A, second B, third C, fourth D) error) Declaration {
+	return wholeValidator{
+		fields: []string{c.first.argumentName(), c.second.argumentName(), c.third.argumentName(), c.fourth.argumentName()},
+		fn: func(ctx context.Context, args Args) error {
+			return fn(ctx, c.first.Get(args), c.second.Get(args), c.third.Get(args), c.fourth.Get(args))
+		},
+	}
 }

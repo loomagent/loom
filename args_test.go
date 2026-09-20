@@ -8,21 +8,34 @@ import (
 	"testing"
 )
 
-func testWebSearchContract(t *testing.T) *ArgsContract {
-	t.Helper()
-	return MustArgsContract("web_search",
-		String("query").Required().MinLen(1).MaxLen(40).Desc("Search query."),
-		Enum("type", "search", "news").Desc("Result type."),
-		Date("date_from").Desc("Optional lower bound."),
-		Date("date_to").Desc("Optional upper bound."),
-		ValidateArgs("date_from", "date_to").Using(validateDateRange),
-	)
+type webSearchArgs struct {
+	contract *ArgsContract
+	query    *StringArg
+	typ      *StringArg
+	dateFrom *StringArg
+	dateTo   *StringArg
 }
 
-// validateDateRange is a named cross-field rule: the contract names it, so it
-// can be unit tested directly and shows up by name when it fails.
-func validateDateRange(_ context.Context, args Args) error {
-	from, to := args.String("date_from"), args.String("date_to")
+func newWebSearchArgs() webSearchArgs {
+	query := String("query").Required().MinLen(1).MaxLen(40).Desc("Search query.")
+	typ := Enum("type", "search", "news").Desc("Result type.")
+	dateFrom := Date("date_from").Desc("Optional lower bound.")
+	dateTo := Date("date_to").Desc("Optional upper bound.")
+	return webSearchArgs{
+		contract: MustArgsContract("web_search",
+			query, typ, dateFrom, dateTo,
+			Cross2(dateFrom, dateTo).Using(validateDateRange),
+		),
+		query:    query,
+		typ:      typ,
+		dateFrom: dateFrom,
+		dateTo:   dateTo,
+	}
+}
+
+// validateDateRange is a named cross-field rule. The contract names its
+// dependencies through the handles, so the rule can be unit tested directly.
+func validateDateRange(_ context.Context, from, to string) error {
 	if from != "" && to != "" && from > to {
 		return InvalidAt("date_to", "date_to (%s) must not precede date_from (%s)", to, from)
 	}
@@ -30,8 +43,7 @@ func validateDateRange(_ context.Context, args Args) error {
 }
 
 func TestArgsContractSchema(t *testing.T) {
-	contract := testWebSearchContract(t)
-	schema := contract.Schema()
+	schema := newWebSearchArgs().contract.Schema()
 
 	if schema.Type != "object" {
 		t.Fatalf("schema type = %q, want object", schema.Type)
@@ -60,35 +72,35 @@ func TestArgsContractSchema(t *testing.T) {
 }
 
 func TestArgsContractDecodeValid(t *testing.T) {
-	contract := testWebSearchContract(t)
-	args, err := contract.Decode(`{"query":"go generics","type":"news","date_from":"2026-08-01","date_to":"2026-08-20"}`)
+	ws := newWebSearchArgs()
+	args, err := ws.contract.Decode(`{"query":"go generics","type":"news","date_from":"2026-08-01","date_to":"2026-08-20"}`)
 	if err != nil {
 		t.Fatalf("Decode() = %v, want nil", err)
 	}
-	if got := args.String("query"); got != "go generics" {
+	if got := ws.query.Get(args); got != "go generics" {
 		t.Fatalf("query = %q", got)
 	}
-	if !args.Has("type") || args.String("type") != "news" {
-		t.Fatalf("type = %q, present=%v", args.String("type"), args.Has("type"))
+	if !ws.typ.Present(args) || ws.typ.Get(args) != "news" {
+		t.Fatalf("type = %q, present=%v", ws.typ.Get(args), ws.typ.Present(args))
 	}
 }
 
 func TestArgsContractDecodeOptionalOmitted(t *testing.T) {
-	contract := testWebSearchContract(t)
-	args, err := contract.Decode(`{"query":"go"}`)
+	ws := newWebSearchArgs()
+	args, err := ws.contract.Decode(`{"query":"go"}`)
 	if err != nil {
 		t.Fatalf("Decode() = %v, want nil", err)
 	}
-	if args.Has("type") {
+	if ws.typ.Present(args) {
 		t.Fatal("type should be absent")
 	}
-	if got := args.String("type"); got != "" {
+	if got := ws.typ.Get(args); got != "" {
 		t.Fatalf("omitted type = %q, want empty", got)
 	}
 }
 
 func TestArgsContractDecodeSchemaViolations(t *testing.T) {
-	contract := testWebSearchContract(t)
+	ws := newWebSearchArgs()
 	for _, raw := range []string{
 		`{}`,                              // missing required
 		`{"query":"go","type":"scholar"}`, // enum
@@ -96,7 +108,7 @@ func TestArgsContractDecodeSchemaViolations(t *testing.T) {
 		`{"query":"go","date_from":"nope"}`,
 		`{"query":123}`, // type
 	} {
-		_, err := contract.Decode(raw)
+		_, err := ws.contract.Decode(raw)
 		if err == nil {
 			t.Fatalf("Decode(%s) = nil, want error", raw)
 		}
@@ -114,14 +126,8 @@ func TestArgsContractDecodeSchemaViolations(t *testing.T) {
 }
 
 func TestArgsContractFieldValidator(t *testing.T) {
-	contract := MustArgsContract("read_reference",
-		String("src_id").Required().Pattern(`^SRC-\d+$`).Validate(func(_ context.Context, value string) error {
-			if value == "SRC-404" {
-				return Invalid("unknown source id %q; use an id from the source index", value)
-			}
-			return nil
-		}),
-	)
+	srcID := String("src_id").Required().Pattern(`^SRC-\d+$`).Validate(validateSrcID)
+	contract := MustArgsContract("read_reference", srcID)
 	if _, err := contract.Decode(`{"src_id":"SRC-1"}`); err != nil {
 		t.Fatalf("valid id rejected: %v", err)
 	}
@@ -141,21 +147,27 @@ func TestArgsContractFieldValidator(t *testing.T) {
 	}
 }
 
+func validateSrcID(_ context.Context, value string) error {
+	if value == "SRC-404" {
+		return Invalid("unknown source id %q; use an id from the source index", value)
+	}
+	return nil
+}
+
 func TestArgsContractValidatorsCollectEveryProblem(t *testing.T) {
-	contract := MustArgsContract("search",
-		String("from").Validate(func(_ context.Context, value string) error {
-			if value == "bad" {
-				return Invalid("from is bad")
-			}
-			return nil
-		}),
-		String("to").Validate(func(_ context.Context, value string) error {
-			if value == "bad" {
-				return errors.Join(Invalid("to is bad"), Invalid("to is also empty"))
-			}
-			return nil
-		}),
-	)
+	from := String("from").Validate(func(_ context.Context, value string) error {
+		if value == "bad" {
+			return Invalid("from is bad")
+		}
+		return nil
+	})
+	to := String("to").Validate(func(_ context.Context, value string) error {
+		if value == "bad" {
+			return errors.Join(Invalid("to is bad"), Invalid("to is also empty"))
+		}
+		return nil
+	})
+	contract := MustArgsContract("search", from, to)
 	_, err := contract.Decode(`{"from":"bad","to":"bad"}`)
 	var argumentError *ToolArgumentError
 	if !errors.As(err, &argumentError) {
@@ -172,12 +184,11 @@ func TestArgsContractValidatorsCollectEveryProblem(t *testing.T) {
 
 func TestArgsContractSchemaGateStopsValidators(t *testing.T) {
 	ran := false
-	contract := MustArgsContract("gate",
-		String("q").Required().Validate(func(_ context.Context, _ string) error {
-			ran = true
-			return nil
-		}),
-	)
+	q := String("q").Required().Validate(func(_ context.Context, _ string) error {
+		ran = true
+		return nil
+	})
+	contract := MustArgsContract("gate", q)
 	if _, err := contract.Decode(`{}`); err == nil {
 		t.Fatal("missing required argument accepted")
 	}
@@ -188,9 +199,8 @@ func TestArgsContractSchemaGateStopsValidators(t *testing.T) {
 
 func TestArgsContractInternalValidatorError(t *testing.T) {
 	internal := errors.New("database unavailable")
-	contract := MustArgsContract("internal",
-		String("q").Validate(func(_ context.Context, _ string) error { return internal }),
-	)
+	q := String("q").Validate(func(_ context.Context, _ string) error { return internal })
+	contract := MustArgsContract("internal", q)
 	_, err := contract.Decode(`{"q":"x"}`)
 	if err == nil {
 		t.Fatal("internal failure treated as success")
@@ -204,23 +214,126 @@ func TestArgsContractInternalValidatorError(t *testing.T) {
 	}
 }
 
-func TestArgsGettersPanicOnMisuse(t *testing.T) {
-	contract := MustArgsContract("t", String("q"), Int("n"))
-	args, err := contract.Decode(`{"q":"x","n":3}`)
+func TestArgsContractWholeRuleTargetsField(t *testing.T) {
+	ws := newWebSearchArgs()
+	_, err := ws.contract.Decode(`{"query":"go","date_from":"2026-08-20","date_to":"2026-08-01"}`)
+	var argumentError *ToolArgumentError
+	if !errors.As(err, &argumentError) {
+		t.Fatalf("error type = %T, want *ToolArgumentError", err)
+	}
+	if argumentError.Kind != ToolArgumentErrorCustom {
+		t.Fatalf("kind = %q, want custom", argumentError.Kind)
+	}
+	if got, want := argumentError.Issues[0].Field, "date_to"; got != want {
+		t.Fatalf("issue field = %q, want %q", got, want)
+	}
+}
+
+func TestArgsContractWholeRuleSkippedWhenFieldsAbsent(t *testing.T) {
+	ran := 0
+	a := String("a").Desc("Optional a.")
+	b := String("b").Desc("Optional b.")
+	contract := MustArgsContract("optional_pair", a, b,
+		Cross2(a, b).Using(func(_ context.Context, _, _ string) error {
+			ran++
+			return nil
+		}),
+	)
+	if _, err := contract.Decode(`{}`); err != nil {
+		t.Fatalf("Decode({}) = %v", err)
+	}
+	if ran != 0 {
+		t.Fatalf("whole-call rule ran %d times with no dependency present", ran)
+	}
+	if _, err := contract.Decode(`{"a":"x"}`); err != nil {
+		t.Fatalf("Decode({a}) = %v", err)
+	}
+	if ran != 1 {
+		t.Fatalf("whole-call rule ran %d times, want 1", ran)
+	}
+}
+
+func TestArgsContractWholeRuleRejectsUndeclaredHandle(t *testing.T) {
+	declared := String("a").Desc("A.")
+	undeclared := String("b").Desc("B.")
+	if _, err := NewArgsContract("bad", declared,
+		Cross2(declared, undeclared).Using(func(context.Context, string, string) error { return nil }),
+	); err == nil || !strings.Contains(err.Error(), "undeclared") {
+		t.Fatalf("undeclared dependency error = %v", err)
+	}
+}
+
+func TestUintArgumentRange(t *testing.T) {
+	n := Uint("n")
+	contract := MustArgsContract("count", n)
+	schema := contract.Schema()
+	minimum := schema.Properties["n"].Minimum
+	if minimum == nil || *minimum != 0 {
+		t.Fatalf("unsigned argument minimum = %v, want 0", minimum)
+	}
+
+	bounded := Uint("n").Min(2).Max(9)
+	contract = MustArgsContract("bounded", bounded)
+	schema = contract.Schema()
+	if got := schema.Properties["n"].Minimum; got == nil || *got != 2 {
+		t.Fatalf("minimum = %v, want 2", got)
+	}
+	if got := schema.Properties["n"].Maximum; got == nil || *got != 9 {
+		t.Fatalf("maximum = %v, want 9", got)
+	}
+	for _, raw := range []string{`{"n":-1}`, `{"n":1.5}`} {
+		if _, err := contract.Decode(raw); err == nil {
+			t.Fatalf("Decode(%s) accepted a value outside the declared range", raw)
+		}
+	}
+}
+
+func TestUintArgumentRejectsValuesThatDoNotFit(t *testing.T) {
+	n := Uint("n")
+	contract := MustArgsContract("count", n)
+	// These are integers to JSON Schema but exceed uint64 or are not written as
+	// integers, so they must be reported as type problems rather than reaching
+	// the handle.
+	for _, raw := range []string{`{"n":1e3}`, `{"n":18446744073709551616}`} {
+		_, err := contract.Decode(raw)
+		var argumentError *ToolArgumentError
+		if !errors.As(err, &argumentError) {
+			t.Fatalf("Decode(%s) error type = %T, want *ToolArgumentError", raw, err)
+		}
+		if !strings.Contains(err.Error(), "n") {
+			t.Fatalf("Decode(%s) error does not name the field: %v", raw, err)
+		}
+	}
+}
+
+func TestUintHandlePreservesFullRange(t *testing.T) {
+	n := Uint("n")
+	contract := MustArgsContract("count", n)
+	args, err := contract.Decode(`{"n":18446744073709551615}`)
+	if err != nil {
+		t.Fatalf("Decode() = %v", err)
+	}
+	if got := n.Get(args); got != 18446744073709551615 {
+		t.Fatalf("n = %d, want 18446744073709551615", got)
+	}
+}
+
+func TestArgsHasPanicsOnUndeclared(t *testing.T) {
+	contract := MustArgsContract("t", String("q").Desc("Q."))
+	args, err := contract.Decode(`{"q":"x"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := args.Int("n"); got != 3 {
-		t.Fatalf("n = %d, want 3", got)
+	if !args.Has("q") {
+		t.Fatal("q should be present")
 	}
-	assertPanics(t, func() { args.String("missing") })
-	assertPanics(t, func() { args.Int("q") })
+	assertPanics(t, func() { args.Has("missing") })
 }
 
 func TestNewArgsToolEndToEnd(t *testing.T) {
-	contract := testWebSearchContract(t)
-	tool := NewArgsTool(contract, "Search the web.", func(_ context.Context, args Args) (string, error) {
-		return `"` + args.String("query") + `"`, nil
+	ws := newWebSearchArgs()
+	tool := NewArgsTool(ws.contract, "Search the web.", func(_ context.Context, args Args) (string, error) {
+		return `"` + ws.query.Get(args) + `"`, nil
 	})
 
 	info, err := tool.Info(context.Background())
@@ -239,60 +352,6 @@ func TestNewArgsToolEndToEnd(t *testing.T) {
 	}
 	if _, err := tool.Invoke(context.Background(), `{}`); err == nil {
 		t.Fatal("Invoke() accepted arguments that violate the contract")
-	}
-}
-
-func TestArgsContractWholeValidatorReportsNamedField(t *testing.T) {
-	contract := testWebSearchContract(t)
-	_, err := contract.Decode(`{"query":"go","date_from":"2026-08-20","date_to":"2026-08-01"}`)
-	var argumentError *ToolArgumentError
-	if !errors.As(err, &argumentError) {
-		t.Fatalf("error type = %T, want *ToolArgumentError", err)
-	}
-	if argumentError.Kind != ToolArgumentErrorCustom {
-		t.Fatalf("kind = %q, want custom", argumentError.Kind)
-	}
-	if got, want := argumentError.Issues[0].Field, "date_to"; got != want {
-		t.Fatalf("issue field = %q, want %q", got, want)
-	}
-}
-
-func TestArgsContractWholeValidatorSkippedWhenFieldsAbsent(t *testing.T) {
-	ran := 0
-	contract := MustArgsContract("optional_pair",
-		String("a").Desc("Optional a."),
-		String("b").Desc("Optional b."),
-		ValidateArgs("a", "b").Using(func(_ context.Context, _ Args) error {
-			ran++
-			return nil
-		}),
-	)
-	if _, err := contract.Decode(`{}`); err != nil {
-		t.Fatalf("Decode({}) = %v", err)
-	}
-	if ran != 0 {
-		t.Fatalf("whole-call validator ran %d times with no dependency present", ran)
-	}
-	if _, err := contract.Decode(`{"a":"x"}`); err != nil {
-		t.Fatalf("Decode({a}) = %v", err)
-	}
-	if ran != 1 {
-		t.Fatalf("whole-call validator ran %d times, want 1", ran)
-	}
-}
-
-func TestArgsContractWholeValidatorRequiresDeclaredFields(t *testing.T) {
-	if _, err := NewArgsContract("bad",
-		String("a").Desc("A."),
-		ValidateArgs("missing").Using(func(context.Context, Args) error { return nil }),
-	); err == nil || !strings.Contains(err.Error(), "undeclared") {
-		t.Fatalf("undeclared dependency error = %v", err)
-	}
-	if _, err := NewArgsContract("empty",
-		String("a").Desc("A."),
-		ValidateArgs().Using(func(context.Context, Args) error { return nil }),
-	); err == nil || !strings.Contains(err.Error(), "no arguments") {
-		t.Fatalf("empty dependency list error = %v", err)
 	}
 }
 

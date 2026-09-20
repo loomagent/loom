@@ -162,10 +162,9 @@ func TestRunExecutesToolsAndFinishes(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "call-1", Name: "echo", Arguments: `{"text":"hello"}`}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "done", FinishReason: loom.FinishReasonStop},
 	}}
-	tools := loom.NewToolRegistry(loom.NewArgsTool(loom.MustArgsContract("echo",
-		loom.String("text").Required().Desc("Text to echo."),
-	), "echo", func(_ context.Context, args loom.Args) (string, error) {
-		return `{"text":"` + args.String("text") + `"}`, nil
+	text := loom.String("text").Required().Desc("Text to echo.")
+	tools := loom.NewToolRegistry(loom.NewArgsTool(loom.MustArgsContract("echo", text), "echo", func(_ context.Context, args loom.Args) (string, error) {
+		return `{"text":"` + text.Get(args) + `"}`, nil
 	}))
 
 	var result *Result
@@ -292,7 +291,7 @@ func TestRunEnforcesPerToolLimitWithinOneResponse(t *testing.T) {
 	}}
 	invocations := 0
 	tools := loom.NewToolRegistry(loom.NewArgsTool(loom.MustArgsContract("echo",
-		loom.Int("n").Required().Desc("Number to echo."),
+		loom.Uint("n").Required().Desc("Number to echo."),
 	), "echo", func(context.Context, loom.Args) (string, error) {
 		invocations++
 		return "ok", nil

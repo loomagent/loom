@@ -70,8 +70,9 @@ func main() {
 
 Tools are declared with `ArgsContract` and `NewArgsTool`. The whole contract —
 the public tool name, each argument's type, description, required flag, and
-constraints — is written once, and handlers read arguments through typed `Args`
-getters. No Go struct and no struct tags are involved.
+constraints — is written once, and handlers read arguments through typed
+handles, so no Go struct, no struct tags, and no string key at a read site are
+involved.
 
 Tool names are normally package constants. `ValidateToolName` and
 `NewArgsContract` require 1–64 characters matching `^[a-z][a-z0-9_]{0,63}$`;
@@ -80,8 +81,8 @@ Tool names are normally package constants. `ValidateToolName` and
 A contract binds the schema, the compiled validator, and the error contract
 once, and is immutable and safe for concurrent calls; compiling once avoids
 rebuilding the schema for every invocation. Arguments are kept as raw JSON until
-a getter reads them, so numbers preserve their full int64/uint64 range instead
-of being rounded through float64.
+a handle reads them, so integers preserve their full 64-bit range instead of
+being rounded through float64.
 
 Errors expose `ToolArgumentError` metadata and render a bounded, compact
 non-JSON `expected arguments` contract for model self-correction without dumping
@@ -90,52 +91,59 @@ the declared examples form a complete call.
 
 ## Declaring tool arguments
 
-The tool name, each argument's type, description, required flag, and
-constraints live together in one list, and per-field or whole-call validation is
-declared alongside them:
+Each argument is a typed handle; the handle is both the declaration and the way
+the handler reads the value:
 
 ```go
-func validateDateRange(_ context.Context, args loom.Args) error {
-	from, to := args.String("date_from"), args.String("date_to")
+func validateDateRange(_ context.Context, from, to string) error {
 	if from != "" && to != "" && from > to {
 		return loom.InvalidAt("date_to", "date_to (%s) must not precede date_from (%s)", to, from)
 	}
 	return nil
 }
 
+query := loom.String("query").Required().MinLen(1).Desc("Google search query.")
+resultType := loom.Enum("type", "search", "news").Desc("Result type; defaults to search.")
+dateFrom := loom.Date("date_from").Desc(`Optional lower bound, e.g. "2026-08-17".`)
+dateTo := loom.Date("date_to").Desc(`Optional upper bound, e.g. "2026-08-18".`)
+limit := loom.Uint("limit").Max(20).Desc("Maximum results to return.")
+
 contract := loom.MustArgsContract("web_search",
-	loom.String("query").Required().MinLen(1).Desc("Google search query."),
-	loom.Enum("type", "search", "news").Desc("Result type; defaults to search."),
-	loom.Date("date_from").Desc(`Optional lower bound, e.g. "2026-08-17".`),
-	loom.Date("date_to").Desc(`Optional upper bound, e.g. "2026-08-18".`),
-	loom.ValidateArgs("date_from", "date_to").Using(validateDateRange),
+	query, resultType, dateFrom, dateTo, limit,
+	loom.Cross2(dateFrom, dateTo).Using(validateDateRange),
 )
 
 tool := loom.NewArgsTool(contract, "Run a Google search.",
 	func(ctx context.Context, args loom.Args) (string, error) {
-		return search(ctx, args.String("query"), args.String("type"))
+		return search(ctx, query.Get(args), resultType.Get(args), int(limit.Get(args)))
 	},
 )
 ```
 
-Handlers read arguments through typed `Args` getters; a declared optional
-argument the model omitted reads back as its zero value, and `Has` distinguishes
-"omitted" from "present but empty". Each declaration projects a JSON Schema
-type, and `Date`, `Time`, and `DateTime` project both a `format` and a matching
-shape `pattern`, so providers that ignore `format` still constrain the value.
-Unknown arguments are rejected by default.
+`Get` returns the argument with the type fixed at declaration, so a read site
+has no string key and no type assertion. An optional argument the model omitted
+reads back as its zero value, and `Present` distinguishes "omitted" from
+"present but empty". Integers are unsigned (`Uint`), so counting arguments
+cannot be negative and the schema rejects negatives too. `Date`, `Time`,
+`DateTime`, and `UUID` project both a `format` and a matching shape `pattern`,
+so providers that ignore `format` still constrain the value. Unknown arguments
+are rejected by default.
 
-`StringArg.Validate`, `IntArg.Validate`, and friends take a `FieldValidator[T]`
-and register a per-field check that receives the already-typed value and the
-call context. `ValidateArgs("from", "to").Using(fn)` takes an
-`ArgsValidatorFunc` and registers a whole-call check, naming the arguments it
-reads first: every name is checked against the contract when it is built, the
-rule is skipped when none of its arguments are present, and diagnostics read in
-declaration order. Prefer a named function over an inline literal for either
-kind, so a rule can be unit tested directly and is identifiable in stack traces.
-Validators report model-facing problems with `Invalid` (or `InvalidAt` for a
-different field); any other error is treated as an internal failure, and
-`errors.Join` may report several problems from one validator.
+Field checks take a `FieldValidator[T]`; whole-call checks are declared with
+`Cross2` / `Cross3` / `Cross4`, which take the typed handles they read:
+
+```go
+loom.Cross2(dateFrom, dateTo).Using(validateDateRange)
+```
+
+The handles make the rule's dependencies part of the contract: every handle is
+checked against the declared arguments when the contract is built, the rule is
+skipped when none of its arguments are present, and the check receives typed
+values rather than `Args`. Prefer a named function over an inline literal, so a
+rule can be unit tested directly and is identifiable in stack traces. Validators
+report model-facing problems with `Invalid` (or `InvalidAt` for a different
+field); any other error is treated as an internal failure, and `errors.Join` may
+report several problems from one validator.
 
 Validation runs in two layers. JSON Schema runs first and enforces type,
 presence, enumeration, and the declared range and format constraints; when it

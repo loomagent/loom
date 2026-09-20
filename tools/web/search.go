@@ -84,28 +84,26 @@ func NewSearchTool(searcher WebSearcher, options SearchToolOptions) (loom.Tool, 
 	if description == "" {
 		description = "Search the web for current information and return normalized results with titles, URLs, snippets, and publication dates when available."
 	}
-	contract, err := loom.NewArgsContract(name,
-		loom.String("query").
-			Required().
-			MinLen(1).
-			NotBlank().
-			Example("latest Go agent runtime research").
-			Desc("Search query."),
-		loom.Int("limit").
-			Min(0).
-			Max(int64(maxLimit)).
-			Desc(fmt.Sprintf("Maximum results to return (default %d, max %d). Zero uses the tool's configured default.", defaultLimit, maxLimit)),
-	)
+	query := loom.String("query").
+		Required().
+		MinLen(1).
+		NotBlank().
+		Example("latest Go agent runtime research").
+		Desc("Search query.")
+	limit := loom.Uint("limit").
+		Max(uint64(maxLimit)).
+		Desc(fmt.Sprintf("Maximum results to return (default %d, max %d). Zero uses the tool's configured default.", defaultLimit, maxLimit))
+	contract, err := loom.NewArgsContract(name, query, limit)
 	if err != nil {
 		return nil, err
 	}
 	return loom.NewArgsTool(contract, description, func(ctx context.Context, args loom.Args) (string, error) {
-		query := strings.TrimSpace(args.String("query"))
-		limit := int(args.Int("limit"))
-		if limit == 0 {
-			limit = defaultLimit
+		queryText := strings.TrimSpace(query.Get(args))
+		limitValue := int(limit.Get(args))
+		if limitValue == 0 {
+			limitValue = defaultLimit
 		}
-		response, err := searcher.Search(ctx, SearchRequest{Query: query, Limit: limit})
+		response, err := searcher.Search(ctx, SearchRequest{Query: queryText, Limit: limitValue})
 		if err != nil {
 			return "", fmt.Errorf("web search: %w", err)
 		}
