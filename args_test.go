@@ -400,6 +400,28 @@ func TestArgsContractMisdirectedFieldIsInternal(t *testing.T) {
 	}
 }
 
+func TestArgsKeepsOriginalJSON(t *testing.T) {
+	n := Uint("n")
+	other := String("other").Desc("Optional.")
+	contract := MustArgsContract("raw", n, other)
+	// A value beyond float64 precision, so a round-trip through a generic Go
+	// value would not survive.
+	const payload = `{"n":9007199254740993}`
+	args, err := contract.Decode(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(args.JSON()); got != payload {
+		t.Fatalf("JSON() = %q, want %q", got, payload)
+	}
+	if got := string(args.RawJSON("n")); got != "9007199254740993" {
+		t.Fatalf("RawJSON(n) = %q", got)
+	}
+	if got := args.RawJSON("other"); got != nil {
+		t.Fatalf("RawJSON of an omitted argument = %q, want nil", got)
+	}
+}
+
 func assertPanics(t *testing.T, fn func()) {
 	t.Helper()
 	defer func() {

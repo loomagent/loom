@@ -139,7 +139,7 @@ func (c *ArgsContract) DecodeContext(ctx context.Context, argumentsJSON string) 
 	if err := jsonv2.Unmarshal(raw, &values); err != nil {
 		return Args{}, newJSONToolArgumentError(c.name, c.guidance, err)
 	}
-	args := Args{values: values, declared: c.declared}
+	args := Args{values: values, declared: c.declared, raw: raw}
 	// JSON Schema cannot express the exact bounds of a Go integer, so a value
 	// that passes the schema may still not fit the declared handle. Check the
 	// decode once here so a handle read never fails on model input.

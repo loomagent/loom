@@ -21,6 +21,10 @@ import (
 type Args struct {
 	values   map[string]jsontext.Value
 	declared map[string]argKind
+	// raw keeps the object exactly as the model sent it, so a caller that needs
+	// the original bytes — logging, forwarding, or re-reading a field without
+	// the declared type — does not have to re-encode a decoded value.
+	raw jsontext.Value
 }
 
 // Has reports whether the model sent a value for name. Prefer the typed
@@ -29,6 +33,20 @@ func (a Args) Has(name string) bool {
 	a.declare(name)
 	_, ok := a.values[name]
 	return ok
+}
+
+// JSON returns the whole argument object exactly as the model sent it, before
+// any decoding, or nil when there is nothing to return. Use it when the exact
+// bytes matter — number formatting, key order, or a value the contract does not
+// declare.
+func (a Args) JSON() jsontext.Value { return a.raw }
+
+// RawJSON returns one argument exactly as the model sent it. Raw decodes that
+// value into a generic Go value; RawJSON keeps the original bytes, so a large
+// integer or a nested shape survives intact.
+func (a Args) RawJSON(name string) jsontext.Value {
+	a.declare(name)
+	return a.values[name]
 }
 
 // Raw returns the argument decoded as a generic JSON value, or nil when it was
