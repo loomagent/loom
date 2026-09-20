@@ -89,7 +89,14 @@ non-JSON `expected arguments` contract for model self-correction without dumping
 the full schema. A validated `example arguments` JSON object is included when
 the declared examples form a complete call.
 
-## Declaring tool arguments
+## Tool contracts
+
+A tool contract is one declaration of typed handles, and the same declaration
+serves both directions of a model interaction: the arguments the model sends to
+a tool, and the object the model returns as structured output. Both are read
+through the same handles and enforced by the same schema.
+
+### Arguments — what the model sends to a tool
 
 Each argument is a typed handle; the handle is both the declaration and the way
 the handler reads the value:
@@ -157,7 +164,7 @@ are collected, so the model receives all business-rule violations in a single
 turn instead of one per retry. Validators must therefore be cheap, side-effect
 free, and safe to run even when another validator has already failed.
 
-## Structured model output
+### Responses — what the model returns as structured output
 
 `ChatStructuredArgs` uses the same `ArgsContract` as tool arguments — the same
 `String` / `Uint` / `Enum` declarations, the same schema, the same typed handles
