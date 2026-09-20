@@ -106,18 +106,20 @@ Each argument is a typed handle; the handle is both the declaration and the way
 the handler reads the value:
 
 ```go
-func validateDateRange(_ context.Context, from, to string) error {
-	if from != "" && to != "" && from > to {
-		return loom.InvalidAt("date_to", "date_to (%s) must not precede date_from (%s)", to, from)
-	}
-	return nil
-}
-
 query := loom.String("query").Required().MinLen(1).Desc("Google search query.")
 resultType := loom.Enum("type", "search", "news").Desc("Result type; defaults to search.")
 dateFrom := loom.Date("date_from").Desc(`Optional lower bound, e.g. "2026-08-17".`)
 dateTo := loom.Date("date_to").Desc(`Optional upper bound, e.g. "2026-08-18".`)
 limit := loom.Uint("limit").Max(20).Desc("Maximum results to return.")
+
+// A whole-call rule closes over the handle it points at, so the diagnostic names
+// the field without a string literal.
+validateDateRange := func(_ context.Context, from, to string) error {
+	if from != "" && to != "" && from > to {
+		return loom.InvalidOn(dateTo, "date_to must not precede date_from")
+	}
+	return nil
+}
 
 contract := loom.MustArgsContract("web_search",
 	query, resultType, dateFrom, dateTo, limit,
@@ -150,15 +152,18 @@ loom.Cross(dateFrom, dateTo).Using(validateDateRange)
 The handles make the rule's dependencies part of the contract: every handle is
 checked against the declared arguments when the contract is built, the rule is
 skipped when none of its arguments are present, and the check receives typed
-values rather than `Args`. Prefer a named function over an inline literal, so a
-rule can be unit tested directly and is identifiable in stack traces. A rule
-that closes over its handles can also point an error at a field without a
-string, using `InvalidOn(dateTo, ...)`; `InvalidAt` names the field as a string
-for a rule that cannot close over the handle. A field name that is not a
-declared argument is treated as an internal error rather than a model-facing
-correction request. Validators report model-facing problems with `Invalid`,
-`InvalidAt`, or `InvalidOn`; any other error is treated as an internal failure,
-and `errors.Join` may report several problems from one validator.
+values rather than `Args`. Give the rule a name: an inline literal works, but a
+named function is testable and identifiable in stack traces.
+
+Point an error at a field with the handle, not a string. A rule defined
+alongside its handles closes over them and calls `InvalidOn(dateTo, ...)`. A
+package-level rule that cannot close over a handle uses
+`InvalidAt("date_to", ...)` instead; that name is checked against the declared
+arguments, and one that does not match is treated as an internal error rather
+than a model-facing correction request. Validators report model-facing problems
+with `Invalid`, `InvalidAt`, or `InvalidOn`; any other error is treated as an
+internal failure, and `errors.Join` may report several problems from one
+validator.
 
 Validation runs in two layers. JSON Schema runs first and enforces type,
 presence, enumeration, and the declared range and format constraints; when it
