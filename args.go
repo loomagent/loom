@@ -32,6 +32,16 @@ func (a Args) Has(name string) bool {
 	return ok
 }
 
+// anyPresent reports whether at least one of names was sent.
+func (a Args) anyPresent(names []string) bool {
+	for _, name := range names {
+		if _, ok := a.values[name]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // String returns a declared string argument, or "" when it was omitted.
 func (a Args) String(name string) string {
 	a.expect(name, argKindString)

@@ -43,7 +43,7 @@ type argSpec struct {
 type argsBuilder struct {
 	order  []*argSpec
 	byName map[string]*argSpec
-	whole  []func(ctx context.Context, args Args) error
+	whole  []wholeValidator
 }
 
 func newArgsBuilder() *argsBuilder {
@@ -62,14 +62,37 @@ func (b *argsBuilder) add(spec *argSpec) error {
 	return nil
 }
 
+// ArgsValidatorFunc is a whole-call validation function. Prefer a named
+// function over a literal so the rule has a name in stack traces and tests.
+type ArgsValidatorFunc func(ctx context.Context, args Args) error
+
+// wholeValidator is one declared whole-call check together with the arguments
+// it reads.
+type wholeValidator struct {
+	fields []string
+	fn     ArgsValidatorFunc
+}
+
 // argValidator is the whole-call validator declared with ValidateArgs. It is an
 // Arg so that a contract reads as one flat declaration list.
 type argValidator struct {
-	fn func(ctx context.Context, args Args) error
+	fields []string
+	fn     ArgsValidatorFunc
 }
 
 func (v argValidator) declare(b *argsBuilder) error {
-	b.whole = append(b.whole, v.fn)
+	if len(v.fields) == 0 {
+		return fmt.Errorf("whole-call validator declares no arguments; name the arguments it reads")
+	}
+	// The declared fields are the validator's dependencies, so a typo is a
+	// contract error rather than a rule that silently never reads the argument
+	// it was written for.
+	for _, name := range v.fields {
+		if _, ok := b.byName[name]; !ok {
+			return fmt.Errorf("whole-call validator depends on undeclared argument %q", name)
+		}
+	}
+	b.whole = append(b.whole, wholeValidator{fields: v.fields, fn: v.fn})
 	return nil
 }
 
@@ -361,10 +384,29 @@ func (a *StringsArg) Validate(fn func(ctx context.Context, value []string) error
 	return a
 }
 
-// ValidateArgs registers a whole-call validator that runs after every field
-// validator. Use it for rules that span arguments, for example a range whose
-// lower bound must not exceed its upper bound. It follows the same error
-// contract as field validators.
-func ValidateArgs(fn func(ctx context.Context, args Args) error) Arg {
-	return argValidator{fn: fn}
+// ValidateArgs declares a whole-call validator over the named arguments. The
+// fields are written first so the contract, not the closure body, says which
+// arguments the rule depends on. That buys three things: every name is checked
+// against the declared arguments when the contract is built, the rule is
+// skipped entirely when none of its fields are present, and diagnostics read in
+// declaration order.
+//
+// Prefer a named function over an inline literal, so the rule can be unit
+// tested directly and shows up by name in stack traces:
+//
+//	loom.ValidateArgs("date_from", "date_to").Using(validateDateRange)
+func ValidateArgs(fields ...string) *ArgsValidatorBuilder {
+	return &ArgsValidatorBuilder{fields: fields}
+}
+
+// ArgsValidatorBuilder collects the arguments a whole-call validator depends on
+// before the check itself is attached.
+type ArgsValidatorBuilder struct {
+	fields []string
+}
+
+// Using attaches the check. It is the only way to turn a builder into an Arg,
+// so a ValidateArgs call that forgot its function fails to compile.
+func (b *ArgsValidatorBuilder) Using(fn ArgsValidatorFunc) Arg {
+	return argValidator{fields: b.fields, fn: fn}
 }

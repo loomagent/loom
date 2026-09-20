@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -14,14 +15,18 @@ func testWebSearchContract(t *testing.T) *ArgsContract {
 		Enum("type", "search", "news").Desc("Result type."),
 		Date("date_from").Desc("Optional lower bound."),
 		Date("date_to").Desc("Optional upper bound."),
-		ValidateArgs(func(_ context.Context, args Args) error {
-			from, to := args.String("date_from"), args.String("date_to")
-			if from != "" && to != "" && from > to {
-				return InvalidAt("date_to", "date_to (%s) must not precede date_from (%s)", to, from)
-			}
-			return nil
-		}),
+		ValidateArgs("date_from", "date_to").Using(validateDateRange),
 	)
+}
+
+// validateDateRange is a named cross-field rule: the contract names it, so it
+// can be unit tested directly and shows up by name when it fails.
+func validateDateRange(_ context.Context, args Args) error {
+	from, to := args.String("date_from"), args.String("date_to")
+	if from != "" && to != "" && from > to {
+		return InvalidAt("date_to", "date_to (%s) must not precede date_from (%s)", to, from)
+	}
+	return nil
 }
 
 func TestArgsContractSchema(t *testing.T) {
@@ -234,6 +239,60 @@ func TestNewArgsToolEndToEnd(t *testing.T) {
 	}
 	if _, err := tool.Invoke(context.Background(), `{}`); err == nil {
 		t.Fatal("Invoke() accepted arguments that violate the contract")
+	}
+}
+
+func TestArgsContractWholeValidatorReportsNamedField(t *testing.T) {
+	contract := testWebSearchContract(t)
+	_, err := contract.Decode(`{"query":"go","date_from":"2026-08-20","date_to":"2026-08-01"}`)
+	var argumentError *ToolArgumentError
+	if !errors.As(err, &argumentError) {
+		t.Fatalf("error type = %T, want *ToolArgumentError", err)
+	}
+	if argumentError.Kind != ToolArgumentErrorCustom {
+		t.Fatalf("kind = %q, want custom", argumentError.Kind)
+	}
+	if got, want := argumentError.Issues[0].Field, "date_to"; got != want {
+		t.Fatalf("issue field = %q, want %q", got, want)
+	}
+}
+
+func TestArgsContractWholeValidatorSkippedWhenFieldsAbsent(t *testing.T) {
+	ran := 0
+	contract := MustArgsContract("optional_pair",
+		String("a").Desc("Optional a."),
+		String("b").Desc("Optional b."),
+		ValidateArgs("a", "b").Using(func(_ context.Context, _ Args) error {
+			ran++
+			return nil
+		}),
+	)
+	if _, err := contract.Decode(`{}`); err != nil {
+		t.Fatalf("Decode({}) = %v", err)
+	}
+	if ran != 0 {
+		t.Fatalf("whole-call validator ran %d times with no dependency present", ran)
+	}
+	if _, err := contract.Decode(`{"a":"x"}`); err != nil {
+		t.Fatalf("Decode({a}) = %v", err)
+	}
+	if ran != 1 {
+		t.Fatalf("whole-call validator ran %d times, want 1", ran)
+	}
+}
+
+func TestArgsContractWholeValidatorRequiresDeclaredFields(t *testing.T) {
+	if _, err := NewArgsContract("bad",
+		String("a").Desc("A."),
+		ValidateArgs("missing").Using(func(context.Context, Args) error { return nil }),
+	); err == nil || !strings.Contains(err.Error(), "undeclared") {
+		t.Fatalf("undeclared dependency error = %v", err)
+	}
+	if _, err := NewArgsContract("empty",
+		String("a").Desc("A."),
+		ValidateArgs().Using(func(context.Context, Args) error { return nil }),
+	); err == nil || !strings.Contains(err.Error(), "no arguments") {
+		t.Fatalf("empty dependency list error = %v", err)
 	}
 }
 

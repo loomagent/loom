@@ -95,18 +95,20 @@ constraints live together in one list, and per-field or whole-call validation is
 declared alongside them:
 
 ```go
+func validateDateRange(_ context.Context, args loom.Args) error {
+	from, to := args.String("date_from"), args.String("date_to")
+	if from != "" && to != "" && from > to {
+		return loom.InvalidAt("date_to", "date_to (%s) must not precede date_from (%s)", to, from)
+	}
+	return nil
+}
+
 contract := loom.MustArgsContract("web_search",
 	loom.String("query").Required().MinLen(1).Desc("Google search query."),
 	loom.Enum("type", "search", "news").Desc("Result type; defaults to search."),
 	loom.Date("date_from").Desc(`Optional lower bound, e.g. "2026-08-17".`),
 	loom.Date("date_to").Desc(`Optional upper bound, e.g. "2026-08-18".`),
-	loom.ValidateArgs(func(_ context.Context, args loom.Args) error {
-		from, to := args.String("date_from"), args.String("date_to")
-		if from != "" && to != "" && from > to {
-			return loom.InvalidAt("date_to", "date_to (%s) must not precede date_from (%s)", to, from)
-		}
-		return nil
-	}),
+	loom.ValidateArgs("date_from", "date_to").Using(validateDateRange),
 )
 
 tool := loom.NewArgsTool(contract, "Run a Google search.",
@@ -124,11 +126,15 @@ shape `pattern`, so providers that ignore `format` still constrain the value.
 Unknown arguments are rejected by default.
 
 `StringArg.Validate`, `IntArg.Validate`, and friends register per-field checks
-that receive the already-typed value and the call context. `ValidateArgs`
-registers a whole-call check for rules that span arguments. Validators report
-model-facing problems with `Invalid` (or `InvalidAt` for a different field); any
-other error is treated as an internal failure, and `errors.Join` may report
-several problems from one validator.
+that receive the already-typed value and the call context.
+`ValidateArgs("from", "to").Using(fn)` registers a whole-call check and names
+the arguments it reads first: every name is checked against the contract when it
+is built, the rule is skipped when none of its arguments are present, and
+diagnostics read in declaration order. Prefer a named function over an inline
+literal for cross-field rules, so the rule has a name in tests and stack traces.
+Validators report model-facing problems with `Invalid` (or `InvalidAt` for a
+different field); any other error is treated as an internal failure, and
+`errors.Join` may report several problems from one validator.
 
 Validation runs in two layers. JSON Schema runs first and enforces type,
 presence, enumeration, and the declared range and format constraints; when it

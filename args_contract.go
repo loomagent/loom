@@ -42,7 +42,7 @@ type ArgsContract struct {
 	validator *toolcontract.Validator
 	order     []*argSpec
 	declared  map[string]argKind
-	whole     []func(ctx context.Context, args Args) error
+	whole     []wholeValidator
 	guidance  argumentGuidance
 }
 
@@ -172,7 +172,13 @@ func (c *ArgsContract) runValidators(ctx context.Context, args Args) ([]ToolArgu
 		}
 	}
 	for _, validate := range c.whole {
-		collected, fatal := classifyValidatorError(ctx, "", validate(ctx, args))
+		// A whole-call rule is only meaningful once at least one of its
+		// arguments is present; running it on an all-absent payload would
+		// invent problems for arguments the model never sent.
+		if !args.anyPresent(validate.fields) {
+			continue
+		}
+		collected, fatal := classifyValidatorError(ctx, "", validate.fn(ctx, args))
 		if fatal != nil {
 			return nil, fatal
 		}
