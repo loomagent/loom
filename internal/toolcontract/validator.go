@@ -27,6 +27,9 @@ import (
 // Validator is an immutable compiled contract.
 type Validator struct {
 	schema *schema.Schema
+	// patterns caches every compiled "pattern" in the schema, so validation
+	// never compiles a regular expression on a request path.
+	patterns map[*schema.Schema]*regexp.Regexp
 }
 
 // Violation is one machine-readable tool-contract failure.
@@ -50,20 +53,21 @@ func Compile(s *schema.Schema) (*Validator, error) {
 	if s == nil {
 		return nil, fmt.Errorf("toolcontract: schema is nil")
 	}
-	if err := checkSupported(s, ""); err != nil {
+	patterns := make(map[*schema.Schema]*regexp.Regexp)
+	if err := checkSupported(s, "", patterns); err != nil {
 		return nil, err
 	}
-	return &Validator{schema: s}, nil
+	return &Validator{schema: s, patterns: patterns}, nil
 }
 
 // Validate checks one already syntax-validated JSON value.
 func (v *Validator) Validate(raw jsontext.Value) *ValidationError {
-	var violations []Violation
-	validate(v.schema, decodeValue(raw), "", &violations)
-	if len(violations) == 0 {
+	run := &validation{patterns: v.patterns}
+	run.visit(v.schema, decodeValue(raw), "")
+	if len(run.violations) == 0 {
 		return nil
 	}
-	return &ValidationError{Violations: violations}
+	return &ValidationError{Violations: run.violations}
 }
 
 // Field converts a violation's RFC 6901 JSON Pointer to Loom's dotted field
@@ -134,8 +138,9 @@ func decodeValue(raw jsontext.Value) any {
 }
 
 // checkSupported rejects keywords the validator does not implement, so an
-// unsupported constraint fails loudly instead of passing silently.
-func checkSupported(s *schema.Schema, path string) error {
+// unsupported constraint fails loudly instead of passing silently. It also
+// compiles every pattern once, caching it for later validation.
+func checkSupported(s *schema.Schema, path string, patterns map[*schema.Schema]*regexp.Regexp) error {
 	if s == nil {
 		return nil
 	}
@@ -164,16 +169,18 @@ func checkSupported(s *schema.Schema, path string) error {
 		return fmt.Errorf("toolcontract: unknown type %q at %s", s.Type, at)
 	}
 	if s.Pattern != "" {
-		if _, err := regexp.Compile(s.Pattern); err != nil {
+		compiled, err := regexp.Compile(s.Pattern)
+		if err != nil {
 			return fmt.Errorf("toolcontract: invalid pattern at %s: %w", at, err)
 		}
+		patterns[s] = compiled
 	}
 	for _, name := range PropertyNames(s) {
-		if err := checkSupported(s.Properties[name], path+"/properties/"+name); err != nil {
+		if err := checkSupported(s.Properties[name], path+"/properties/"+name, patterns); err != nil {
 			return err
 		}
 	}
-	return checkSupported(s.Items, path+"/items")
+	return checkSupported(s.Items, path+"/items", patterns)
 }
 
 // PropertyNames returns a schema's property names in declaration order, then
@@ -206,18 +213,28 @@ func knownType(name string) bool {
 	}
 }
 
-func validate(s *schema.Schema, value any, pointer string, out *[]Violation) {
+// validation accumulates the violations found in one value.
+type validation struct {
+	patterns   map[*schema.Schema]*regexp.Regexp
+	violations []Violation
+}
+
+func (run *validation) add(pointer, keyword, code string, params map[string]any) {
+	run.violations = append(run.violations, Violation{JSONPointer: pointer, Keyword: keyword, Code: code, Params: params})
+}
+
+func (run *validation) visit(s *schema.Schema, value any, pointer string) {
 	if s == nil {
 		return
 	}
 	if s.Const != nil && !equalJSON(value, *s.Const) {
-		appendViolation(out, pointer, "const", "const_mismatch", map[string]any{"expected": *s.Const})
+		run.add(pointer, "const", "const_mismatch", map[string]any{"expected": *s.Const})
 	}
 	if len(s.Enum) > 0 && !inEnum(value, s.Enum) {
-		appendViolation(out, pointer, "enum", "value_not_in_enum", map[string]any{"allowed": s.Enum})
+		run.add(pointer, "enum", "value_not_in_enum", map[string]any{"allowed": s.Enum})
 	}
 	if s.Type != "" && !matchesType(s.Type, value) {
-		appendViolation(out, pointer, "type", "type_mismatch", map[string]any{
+		run.add(pointer, "type", "type_mismatch", map[string]any{
 			"expected": s.Type,
 			"received": jsonTypeName(value),
 		})
@@ -225,20 +242,20 @@ func validate(s *schema.Schema, value any, pointer string, out *[]Violation) {
 	}
 	switch typed := value.(type) {
 	case map[string]any:
-		validateObject(s, typed, pointer, out)
+		run.object(s, typed, pointer)
 	case []any:
-		validateArray(s, typed, pointer, out)
+		run.array(s, typed, pointer)
 	case string:
-		validateString(s, typed, pointer, out)
+		run.string(s, typed, pointer)
 	case jsonNumber:
-		validateNumber(s, typed, pointer, out)
+		run.number(s, typed, pointer)
 	}
 }
 
-func validateObject(s *schema.Schema, object map[string]any, pointer string, out *[]Violation) {
+func (run *validation) object(s *schema.Schema, object map[string]any, pointer string) {
 	for _, name := range s.Required {
 		if _, present := object[name]; !present {
-			appendViolation(out, pointer, "required", "missing_required_property", map[string]any{"property": name})
+			run.add(pointer, "required", "missing_required_property", map[string]any{"property": name})
 		}
 	}
 	names := make([]string, 0, len(object))
@@ -248,28 +265,28 @@ func validateObject(s *schema.Schema, object map[string]any, pointer string, out
 	sort.Strings(names)
 	for _, name := range names {
 		if property, ok := s.Properties[name]; ok {
-			validate(property, object[name], joinPointer(pointer, name), out)
+			run.visit(property, object[name], joinPointer(pointer, name))
 			continue
 		}
 		if s.AdditionalProperties != nil && !*s.AdditionalProperties {
-			appendViolation(out, pointer, "additionalProperties", "additional_property_mismatch", map[string]any{"property": name})
+			run.add(pointer, "additionalProperties", "additional_property_mismatch", map[string]any{"property": name})
 		}
 	}
 }
 
-func validateArray(s *schema.Schema, items []any, pointer string, out *[]Violation) {
+func (run *validation) array(s *schema.Schema, items []any, pointer string) {
 	if s.MinItems != nil && len(items) < *s.MinItems {
-		appendViolation(out, pointer, "minItems", "items_too_short", map[string]any{"min_items": *s.MinItems})
+		run.add(pointer, "minItems", "items_too_short", map[string]any{"min_items": *s.MinItems})
 	}
 	if s.MaxItems != nil && len(items) > *s.MaxItems {
-		appendViolation(out, pointer, "maxItems", "items_too_long", map[string]any{"max_items": *s.MaxItems})
+		run.add(pointer, "maxItems", "items_too_long", map[string]any{"max_items": *s.MaxItems})
 	}
 	if s.UniqueItems {
 		seen := make(map[string]bool, len(items))
 		for _, item := range items {
 			key := canonicalJSON(item)
 			if seen[key] {
-				appendViolation(out, pointer, "uniqueItems", "unique_items_mismatch", nil)
+				run.add(pointer, "uniqueItems", "unique_items_mismatch", nil)
 				break
 			}
 			seen[key] = true
@@ -277,51 +294,46 @@ func validateArray(s *schema.Schema, items []any, pointer string, out *[]Violati
 	}
 	if s.Items != nil {
 		for index, item := range items {
-			validate(s.Items, item, fmt.Sprintf("%s/%d", pointer, index), out)
+			run.visit(s.Items, item, fmt.Sprintf("%s/%d", pointer, index))
 		}
 	}
 }
 
-func validateString(s *schema.Schema, value, pointer string, out *[]Violation) {
+func (run *validation) string(s *schema.Schema, value, pointer string) {
 	if s.MinLength != nil {
 		if length := utf8.RuneCountInString(value); length < *s.MinLength {
-			appendViolation(out, pointer, "minLength", "string_too_short", map[string]any{"min_length": *s.MinLength})
+			run.add(pointer, "minLength", "string_too_short", map[string]any{"min_length": *s.MinLength})
 		}
 	}
 	if s.MaxLength != nil {
 		if length := utf8.RuneCountInString(value); length > *s.MaxLength {
-			appendViolation(out, pointer, "maxLength", "string_too_long", map[string]any{"max_length": *s.MaxLength})
+			run.add(pointer, "maxLength", "string_too_long", map[string]any{"max_length": *s.MaxLength})
 		}
 	}
 	if s.Pattern != "" {
-		pattern, err := regexp.Compile(s.Pattern)
-		if err == nil && !pattern.MatchString(value) {
-			appendViolation(out, pointer, "pattern", "pattern_mismatch", map[string]any{"pattern": s.Pattern})
+		if pattern := run.patterns[s]; pattern != nil && !pattern.MatchString(value) {
+			run.add(pointer, "pattern", "pattern_mismatch", map[string]any{"pattern": s.Pattern})
 		}
 	}
 }
 
-func validateNumber(s *schema.Schema, value jsonNumber, pointer string, out *[]Violation) {
+func (run *validation) number(s *schema.Schema, value jsonNumber, pointer string) {
 	number, err := strconv.ParseFloat(string(value), 64)
 	if err != nil {
 		return
 	}
 	if s.Minimum != nil && number < *s.Minimum {
-		appendViolation(out, pointer, "minimum", "value_below_minimum", map[string]any{"minimum": *s.Minimum})
+		run.add(pointer, "minimum", "value_below_minimum", map[string]any{"minimum": *s.Minimum})
 	}
 	if s.Maximum != nil && number > *s.Maximum {
-		appendViolation(out, pointer, "maximum", "value_above_maximum", map[string]any{"maximum": *s.Maximum})
+		run.add(pointer, "maximum", "value_above_maximum", map[string]any{"maximum": *s.Maximum})
 	}
 	if s.ExclusiveMinimum != nil && number <= *s.ExclusiveMinimum {
-		appendViolation(out, pointer, "exclusiveMinimum", "exclusive_minimum_mismatch", map[string]any{"exclusive_minimum": *s.ExclusiveMinimum})
+		run.add(pointer, "exclusiveMinimum", "exclusive_minimum_mismatch", map[string]any{"exclusive_minimum": *s.ExclusiveMinimum})
 	}
 	if s.ExclusiveMaximum != nil && number >= *s.ExclusiveMaximum {
-		appendViolation(out, pointer, "exclusiveMaximum", "exclusive_maximum_mismatch", map[string]any{"exclusive_maximum": *s.ExclusiveMaximum})
+		run.add(pointer, "exclusiveMaximum", "exclusive_maximum_mismatch", map[string]any{"exclusive_maximum": *s.ExclusiveMaximum})
 	}
-}
-
-func appendViolation(out *[]Violation, pointer, keyword, code string, params map[string]any) {
-	*out = append(*out, Violation{JSONPointer: pointer, Keyword: keyword, Code: code, Params: params})
 }
 
 func joinPointer(pointer, name string) string {

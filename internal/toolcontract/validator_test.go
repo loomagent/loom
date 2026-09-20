@@ -97,6 +97,43 @@ func TestViolationFieldDecodesJSONPointer(t *testing.T) {
 	}
 }
 
+// Patterns are compiled once, at Compile time, so Validate never compiles a
+// regular expression on a request path.
+func TestCompileCachesPatterns(t *testing.T) {
+	validator := compileJSON(t, `{
+		"type":"object",
+		"properties":{"q":{"type":"string","pattern":"^SRC-\\d+$"}},
+		"required":["q"]
+	}`)
+	property := validator.schema.Properties["q"]
+	if validator.patterns[property] == nil {
+		t.Fatal("pattern was not compiled at Compile time")
+	}
+}
+
+func BenchmarkValidatePattern(b *testing.B) {
+	var s schema.Schema
+	if err := jsonv2.Unmarshal([]byte(`{
+		"type":"object",
+		"properties":{"q":{"type":"string","pattern":"^SRC-\\d+$"}},
+		"required":["q"],
+		"additionalProperties":false
+	}`), &s); err != nil {
+		b.Fatal(err)
+	}
+	validator, err := Compile(&s)
+	if err != nil {
+		b.Fatal(err)
+	}
+	raw := jsontext.Value(`{"q":"SRC-123"}`)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if err := validator.Validate(raw); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func assertViolation(t *testing.T, violations []Violation, field, code string) {
 	t.Helper()
 	for _, violation := range violations {
