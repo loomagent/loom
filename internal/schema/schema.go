@@ -8,6 +8,7 @@
 package schema
 
 import (
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"sort"
 )
@@ -42,21 +43,25 @@ type Schema struct {
 	Items *Schema `json:"items,omitempty"`
 
 	// Value keywords.
-	Enum             []any    `json:"enum,omitempty"`
-	Const            *any     `json:"const,omitempty"`
-	Format           string   `json:"format,omitempty"`
-	Pattern          string   `json:"pattern,omitempty"`
-	Minimum          *float64 `json:"minimum,omitempty"`
-	Maximum          *float64 `json:"maximum,omitempty"`
-	ExclusiveMinimum *float64 `json:"exclusiveMinimum,omitempty"`
-	ExclusiveMaximum *float64 `json:"exclusiveMaximum,omitempty"`
-	MinLength        *int     `json:"minLength,omitempty"`
-	MaxLength        *int     `json:"maxLength,omitempty"`
-	MinItems         *int     `json:"minItems,omitempty"`
-	MaxItems         *int     `json:"maxItems,omitempty"`
-	UniqueItems      bool     `json:"uniqueItems,omitzero"`
-	Description      string   `json:"description,omitempty"`
-	Examples         []any    `json:"examples,omitempty"`
+	Enum []any `json:"enum,omitempty"`
+	// Const is raw JSON, not a Go value: nil means "no const", while a literal
+	// null is the four bytes null. A Go value could not tell those apart, and
+	// would also round a large integer through float64. omitzero, not omitempty,
+	// so a literal null is still emitted.
+	Const            jsontext.Value `json:"const,omitzero"`
+	Format           string         `json:"format,omitempty"`
+	Pattern          string         `json:"pattern,omitempty"`
+	Minimum          *float64       `json:"minimum,omitempty"`
+	Maximum          *float64       `json:"maximum,omitempty"`
+	ExclusiveMinimum *float64       `json:"exclusiveMinimum,omitempty"`
+	ExclusiveMaximum *float64       `json:"exclusiveMaximum,omitempty"`
+	MinLength        *int           `json:"minLength,omitempty"`
+	MaxLength        *int           `json:"maxLength,omitempty"`
+	MinItems         *int           `json:"minItems,omitempty"`
+	MaxItems         *int           `json:"maxItems,omitempty"`
+	UniqueItems      bool           `json:"uniqueItems,omitzero"`
+	Description      string         `json:"description,omitempty"`
+	Examples         []any          `json:"examples,omitempty"`
 }
 
 // UnmarshalJSON decodes a schema, rejecting any keyword outside the model. A

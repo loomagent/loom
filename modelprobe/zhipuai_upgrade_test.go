@@ -76,14 +76,20 @@ func TestZhipuSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 							w.WriteHeader(400)
 							return
 						}
-						nonce, ok := format.Schema.Properties["nonce"]
-						if !ok || nonce.Const == nil {
+						property, ok := format.Schema.Properties["nonce"]
+						if !ok || property.Const == nil {
 							t.Error("missing randomized constraint")
 							w.WriteHeader(400)
 							return
 						}
+						var nonce string
+						if err := json.Unmarshal(property.Const, &nonce); err != nil {
+							t.Errorf("decode nonce: %v", err)
+							w.WriteHeader(400)
+							return
+						}
 						for _, message := range req.Messages {
-							if strings.Contains(message.Content, fmt.Sprint(*nonce.Const)) {
+							if strings.Contains(message.Content, nonce) {
 								t.Error("constraint copied to prompt")
 							}
 						}
@@ -94,7 +100,7 @@ func TestZhipuSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 							return
 						}
 						if tc.name == "support" {
-							data, err := json.Marshal(map[string]any{"ok": true, "nonce": *nonce.Const})
+							data, err := json.Marshal(map[string]any{"ok": true, "nonce": nonce})
 							if err != nil {
 								t.Error(err)
 								return

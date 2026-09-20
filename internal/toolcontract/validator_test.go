@@ -135,6 +135,31 @@ func BenchmarkValidatePattern(b *testing.B) {
 	}
 }
 
+// Objects compare equal regardless of key order, and numbers compare by value:
+// the same value must not be judged different because it was written
+// differently. Text comparison would fail both, and map key order in
+// encoding/json/v2 is not even stable.
+func TestEqualJSONIsOrderAndNumberInsensitive(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		left, right any
+		equal       bool
+	}{
+		{"key order", map[string]any{"a": jsonNumber("1"), "b": jsonNumber("2")}, map[string]any{"b": jsonNumber("2"), "a": jsonNumber("1")}, true},
+		{"number forms", jsonNumber("1.0"), jsonNumber("1"), true},
+		{"exponent", jsonNumber("1e0"), jsonNumber("1"), true},
+		{"nested", []any{map[string]any{"a": jsonNumber("1.0")}}, []any{map[string]any{"a": jsonNumber("1")}}, true},
+		{"different value", map[string]any{"a": jsonNumber("1")}, map[string]any{"a": jsonNumber("2")}, false},
+		{"array order matters", []any{jsonNumber("1"), jsonNumber("2")}, []any{jsonNumber("2"), jsonNumber("1")}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := equalJSON(tc.left, tc.right); got != tc.equal {
+				t.Fatalf("equalJSON = %v, want %v", got, tc.equal)
+			}
+		})
+	}
+}
+
 func assertViolation(t *testing.T, violations []Violation, field, code string) {
 	t.Helper()
 	for _, violation := range violations {
