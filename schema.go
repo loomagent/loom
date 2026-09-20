@@ -31,12 +31,8 @@ func readStrictJSON(input string) (jsontext.Value, error) {
 	return raw, nil
 }
 
-func compileValidationSchema(schema *Schema) (*toolcontract.Validator, error) {
-	data, err := jsonv2.Marshal(schema)
-	if err != nil {
-		return nil, err
-	}
-	return toolcontract.Compile(data)
+func compileValidationSchema(s *Schema) (*toolcontract.Validator, error) {
+	return toolcontract.Compile(s)
 }
 
 // ValidateSchema reports whether value satisfies schema. It is the check Loom
