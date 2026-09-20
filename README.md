@@ -140,10 +140,14 @@ The handles make the rule's dependencies part of the contract: every handle is
 checked against the declared arguments when the contract is built, the rule is
 skipped when none of its arguments are present, and the check receives typed
 values rather than `Args`. Prefer a named function over an inline literal, so a
-rule can be unit tested directly and is identifiable in stack traces. Validators
-report model-facing problems with `Invalid` (or `InvalidAt` for a different
-field); any other error is treated as an internal failure, and `errors.Join` may
-report several problems from one validator.
+rule can be unit tested directly and is identifiable in stack traces. A rule
+that closes over its handles can also point an error at a field without a
+string, using `InvalidOn(dateTo, ...)`; `InvalidAt` names the field as a string
+for a rule that cannot close over the handle. A field name that is not a
+declared argument is treated as an internal error rather than a model-facing
+correction request. Validators report model-facing problems with `Invalid`,
+`InvalidAt`, or `InvalidOn`; any other error is treated as an internal failure,
+and `errors.Join` may report several problems from one validator.
 
 Validation runs in two layers. JSON Schema runs first and enforces type,
 presence, enumeration, and the declared range and format constraints; when it

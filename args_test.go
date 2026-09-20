@@ -355,6 +355,51 @@ func TestNewArgsToolEndToEnd(t *testing.T) {
 	}
 }
 
+// A rule that closes over its handles can point an error at a field without a
+// string: InvalidOn takes the handle's name by construction.
+func TestArgsContractWholeRuleTargetsFieldViaHandle(t *testing.T) {
+	dateFrom := Date("date_from").Desc("From.")
+	dateTo := Date("date_to").Desc("To.")
+	rule := func(_ context.Context, from, to string) error {
+		if from != "" && to != "" && from > to {
+			return InvalidOn(dateTo, "date_to (%s) must not precede date_from (%s)", to, from)
+		}
+		return nil
+	}
+	contract := MustArgsContract("range", dateFrom, dateTo, Cross2(dateFrom, dateTo).Using(rule))
+	_, err := contract.Decode(`{"date_from":"2026-08-20","date_to":"2026-08-01"}`)
+	var argumentError *ToolArgumentError
+	if !errors.As(err, &argumentError) {
+		t.Fatalf("error type = %T, want *ToolArgumentError", err)
+	}
+	if got, want := argumentError.Issues[0].Field, "date_to"; got != want {
+		t.Fatalf("issue field = %q, want %q", got, want)
+	}
+}
+
+// A rule that points an error at an argument the contract does not declare is a
+// programming mistake, not a model mistake, so it must not reach the model as a
+// correction request with a bogus field.
+func TestArgsContractMisdirectedFieldIsInternal(t *testing.T) {
+	a := String("a").Desc("A.")
+	contract := MustArgsContract("misdirect", a,
+		Cross2(a, a).Using(func(context.Context, string, string) error {
+			return InvalidAt("missing", "oops")
+		}),
+	)
+	_, err := contract.Decode(`{"a":"x"}`)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	var argumentError *ToolArgumentError
+	if errors.As(err, &argumentError) {
+		t.Fatalf("a misdirected field surfaced as a model-facing error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "unknown argument") {
+		t.Fatalf("error = %v, want it to name the unknown argument", err)
+	}
+}
+
 func assertPanics(t *testing.T, fn func()) {
 	t.Helper()
 	defer func() {

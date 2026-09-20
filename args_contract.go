@@ -230,7 +230,28 @@ func (c *ArgsContract) runValidators(ctx context.Context, args Args) ([]ToolArgu
 		}
 		issues = append(issues, collected...)
 	}
+	if err := c.checkIssueFields(issues); err != nil {
+		return nil, err
+	}
 	return issues, nil
+}
+
+// checkIssueFields rejects a validator that names an argument the contract does
+// not declare. The issue field is model-facing, so a typo in InvalidAt would
+// mislabel the problem instead of failing; treat it as an internal error so it
+// surfaces in development rather than as a confusing correction request. A
+// validator that has a handle should call InvalidOn instead and get the name
+// checked by construction.
+func (c *ArgsContract) checkIssueFields(issues []ToolArgumentIssue) error {
+	for _, issue := range issues {
+		if issue.Field == "" {
+			continue
+		}
+		if _, ok := c.declared[issue.Field]; !ok {
+			return fmt.Errorf("validator reported unknown argument %q", issue.Field)
+		}
+	}
+	return nil
 }
 
 // schema projects the accumulated declarations into an object schema. Property
