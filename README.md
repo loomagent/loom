@@ -109,9 +109,9 @@ once avoids rebuilding and resolving the Schema for every invocation. Argument
 decoding preserves the full `int64`/`uint64` range instead of routing integers
 through `float64`.
 
-`NewTool` is the only public tool constructor. Tools without parameters use
-`ToolContract[loom.NoArguments]` and accept the empty JSON object `{}`; raw JSON
-handlers remain an internal implementation detail.
+`NewTool` and `NewArgsTool` are the public tool constructors. Tools without
+parameters use `ToolContract[loom.NoArguments]` and accept the empty JSON object
+`{}`; raw JSON handlers remain an internal implementation detail.
 
 Tool names are normally package constants. `ValidateToolName` and
 `NewToolContract` require 1–64 characters matching
@@ -122,6 +122,57 @@ Errors expose `ToolArgumentError` metadata and render a bounded, compact
 non-JSON `expected arguments` contract for model self-correction without
 dumping the full schema. A validated `example arguments` JSON object is included
 when the struct declares a complete example.
+
+## Declared-argument tools
+
+When a tool's arguments are simple, `ArgsContract` and `NewArgsTool` declare the
+whole contract as one list instead of a Go struct. The tool name, each
+argument's type, description, required flag, and constraints live together, and
+per-field or whole-call validation is declared alongside them:
+
+```go
+contract := loom.MustArgsContract("web_search",
+	loom.String("query").Required().MinLen(1).Desc("Google search query."),
+	loom.Enum("type", "search", "news").Desc("Result type; defaults to search."),
+	loom.Date("date_from").Desc(`Optional lower bound, e.g. "2026-08-17".`),
+	loom.Date("date_to").Desc(`Optional upper bound, e.g. "2026-08-18".`),
+	loom.ValidateArgs(func(_ context.Context, args loom.Args) error {
+		from, to := args.String("date_from"), args.String("date_to")
+		if from != "" && to != "" && from > to {
+			return loom.InvalidAt("date_to", "date_to (%s) must not precede date_from (%s)", to, from)
+		}
+		return nil
+	}),
+)
+
+tool := loom.NewArgsTool(contract, "Run a Google search.",
+	func(ctx context.Context, args loom.Args) (string, error) {
+		return search(ctx, args.String("query"), args.String("type"))
+	},
+)
+```
+
+Handlers read arguments through typed `Args` getters; a declared optional
+argument the model omitted reads back as its zero value, and `Has` distinguishes
+"omitted" from "present but empty". Each declaration projects a JSON Schema
+type, and `Date`, `Time`, and `DateTime` project both a `format` and a matching
+shape `pattern`, so providers that ignore `format` still constrain the value.
+Unknown arguments are rejected by default.
+
+`StringArg.Validate`, `IntArg.Validate`, and friends register per-field checks
+that receive the already-typed value and the call context. `ValidateArgs`
+registers a whole-call check for rules that span arguments. Validators report
+model-facing problems with `Invalid` (or `InvalidAt` for a different field); any
+other error is treated as an internal failure, and `errors.Join` may report
+several problems from one validator.
+
+Validation runs in two layers. JSON Schema runs first and enforces type,
+presence, enumeration, and the declared range and format constraints; when it
+rejects the call, declared validators do not run, because they assume a
+well-shaped value. Once the schema passes, every validator runs and its problems
+are collected, so the model receives all business-rule violations in a single
+turn instead of one per retry. Validators must therefore be cheap, side-effect
+free, and safe to run even when another validator has already failed.
 
 ## Structured model output
 
