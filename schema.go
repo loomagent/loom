@@ -8,8 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/google/jsonschema-go/jsonschema"
-
 	"github.com/loomagent/loom/internal/toolcontract"
 )
 
@@ -33,7 +31,7 @@ func readStrictJSON(input string) (jsontext.Value, error) {
 	return raw, nil
 }
 
-func compileValidationSchema(schema *jsonschema.Schema) (*toolcontract.Validator, error) {
+func compileValidationSchema(schema *Schema) (*toolcontract.Validator, error) {
 	data, err := jsonv2.Marshal(schema)
 	if err != nil {
 		return nil, err
@@ -41,30 +39,69 @@ func compileValidationSchema(schema *jsonschema.Schema) (*toolcontract.Validator
 	return toolcontract.Compile(data)
 }
 
-// cloneSchema deep-copies a schema.
-//
-// jsonschema.Schema.CloneSchemas only clones nested *Schema values; slices and
-// pointers holding plain values — Required, Enum, Examples, Minimum, MaxLength
-// and friends — stay shared with the original. That is not enough here: a
-// contract hands its schema to callers that may normalize it in place, and any
-// such write would reach straight into the schema the contract validates
-// against, racing with concurrent calls. Marshalling through JSON is exact for
-// a JSON Schema and leaves nothing aliased.
-func cloneSchema(schema *jsonschema.Schema) *jsonschema.Schema {
+// ValidateSchema reports whether value satisfies schema. It is the check Loom
+// applies to tool arguments, structured output, and declared examples.
+func ValidateSchema(schema *Schema, value any) error {
 	if schema == nil {
 		return nil
 	}
-	data, err := jsonv2.Marshal(schema)
+	validator, err := compileValidationSchema(schema)
 	if err != nil {
-		return schema.CloneSchemas()
+		return err
 	}
-	var clone jsonschema.Schema
-	if err := jsonv2.Unmarshal(data, &clone); err != nil {
-		return schema.CloneSchemas()
+	data, err := jsonv2.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if failure := validator.Validate(jsontext.Value(data)); failure != nil {
+		return failure
+	}
+	return nil
+}
+
+// cloneSchema deep-copies a schema. A contract hands its schema to callers that
+// may mutate it, and those writes must not reach the schema the contract
+// validates against, nor race with concurrent calls.
+func cloneSchema(schema *Schema) *Schema {
+	if schema == nil {
+		return nil
+	}
+	clone := *schema
+	clone.PropertyOrder = slices.Clone(schema.PropertyOrder)
+	clone.Required = slices.Clone(schema.Required)
+	clone.Enum = slices.Clone(schema.Enum)
+	clone.Examples = slices.Clone(schema.Examples)
+	clone.Not = cloneSchema(schema.Not)
+	clone.Items = cloneSchema(schema.Items)
+	clone.AllOf = cloneSchemaList(schema.AllOf)
+	clone.AnyOf = cloneSchemaList(schema.AnyOf)
+	clone.OneOf = cloneSchemaList(schema.OneOf)
+	if schema.Defs != nil {
+		clone.Defs = make(map[string]*Schema, len(schema.Defs))
+		for name, def := range schema.Defs {
+			clone.Defs[name] = cloneSchema(def)
+		}
+	}
+	if schema.Properties != nil {
+		clone.Properties = make(map[string]*Schema, len(schema.Properties))
+		for name, property := range schema.Properties {
+			clone.Properties[name] = cloneSchema(property)
+		}
 	}
 	return &clone
 }
 
-func schemaHasType(schema *jsonschema.Schema, want string) bool {
-	return schema.Type == want || slices.Contains(schema.Types, want)
+func cloneSchemaList(schemas []*Schema) []*Schema {
+	if schemas == nil {
+		return nil
+	}
+	out := make([]*Schema, len(schemas))
+	for i, schema := range schemas {
+		out[i] = cloneSchema(schema)
+	}
+	return out
+}
+
+func schemaHasType(schema *Schema, want string) bool {
+	return schema != nil && schema.Type == want
 }

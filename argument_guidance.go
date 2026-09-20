@@ -3,11 +3,9 @@ package loom
 import (
 	"fmt"
 	"slices"
-
-	"github.com/google/jsonschema-go/jsonschema"
 )
 
-// argumentGuidance is compiled with a ToolContract. expected is deliberately
+// argumentGuidance is compiled with an ArgsContract. expected is deliberately
 // not JSON so a model cannot mistake it for a callable argument object.
 type argumentGuidance struct {
 	// built distinguishes "not compiled yet" from a contract whose summary is
@@ -19,34 +17,21 @@ type argumentGuidance struct {
 	example  string
 }
 
-func validateDeclaredExamples(root, schema *jsonschema.Schema, path string) error {
+func validateDeclaredExamples(schema *Schema, path string) error {
 	if schema == nil {
 		return nil
 	}
 	for index, example := range schema.Examples {
-		standalone := schema.CloneSchemas()
-		standalone.ID = ""
-		standalone.Schema = ""
-		standalone.Examples = nil
-		standalone.Defs = root.Defs
-		standalone.Definitions = root.Definitions
-		resolved, err := standalone.Resolve(nil)
-		if err != nil {
-			return fmt.Errorf("resolve example schema at %s: %w", examplePath(path, index), err)
-		}
-		if err := resolved.Validate(example); err != nil {
+		if err := ValidateSchema(schema, example); err != nil {
 			return fmt.Errorf("example at %s does not satisfy JSON Schema: %w", examplePath(path, index), err)
 		}
 	}
 	for _, name := range orderedPropertyNames(schema) {
-		if err := validateDeclaredExamples(root, schema.Properties[name], joinFieldPath(path, name)); err != nil {
+		if err := validateDeclaredExamples(schema.Properties[name], joinFieldPath(path, name)); err != nil {
 			return err
 		}
 	}
-	if err := validateDeclaredExamples(root, schema.Items, path+"[]"); err != nil {
-		return err
-	}
-	if err := validateDeclaredExamples(root, schema.AdditionalProperties, path+"{}"); err != nil {
+	if err := validateDeclaredExamples(schema.Items, path+"[]"); err != nil {
 		return err
 	}
 	return nil
@@ -67,7 +52,7 @@ func examplePath(path string, index int) string {
 // does not satisfy its own schema is an authoring mistake worth failing on,
 // while an example the framework assembled on its own is best-effort and may
 // simply be dropped.
-func buildSchemaExample(schema *jsonschema.Schema) (example any, complete, declared bool) {
+func buildSchemaExample(schema *Schema) (example any, complete, declared bool) {
 	if schema == nil {
 		return nil, false, false
 	}

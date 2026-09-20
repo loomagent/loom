@@ -6,8 +6,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
-
 	"github.com/loomagent/loom"
 )
 
@@ -64,9 +62,9 @@ const (
 type Evidence struct {
 	// Requested constraints are intent, not proof of adapter serialization or
 	// server enforcement. Retain randomized schemas so results are auditable.
-	RequestedResponseFormat string             `json:"requested_response_format,omitempty"`
-	RequestedSchema         *jsonschema.Schema `json:"requested_schema,omitempty"`
-	ResponseModel           string             `json:"response_model,omitempty"`
+	RequestedResponseFormat string       `json:"requested_response_format,omitempty"`
+	RequestedSchema         *loom.Schema `json:"requested_schema,omitempty"`
+	ResponseModel           string       `json:"response_model,omitempty"`
 	// Acceptance is independent of observable reasoning and native semantics.
 	Acceptance          string           `json:"acceptance,omitempty"` // accepted, rejected, local_rejected, unknown
 	RequestedReasoning  ReasoningRequest `json:"requested_reasoning"`

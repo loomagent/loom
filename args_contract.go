@@ -8,8 +8,6 @@ import (
 
 	jsonv2 "encoding/json/v2"
 
-	"github.com/google/jsonschema-go/jsonschema"
-
 	"github.com/loomagent/loom/internal/toolcontract"
 )
 
@@ -38,7 +36,7 @@ import (
 // no generated type are required.
 type ArgsContract struct {
 	name      string
-	schema    *jsonschema.Schema
+	schema    *Schema
 	validator *toolcontract.Validator
 	order     []*argSpec
 	declared  map[string]argKind
@@ -61,11 +59,7 @@ func NewArgsContract(toolName string, declarations ...Declaration) (*ArgsContrac
 		}
 	}
 	schema := builder.schema()
-	resolved, err := schema.Resolve(nil)
-	if err != nil {
-		return nil, fmt.Errorf("loom: resolve argument schema for tool %q: %w", toolName, err)
-	}
-	guidance, err := buildArgsGuidance(schema, resolved)
+	guidance, err := buildArgsGuidance(schema)
 	if err != nil {
 		return nil, fmt.Errorf("loom: build argument guidance for tool %q: %w", toolName, err)
 	}
@@ -103,7 +97,7 @@ func MustArgsContract(toolName string, declarations ...Declaration) *ArgsContrac
 func (c *ArgsContract) Name() string { return c.name }
 
 // Schema returns an independent copy of the model-facing argument schema.
-func (c *ArgsContract) Schema() *jsonschema.Schema { return cloneSchema(c.schema) }
+func (c *ArgsContract) Schema() *Schema { return cloneSchema(c.schema) }
 
 // Decode parses and validates one tool call with a background context.
 func (c *ArgsContract) Decode(argumentsJSON string) (Args, error) {
@@ -257,8 +251,8 @@ func (c *ArgsContract) checkIssueFields(issues []ToolArgumentIssue) error {
 // schema projects the accumulated declarations into an object schema. Property
 // order follows declaration order; additional properties are rejected so a
 // model that invents an argument name is told rather than silently ignored.
-func (b *argsBuilder) schema() *jsonschema.Schema {
-	properties := make(map[string]*jsonschema.Schema, len(b.order))
+func (b *argsBuilder) schema() *Schema {
+	properties := make(map[string]*Schema, len(b.order))
 	required := make([]string, 0, len(b.order))
 	for _, spec := range b.order {
 		properties[spec.name] = spec.schema()
@@ -266,17 +260,17 @@ func (b *argsBuilder) schema() *jsonschema.Schema {
 			required = append(required, spec.name)
 		}
 	}
-	return &jsonschema.Schema{
+	return &Schema{
 		Type:                 "object",
 		Properties:           properties,
 		Required:             required,
-		AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}},
+		AdditionalProperties: boolPtr(false),
 	}
 }
 
 // schema maps one declaration onto its JSON Schema property.
-func (s *argSpec) schema() *jsonschema.Schema {
-	property := &jsonschema.Schema{Description: s.description, Examples: s.examples}
+func (s *argSpec) schema() *Schema {
+	property := &Schema{Description: s.description, Examples: s.examples}
 	switch s.kind {
 	case argKindString:
 		property.Type = "string"
@@ -313,7 +307,7 @@ func (s *argSpec) schema() *jsonschema.Schema {
 		property.Type = "boolean"
 	case argKindStrings:
 		property.Type = "array"
-		property.Items = &jsonschema.Schema{Type: "string"}
+		property.Items = &Schema{Type: "string"}
 		property.MinItems = s.minItems
 		property.MaxItems = s.maxItems
 		property.UniqueItems = s.uniqueItems
@@ -324,9 +318,9 @@ func (s *argSpec) schema() *jsonschema.Schema {
 // buildArgsGuidance is buildArgumentGuidance without a Go type to decode into.
 // Declared-argument contracts have no struct, so an assembled example is
 // validated against the schema alone.
-func buildArgsGuidance(schema *jsonschema.Schema, resolved *jsonschema.Resolved) (argumentGuidance, error) {
+func buildArgsGuidance(schema *Schema) (argumentGuidance, error) {
 	guidance := argumentGuidance{built: true, expected: summarizeExpectedArguments(schema)}
-	if err := validateDeclaredExamples(schema, schema, ""); err != nil {
+	if err := validateDeclaredExamples(schema, ""); err != nil {
 		return argumentGuidance{}, err
 	}
 	example, complete, declared := buildSchemaExample(schema)
@@ -339,7 +333,7 @@ func buildArgsGuidance(schema *jsonschema.Schema, resolved *jsonschema.Resolved)
 		}
 		return guidance, nil
 	}
-	if err := resolved.Validate(example); err != nil {
+	if err := ValidateSchema(schema, example); err != nil {
 		return reject("assembled example does not satisfy JSON Schema: %w", err)
 	}
 	data, err := jsonv2.Marshal(example)
