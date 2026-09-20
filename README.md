@@ -89,6 +89,10 @@ non-JSON `expected arguments` contract for model self-correction without dumping
 the full schema. A validated `example arguments` JSON object is included when
 the declared examples form a complete call.
 
+A tool contract also covers the other direction of the interaction — the object
+a model returns as structured output. [Tool contracts](#tool-contracts) declares
+both with the same typed handles.
+
 ## Tool contracts
 
 A tool contract is one declaration of typed handles, and the same declaration
