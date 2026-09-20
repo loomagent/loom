@@ -358,6 +358,21 @@ func TestNumericExclusiveBounds(t *testing.T) {
 	}
 }
 
+// A format the model is told about must also be enforced: either Loom patterns
+// it, or the author supplies a pattern. Otherwise the contract would advertise a
+// constraint it never checks.
+func TestFormatMustBeEnforced(t *testing.T) {
+	if _, err := NewArgsContract("unpatched", String("x").Format("email")); err == nil || !strings.Contains(err.Error(), "email") {
+		t.Fatalf("format without a pattern = %v, want an error naming the format", err)
+	}
+	if _, err := NewArgsContract("patched", String("x").Format("email").Pattern(`^[^@]+@[^@]+$`)); err != nil {
+		t.Fatalf("format with an explicit pattern rejected: %v", err)
+	}
+	if _, err := NewArgsContract("known", Date("d")); err != nil {
+		t.Fatalf("a format Loom patterns rejected: %v", err)
+	}
+}
+
 func TestArgsHasPanicsOnUndeclared(t *testing.T) {
 	contract := MustArgsContract("t", String("q").Desc("Q."))
 	args, err := contract.Decode(`{"q":"x"}`)
