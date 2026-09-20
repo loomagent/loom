@@ -86,7 +86,10 @@ func New(cfg Config) (*Model, error) {
 		capabilities = *cfg.Capabilities
 	}
 	return &Model{
-		client:       openai.NewClient(option.WithAPIKey(cfg.APIKey), option.WithBaseURL(baseURL)),
+		// loom owns every retry (ChatWithRetry / StreamWithRetry), so the SDK must
+		// not retry underneath; its default retries would multiply the attempts and
+		// bypass the shared rate-limit cooldown.
+		client:       openai.NewClient(option.WithAPIKey(cfg.APIKey), option.WithBaseURL(baseURL), option.WithMaxRetries(0)),
 		name:         cfg.ModelName,
 		retryCfg:     retryCfg,
 		capabilities: capabilities,

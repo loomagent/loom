@@ -55,6 +55,7 @@ func TestUsagePresenceOnWire(t *testing.T) {
 						// Explicit missing telemetry after a known frame must not inherit it.
 						_, _ = fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n")
 					} else {
+						w.Header().Set("Content-Type", "application/json")
 						_, _ = fmt.Fprintf(w, `{"model":"deepseek-future","choices":[{"message":{"content":"answer"},"finish_reason":"stop"}]%s}`, tc.usage)
 					}
 				}))

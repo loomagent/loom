@@ -10,8 +10,9 @@ import (
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/openai/openai-go/v3"
+
 	"github.com/loomagent/loom"
-	goseek "github.com/storynap/goseek"
 )
 
 func TestSchemaRequestReachesUnknownModel(t *testing.T) {
@@ -49,6 +50,7 @@ func TestSchemaRequestReachesUnknownModel(t *testing.T) {
 					_, _ = fmt.Fprint(w, "data: {\"model\":\"deepseek-future\",\"choices\":[{\"delta\":{\"content\":\"{\\\"ok\\\":true}\"},\"finish_reason\":\"stop\"}]}\n\n")
 					_, _ = fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"total_tokens\":12,\"completion_tokens_details\":{\"reasoning_tokens\":0}}}\n\ndata: [DONE]\n\n")
 				} else {
+					w.Header().Set("Content-Type", "application/json")
 					_, _ = fmt.Fprint(w, `{"model":"deepseek-future","choices":[{"message":{"content":"{\"ok\":true}"},"finish_reason":"stop"}],"usage":{"total_tokens":12,"completion_tokens_details":{"reasoning_tokens":0}}}`)
 				}
 			}))
@@ -110,7 +112,7 @@ func TestReasoningTelemetryPresence(t *testing.T) {
 		{`{"completion_tokens_details":{"reasoning_tokens":0}}`, true, 0},
 		{`{"completion_tokens_details":{"reasoning_tokens":595}}`, true, 595},
 	} {
-		var wire chatUsage
+		var wire openai.CompletionUsage
 		if err := jsonv2.Unmarshal([]byte(tt.raw), &wire); err != nil {
 			t.Fatal(err)
 		}
@@ -125,6 +127,7 @@ func TestSchemaUpstreamErrorAndDeclaredBusinessGuard(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Retry-After", "7")
 		w.WriteHeader(400)
 		_, _ = fmt.Fprint(w, `{"error":{"message":"This response_format type is unavailable now"}}`)
@@ -136,8 +139,8 @@ func TestSchemaUpstreamErrorAndDeclaredBusinessGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = m.Chat(t.Context(), req)
-	var apiErr *goseek.APIError
-	if !errors.As(err, &apiErr) || apiErr.StatusCode != 400 || apiErr.Header.Get("Retry-After") != "7" || errors.Is(err, loom.ErrUnsupportedCapability) {
+	var apiErr *openai.Error
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != 400 || apiErr.Response == nil || apiErr.Response.Header.Get("Retry-After") != "7" || errors.Is(err, loom.ErrUnsupportedCapability) {
 		t.Fatalf("upstream error lost: %v", err)
 	}
 	m.capabilities = loom.ModelCapabilities{StructuredOutput: loom.StructuredOutputJSONObject}

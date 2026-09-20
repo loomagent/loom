@@ -13,9 +13,10 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/openai/openai-go/v3"
+
 	"github.com/loomagent/loom"
 	"github.com/loomagent/loom/providers/deepseek"
-	goseek "github.com/storynap/goseek"
 )
 
 func TestDeepSeekSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
@@ -23,6 +24,7 @@ func TestDeepSeekSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 		t.Run(behavior, func(t *testing.T) {
 			var schemaCalls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
 				var req struct {
 					Thinking *struct {
 						Type string `json:"type"`
@@ -101,7 +103,7 @@ func TestDeepSeekSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 			report, err := Probe(t.Context(), builder, Options{
 				DeclaredCapabilities: &declared,
 				ErrorClassifier: func(err error) ErrorDisposition {
-					var apiErr *goseek.APIError
+					var apiErr *openai.Error
 					if errors.As(err, &apiErr) && apiErr.StatusCode == 400 && strings.Contains(apiErr.Message, "response_format") {
 						return ErrorUnsupported
 					}
