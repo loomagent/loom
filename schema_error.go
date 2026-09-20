@@ -362,19 +362,7 @@ func summarizeExpectedArguments(schema *Schema) string {
 	if schema == nil || !schemaHasType(schema, "object") {
 		return ""
 	}
-	names := slices.Clone(schema.PropertyOrder)
-	seen := make(map[string]bool, len(names))
-	for _, name := range names {
-		seen[name] = true
-	}
-	var remaining []string
-	for name := range schema.Properties {
-		if !seen[name] {
-			remaining = append(remaining, name)
-		}
-	}
-	sort.Strings(remaining)
-	names = append(names, remaining...)
+	names := schema.PropertyNames()
 	if len(names) == 0 {
 		// Saying outright that the tool takes nothing beats making the model
 		// infer it from an empty example.
@@ -498,22 +486,6 @@ func literalPatternConstraint(pattern string) (literal, kind string, ok bool) {
 	}
 	literal = unquoteRegexpLiteral(pattern)
 	return literal, kind, regexp.QuoteMeta(literal) == pattern
-}
-
-func orderedPropertyNames(schema *Schema) []string {
-	names := slices.Clone(schema.PropertyOrder)
-	seen := make(map[string]bool, len(names))
-	for _, name := range names {
-		seen[name] = true
-	}
-	var remaining []string
-	for name := range schema.Properties {
-		if !seen[name] {
-			remaining = append(remaining, name)
-		}
-	}
-	sort.Strings(remaining)
-	return append(names, remaining...)
 }
 
 func joinFieldPath(prefix, field string) string {
