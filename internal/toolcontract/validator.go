@@ -3,9 +3,9 @@
 // LLM-facing violation protocol consumed by the loom package.
 //
 // The engine is Loom's own: the schemas it validates are built by Loom's
-// declared-argument builder, so the accepted keyword set is closed. A schema
-// that uses a keyword outside that set is rejected at Compile time rather than
-// silently ignored.
+// declared-argument builder, so the accepted keyword set is closed. The model
+// refuses to decode a keyword outside that set, so an unsupported constraint
+// cannot be silently ignored.
 package toolcontract
 
 import (
@@ -137,9 +137,9 @@ func decodeValue(raw jsontext.Value) any {
 	return jsonNumber(string(trimmed))
 }
 
-// checkSupported rejects keywords the validator does not implement, so an
-// unsupported constraint fails loudly instead of passing silently. It also
-// compiles every pattern once, caching it for later validation.
+// checkSupported validates that a schema stays inside the modelled subset and
+// compiles every pattern once, caching it for later validation. Keywords outside
+// the subset cannot reach here: the model refuses to decode them.
 func checkSupported(s *schema.Schema, path string, patterns map[*schema.Schema]*regexp.Regexp) error {
 	if s == nil {
 		return nil
@@ -147,23 +147,6 @@ func checkSupported(s *schema.Schema, path string, patterns map[*schema.Schema]*
 	at := path
 	if at == "" {
 		at = "root"
-	}
-	unsupported := func(keyword string) error {
-		return fmt.Errorf("toolcontract: unsupported JSON Schema keyword %s at %s", keyword, at)
-	}
-	switch {
-	case s.Ref != "":
-		return unsupported("$ref")
-	case s.Defs != nil:
-		return unsupported("$defs")
-	case s.Not != nil:
-		return unsupported("not")
-	case len(s.AllOf) > 0:
-		return unsupported("allOf")
-	case len(s.AnyOf) > 0:
-		return unsupported("anyOf")
-	case len(s.OneOf) > 0:
-		return unsupported("oneOf")
 	}
 	if s.Type != "" && !knownType(s.Type) {
 		return fmt.Errorf("toolcontract: unknown type %q at %s", s.Type, at)

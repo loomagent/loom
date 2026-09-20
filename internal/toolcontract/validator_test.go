@@ -3,7 +3,6 @@ package toolcontract
 import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
-	"strings"
 	"testing"
 
 	"github.com/loomagent/loom/internal/schema"
@@ -83,10 +82,12 @@ func TestValidateReportsMissingRequiredAndConstMismatch(t *testing.T) {
 	assertViolation(t, validationErr.Violations, "", "missing_required_property")
 }
 
-func TestCompileRejectsUnsupportedKeyword(t *testing.T) {
-	_, err := Compile(&schema.Schema{Ref: "#/$defs/x"})
-	if err == nil || !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("Compile() = %v, want an unsupported-keyword error", err)
+// A keyword Loom does not model must not decode: a silently dropped
+// constraint would validate as if it were absent.
+func TestSchemaRejectsUnknownKeyword(t *testing.T) {
+	var s schema.Schema
+	if err := jsonv2.Unmarshal([]byte(`{"type":"object","$ref":"#/$defs/x"}`), &s); err == nil {
+		t.Fatal("decoded a schema that uses an unsupported keyword")
 	}
 }
 

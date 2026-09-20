@@ -67,17 +67,7 @@ func cloneSchema(schema *Schema) *Schema {
 	clone.Required = slices.Clone(schema.Required)
 	clone.Enum = slices.Clone(schema.Enum)
 	clone.Examples = slices.Clone(schema.Examples)
-	clone.Not = cloneSchema(schema.Not)
 	clone.Items = cloneSchema(schema.Items)
-	clone.AllOf = cloneSchemaList(schema.AllOf)
-	clone.AnyOf = cloneSchemaList(schema.AnyOf)
-	clone.OneOf = cloneSchemaList(schema.OneOf)
-	if schema.Defs != nil {
-		clone.Defs = make(map[string]*Schema, len(schema.Defs))
-		for name, def := range schema.Defs {
-			clone.Defs[name] = cloneSchema(def)
-		}
-	}
 	if schema.Properties != nil {
 		clone.Properties = make(map[string]*Schema, len(schema.Properties))
 		for name, property := range schema.Properties {
@@ -85,17 +75,6 @@ func cloneSchema(schema *Schema) *Schema {
 		}
 	}
 	return &clone
-}
-
-func cloneSchemaList(schemas []*Schema) []*Schema {
-	if schemas == nil {
-		return nil
-	}
-	out := make([]*Schema, len(schemas))
-	for i, schema := range schemas {
-		out[i] = cloneSchema(schema)
-	}
-	return out
 }
 
 func schemaHasType(schema *Schema, want string) bool {
