@@ -66,6 +66,11 @@ func (b *argsBuilder) add(spec *argSpec) error {
 // function over a literal so the rule has a name in stack traces and tests.
 type ArgsValidatorFunc func(ctx context.Context, args Args) error
 
+// FieldValidator checks one argument after schema validation. Prefer a named
+// function over a literal for anything non-trivial, so the rule can be unit
+// tested directly and is identifiable in stack traces.
+type FieldValidator[T any] func(ctx context.Context, value T) error
+
 // wholeValidator is one declared whole-call check together with the arguments
 // it reads.
 type wholeValidator struct {
@@ -210,7 +215,7 @@ func (a *StringArg) NotBlank() *StringArg {
 // when the model actually sent the argument. Return Invalid or InvalidAt to
 // report a model-facing problem; any other error is treated as an internal
 // failure. A single validator may report several problems with errors.Join.
-func (a *StringArg) Validate(fn func(ctx context.Context, value string) error) *StringArg {
+func (a *StringArg) Validate(fn FieldValidator[string]) *StringArg {
 	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
 		var value string
 		if err := jsonv2.Unmarshal(raw, &value); err != nil {
@@ -258,7 +263,7 @@ func (a *IntArg) Max(n int64) *IntArg {
 }
 
 // Validate registers a per-field check; see StringArg.Validate.
-func (a *IntArg) Validate(fn func(ctx context.Context, value int64) error) *IntArg {
+func (a *IntArg) Validate(fn FieldValidator[int64]) *IntArg {
 	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
 		var value int64
 		if err := jsonv2.Unmarshal(raw, &value); err != nil {
@@ -294,7 +299,7 @@ func (a *FloatArg) Min(n float64) *FloatArg { a.spec.minimum = &n; return a }
 func (a *FloatArg) Max(n float64) *FloatArg { a.spec.maximum = &n; return a }
 
 // Validate registers a per-field check; see StringArg.Validate.
-func (a *FloatArg) Validate(fn func(ctx context.Context, value float64) error) *FloatArg {
+func (a *FloatArg) Validate(fn FieldValidator[float64]) *FloatArg {
 	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
 		var value float64
 		if err := jsonv2.Unmarshal(raw, &value); err != nil {
@@ -328,7 +333,7 @@ func (a *BoolArg) Example(value bool) *BoolArg {
 }
 
 // Validate registers a per-field check; see StringArg.Validate.
-func (a *BoolArg) Validate(fn func(ctx context.Context, value bool) error) *BoolArg {
+func (a *BoolArg) Validate(fn FieldValidator[bool]) *BoolArg {
 	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
 		var value bool
 		if err := jsonv2.Unmarshal(raw, &value); err != nil {
@@ -373,7 +378,7 @@ func (a *StringsArg) MaxItems(n int) *StringsArg { a.spec.maxItems = &n; return 
 func (a *StringsArg) Unique() *StringsArg { a.spec.uniqueItems = true; return a }
 
 // Validate registers a per-field check; see StringArg.Validate.
-func (a *StringsArg) Validate(fn func(ctx context.Context, value []string) error) *StringsArg {
+func (a *StringsArg) Validate(fn FieldValidator[[]string]) *StringsArg {
 	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
 		var value []string
 		if err := jsonv2.Unmarshal(raw, &value); err != nil {

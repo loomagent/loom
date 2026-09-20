@@ -125,13 +125,14 @@ type, and `Date`, `Time`, and `DateTime` project both a `format` and a matching
 shape `pattern`, so providers that ignore `format` still constrain the value.
 Unknown arguments are rejected by default.
 
-`StringArg.Validate`, `IntArg.Validate`, and friends register per-field checks
-that receive the already-typed value and the call context.
-`ValidateArgs("from", "to").Using(fn)` registers a whole-call check and names
-the arguments it reads first: every name is checked against the contract when it
-is built, the rule is skipped when none of its arguments are present, and
-diagnostics read in declaration order. Prefer a named function over an inline
-literal for cross-field rules, so the rule has a name in tests and stack traces.
+`StringArg.Validate`, `IntArg.Validate`, and friends take a `FieldValidator[T]`
+and register a per-field check that receives the already-typed value and the
+call context. `ValidateArgs("from", "to").Using(fn)` takes an
+`ArgsValidatorFunc` and registers a whole-call check, naming the arguments it
+reads first: every name is checked against the contract when it is built, the
+rule is skipped when none of its arguments are present, and diagnostics read in
+declaration order. Prefer a named function over an inline literal for either
+kind, so a rule can be unit tested directly and is identifiable in stack traces.
 Validators report model-facing problems with `Invalid` (or `InvalidAt` for a
 different field); any other error is treated as an internal failure, and
 `errors.Join` may report several problems from one validator.
