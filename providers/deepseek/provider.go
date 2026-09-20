@@ -1,4 +1,15 @@
-// Package deepseek implements loom.ChatModel using the DeepSeek wire protocol.
+// Package deepseek implements loom.ChatModel using the DeepSeek wire protocol
+// (an OpenAI-compatible chat completions API) on top of the official
+// github.com/openai/openai-go/v3 SDK.
+//
+// DeepSeek-specific differences from the plain OpenAI protocol, which is why
+// this does not reuse the openrouter package:
+//   - reasoning is switched with a request-level "thinking" object
+//     ({"type": "enabled"|"disabled"}), injected through SetExtraFields;
+//   - reasoning output arrives in the "reasoning_content" message field, read
+//     from the SDK's ExtraFields;
+//   - reasoning token presence is reported through
+//     usage.completion_tokens_details.reasoning_tokens.
 //
 // 用法:
 //
@@ -9,9 +20,7 @@
 //	if err != nil { ... }
 //
 //	resp, err := model.Chat(ctx, loom.ChatRequest{
-//	    Messages: []loom.Message{
-//	        {Role: loom.RoleUser, Content: "你好"},
-//	    },
+//	    Messages:  []loom.Message{{Role: loom.RoleUser, Content: "你好"}},
 //	    Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortHigh},
 //	})
 package deepseek
@@ -24,16 +33,23 @@ import (
 	"io"
 	"strings"
 
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/packages/respjson"
 	"github.com/openai/openai-go/v3/packages/ssestream"
-	goseek "github.com/storynap/goseek"
+	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/loomagent/loom"
 )
 
-// 默认 model 别名,跟 goseek 常量保持一致以便调用方按需引用。
+// DefaultBaseURL DeepSeek API 入口。
+const DefaultBaseURL = "https://api.deepseek.com"
+
+// 默认 model 别名。
 const (
-	ModelV4Flash = goseek.ModelDeepSeekV4Flash
-	ModelV4Pro   = goseek.ModelDeepSeekV4Pro
+	ModelV4Flash = "deepseek-v4-flash"
+	ModelV4Pro   = "deepseek-v4-pro"
 )
 
 // Config DeepSeek provider 构造参数。
@@ -42,7 +58,7 @@ type Config struct {
 	APIKey string
 	// ModelName 必填,如 ModelV4Flash / ModelV4Pro;空时默认 ModelV4Flash。
 	ModelName string
-	// BaseURL 可空 — 不设时用 goseek 默认 (https://api.deepseek.com)。
+	// BaseURL 可空 — 不设时用 DefaultBaseURL。
 	BaseURL string
 
 	// Retry 控制 retry 策略;nil 走 loom.DefaultRetryConfig()(默认开启)。
@@ -58,7 +74,7 @@ type Config struct {
 
 // Model 一个 DeepSeek 模型实例,实现 loom.ChatModel。
 type Model struct {
-	client       *chatClient
+	client       openai.Client
 	name         string
 	retryCfg     *loom.RetryConfig
 	capabilities loom.ModelCapabilities
@@ -73,9 +89,9 @@ func New(cfg Config) (*Model, error) {
 		return nil, fmt.Errorf("loom/deepseek: APIKey 不能为空")
 	}
 
-	client, err := newChatClient(cfg.APIKey, cfg.BaseURL)
-	if err != nil {
-		return nil, fmt.Errorf("loom/deepseek: 创建 client: %w", err)
+	baseURL := DefaultBaseURL
+	if cfg.BaseURL != "" {
+		baseURL = cfg.BaseURL
 	}
 
 	name := cfg.ModelName
@@ -92,7 +108,15 @@ func New(cfg Config) (*Model, error) {
 	if cfg.Capabilities != nil {
 		capabilities = *cfg.Capabilities
 	}
-	return &Model{client: client, name: name, retryCfg: retryCfg, capabilities: capabilities}, nil
+	return &Model{
+		// loom owns every retry (ChatWithRetry / StreamWithRetry), so the SDK must
+		// not retry underneath; its default retries would multiply the attempts and
+		// bypass the shared rate-limit cooldown.
+		client:       openai.NewClient(option.WithAPIKey(cfg.APIKey), option.WithBaseURL(baseURL), option.WithMaxRetries(0)),
+		name:         name,
+		retryCfg:     retryCfg,
+		capabilities: capabilities,
+	}, nil
 }
 
 // Name 返回 "deepseek/<model>" 形式标识。
@@ -119,8 +143,8 @@ func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatRespo
 }
 
 // chatRaw 单次同步 Chat 调用(无 retry,供 retry helper 反复调)。
-func (m *Model) chatRaw(ctx context.Context, dsReq chatRequest) (*loom.ChatResponse, error) {
-	out, err := m.client.CreateChatCompletion(ctx, dsReq)
+func (m *Model) chatRaw(ctx context.Context, dsReq openai.ChatCompletionNewParams) (*loom.ChatResponse, error) {
+	out, err := m.client.Chat.Completions.New(ctx, dsReq)
 	if err != nil {
 		return nil, fmt.Errorf("loom/deepseek: chat: %w", normalizeDeepSeekError(err))
 	}
@@ -129,11 +153,11 @@ func (m *Model) chatRaw(ctx context.Context, dsReq chatRequest) (*loom.ChatRespo
 	}
 	choice := out.Choices[0]
 	return &loom.ChatResponse{
-		Content:          derefString(choice.Message.Content),
-		ReasoningContent: derefString(choice.Message.ReasoningContent),
+		Content:          choice.Message.Content,
+		ReasoningContent: extractReasoning(choice.Message.JSON.ExtraFields),
 		ToolCalls:        translateToolCalls(choice.Message.ToolCalls),
 		FinishReason:     translateFinishReason(choice.FinishReason),
-		Usage:            translateUsage(out.Usage),
+		Usage:            translateUsage(&out.Usage),
 		Model:            out.Model,
 	}, nil
 }
@@ -146,49 +170,15 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 	if err != nil {
 		return nil, err
 	}
-	if dsReq.StreamOptions == nil {
-		dsReq.StreamOptions = &goseek.StreamOptions{IncludeUsage: true}
-	} else {
-		dsReq.StreamOptions.IncludeUsage = true
-	}
+	dsReq.StreamOptions.IncludeUsage = param.NewOpt(true)
 	return loom.StreamWithRetry(ctx, classifier{}, m.retryCfg, func(streamCtx context.Context) (loom.Stream, error) {
-		return m.streamRaw(streamCtx, dsReq)
+		return &streamAdapter{inner: m.client.Chat.Completions.NewStreaming(streamCtx, dsReq)}, nil
 	})
-}
-
-// streamRaw 单次 Stream 调用(无 retry)。
-func (m *Model) streamRaw(ctx context.Context, dsReq chatRequest) (loom.Stream, error) {
-	stream, err := m.client.CreateChatCompletionStream(ctx, dsReq)
-	if err != nil {
-		return nil, fmt.Errorf("loom/deepseek: stream: %w", normalizeDeepSeekError(err))
-	}
-	return &streamAdapter{inner: stream}, nil
-}
-
-func normalizeDeepSeekError(err error) error {
-	if err == nil {
-		return nil
-	}
-	if isDeepSeekContentExistsRisk(err) {
-		return fmt.Errorf("%w: %w", loom.ErrSensitiveContentRisk, err)
-	}
-	return err
-}
-
-func isDeepSeekContentExistsRisk(err error) bool {
-	var apiErr *goseek.APIError
-	if !errors.As(err, &apiErr) {
-		return false
-	}
-	if apiErr.StatusCode != 400 {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(apiErr.Message), "Content Exists Risk")
 }
 
 // streamAdapter maps the upstream SSE stream to loom.Stream.
 type streamAdapter struct {
-	inner *ssestream.Stream[chatChunk]
+	inner *ssestream.Stream[openai.ChatCompletionChunk]
 }
 
 func (s *streamAdapter) Recv() (*loom.Chunk, error) {
@@ -201,19 +191,19 @@ func (s *streamAdapter) Recv() (*loom.Chunk, error) {
 	raw := s.inner.Current()
 
 	chunk := &loom.Chunk{Model: raw.Model}
-	if raw.Usage != nil {
-		u := translateUsage(raw.Usage)
+	if raw.JSON.Usage.Valid() {
+		u := translateUsage(&raw.Usage)
 		chunk.Usage = &u
 	}
 	// DeepSeek 末尾会发一帧 choices=[] 的 Usage 帧;
 	// 普通帧 choices 至少 1 项,取首项 delta。
 	if len(raw.Choices) > 0 {
 		choice := raw.Choices[0]
-		chunk.ContentDelta = derefString(choice.Delta.Content)
-		chunk.ReasoningContentDelta = derefString(choice.Delta.ReasoningContent)
+		chunk.ContentDelta = choice.Delta.Content
+		chunk.ReasoningContentDelta = extractReasoning(choice.Delta.JSON.ExtraFields)
 		chunk.ToolCallDeltas = translateToolCallDeltas(choice.Delta.ToolCalls)
-		if choice.FinishReason != nil {
-			chunk.FinishReason = translateFinishReason(*choice.FinishReason)
+		if choice.FinishReason != "" {
+			chunk.FinishReason = translateFinishReason(choice.FinishReason)
 		}
 	}
 	return chunk, nil
@@ -225,73 +215,81 @@ func (s *streamAdapter) Close() error {
 
 // buildRequest validates explicit configuration and serializes the requested
 // protocol fields. It does not infer capabilities from the provider/model name.
-func (m *Model) buildRequest(req loom.ChatRequest) (_ chatRequest, err error) {
+func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewParams, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
-	out := chatRequest{ChatCompletionRequest: goseek.ChatCompletionRequest{
-		Model:       m.name,
-		Messages:    translateMessages(req.Messages),
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		MaxTokens:   req.MaxTokens,
-	}}
+	out := openai.ChatCompletionNewParams{
+		Model:    m.name,
+		Messages: translateMessages(req.Messages),
+	}
+	if req.Temperature != nil {
+		out.Temperature = param.NewOpt(*req.Temperature)
+	}
+	if req.TopP != nil {
+		out.TopP = param.NewOpt(*req.TopP)
+	}
+	if req.MaxTokens != nil {
+		out.MaxTokens = param.NewOpt(int64(*req.MaxTokens))
+	}
 	switch len(req.Stop) {
 	case 0:
 		// 不传
 	case 1:
-		out.Stop = goseek.Stop(req.Stop[0])
+		out.Stop.OfString = param.NewOpt(req.Stop[0])
 	default:
-		out.Stop = goseek.Stops(req.Stop...)
+		out.Stop.OfStringArray = req.Stop
 	}
 	if err := loom.CheckRequestAgainstCapabilities(m.capabilities, req); err != nil {
-		return chatRequest{}, fmt.Errorf("loom/deepseek: %w", err)
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: %w", err)
 	}
 	resolved, err := loom.ResolveModelReasoning("deepseek", m.name, m.capabilities, req.Reasoning)
 	if err != nil {
-		return chatRequest{}, fmt.Errorf("loom/deepseek: %w", err)
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: %w", err)
 	}
+	// thinking 是 DeepSeek 专有字段,SDK 没有类型化的位置,按需注入。
+	// ReasoningSendOmit 时不注入,等价于不发该字段。
 	switch resolved.Send {
 	case loom.ReasoningSendEnabled:
-		out.Thinking = goseek.EnableThinking()
+		out.SetExtraFields(map[string]any{"thinking": map[string]any{"type": "enabled"}})
 	case loom.ReasoningSendDisabled:
-		out.Thinking = goseek.DisableThinking()
+		out.SetExtraFields(map[string]any{"thinking": map[string]any{"type": "disabled"}})
 	case loom.ReasoningSendOmit:
 		// 不发 thinking 字段
 	default:
-		return chatRequest{}, fmt.Errorf("loom/deepseek: 未知 reasoning send %q", resolved.Send)
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: 未知 reasoning send %q", resolved.Send)
 	}
-	out.ReasoningEffort = goseek.ReasoningEffort(resolved.Effort)
+	out.ReasoningEffort = shared.ReasoningEffort(resolved.Effort)
 
 	if req.StructuredOutput != nil {
 		switch req.StructuredOutput.Mode {
 		case loom.StructuredOutputJSONObject:
-			out.ResponseFormat = goseek.JSONResponseFormat()
+			out.ResponseFormat.OfJSONObject = &shared.ResponseFormatJSONObjectParam{}
 		case loom.StructuredOutputJSONSchema:
 			if req.StructuredOutput.Schema == nil {
-				return chatRequest{}, fmt.Errorf("loom/deepseek: json_schema structured output 缺少 schema")
+				return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: json_schema structured output 缺少 schema")
 			}
-			out.ResponseFormat = map[string]any{
-				"type": "json_schema",
-				"json_schema": map[string]any{
-					"name":        req.StructuredOutput.Name,
-					"description": req.StructuredOutput.Description,
-					"strict":      true,
-					"schema":      req.StructuredOutput.Schema,
+			out.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
+				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+					Name:        req.StructuredOutput.Name,
+					Description: param.NewOpt(req.StructuredOutput.Description),
+					Schema:      req.StructuredOutput.Schema,
+					// strict 固定 true:供应商硬保证输出合规永远是调用方想要的,见 loom.StructuredOutput 注释
+					Strict: param.NewOpt(true),
 				},
 			}
 		case loom.StructuredOutputUnsupported:
 			// 不传
 		case loom.StructuredOutputNone:
 			// 请求侧不允许 none(能力声明专用),CheckRequestAgainstCapabilities 已前置拦截
-			return chatRequest{}, fmt.Errorf("loom/deepseek: StructuredOutput.Mode 不允许取 %q", req.StructuredOutput.Mode)
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: StructuredOutput.Mode 不允许取 %q", req.StructuredOutput.Mode)
 		default:
-			return chatRequest{}, fmt.Errorf("loom/deepseek: 未知 structured output mode %q", req.StructuredOutput.Mode)
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: 未知 structured output mode %q", req.StructuredOutput.Mode)
 		}
 	} else {
 		switch req.ResponseFormat {
 		case loom.ResponseFormatJSONObject:
-			out.ResponseFormat = goseek.JSONResponseFormat()
+			out.ResponseFormat.OfJSONObject = &shared.ResponseFormatJSONObjectParam{}
 		case loom.ResponseFormatText:
-			out.ResponseFormat = goseek.TextResponseFormat()
+			out.ResponseFormat.OfText = &shared.ResponseFormatTextParam{}
 		case loom.ResponseFormatDefault:
 			// 不传
 		default:
@@ -300,7 +298,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ chatRequest, err error) {
 	}
 	tools, err := translateTools(req.Tools)
 	if err != nil {
-		return chatRequest{}, fmt.Errorf("loom/deepseek: 翻译 tools: %w", err)
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: 翻译 tools: %w", err)
 	}
 	out.Tools = tools
 	if req.ToolChoice != nil {
@@ -309,101 +307,131 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ chatRequest, err error) {
 	return out, nil
 }
 
-func translateMessages(msgs []loom.Message) []goseek.Message {
-	out := make([]goseek.Message, 0, len(msgs))
+// normalizeDeepSeekError 把 DeepSeek 的业务错误映射成 loom 的哨兵错误。
+func normalizeDeepSeekError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if isDeepSeekContentExistsRisk(err) {
+		return fmt.Errorf("%w: %w", loom.ErrSensitiveContentRisk, err)
+	}
+	return err
+}
+
+func isDeepSeekContentExistsRisk(err error) bool {
+	apiErr, ok := errors.AsType[*openai.Error](err)
+	if !ok {
+		return false
+	}
+	if apiErr.StatusCode != 400 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(apiErr.Message), "Content Exists Risk")
+}
+
+// extractReasoning 提取 DeepSeek 的推理输出。DeepSeek 用 message 级的
+// "reasoning_content" 字段,SDK 没有类型化,放在 ExtraFields。
+func extractReasoning(extra map[string]respjson.Field) string {
+	field, ok := extra["reasoning_content"]
+	if !ok {
+		return ""
+	}
+	var s string
+	if err := jsonv2.Unmarshal([]byte(field.Raw()), &s); err != nil {
+		// 不是 string(如 null 或对象),忽略
+		return ""
+	}
+	return s
+}
+
+func translateMessages(msgs []loom.Message) []openai.ChatCompletionMessageParamUnion {
+	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(msgs))
 	for _, m := range msgs {
-		gm := goseek.Message{
-			Role: translateRole(m.Role),
-			Name: m.Name,
-		}
-		// assistant 携带 tool_calls 时,Content 可能合法为空。
-		// 其它角色 Content 始终透传(空字符串由 goseek validate 报错给调用方)。
-		if m.Role == loom.RoleAssistant && m.Content == "" && len(m.ToolCalls) > 0 {
-			gm.Content = nil
-		} else {
-			gm.Content = new(m.Content)
-		}
-		if m.ReasoningContent != "" {
-			gm.ReasoningContent = new(m.ReasoningContent)
-		}
-		if m.ToolCallID != "" {
-			gm.ToolCallID = m.ToolCallID
-		}
-		if len(m.ToolCalls) > 0 {
-			gm.ToolCalls = make([]goseek.ToolCall, 0, len(m.ToolCalls))
+		var gm openai.ChatCompletionMessageParamUnion
+		switch m.Role {
+		case loom.RoleSystem:
+			gm = openai.SystemMessage(m.Content)
+		case loom.RoleAssistant:
+			gm = openai.AssistantMessage(m.Content)
+			if m.Name != "" {
+				gm.OfAssistant.Name = param.NewOpt(m.Name)
+			}
 			for _, tc := range m.ToolCalls {
-				gm.ToolCalls = append(gm.ToolCalls, goseek.ToolCall{
-					ID:   tc.ID,
-					Type: goseek.ToolTypeFunction,
-					Function: goseek.FunctionCall{
-						Name:      tc.Name,
-						Arguments: tc.Arguments,
-					},
+				gm.OfAssistant.ToolCalls = append(gm.OfAssistant.ToolCalls, openai.ChatCompletionMessageToolCallUnionParam{
+					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{ID: tc.ID, Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{Name: tc.Name, Arguments: tc.Arguments}},
 				})
 			}
+		case loom.RoleTool:
+			gm = openai.ToolMessage(m.Content, m.ToolCallID)
+		case loom.RoleUser:
+			gm = openai.UserMessage(m.Content)
+		default:
+			gm = openai.UserMessage(m.Content)
 		}
 		out = append(out, gm)
 	}
 	return out
 }
 
-// translateTools 把 loom ToolInfo 翻译成 goseek Tool。
-// nil/空 输入返回 nil,goseek 视作"不带工具"。
-func translateTools(tools []*loom.ToolInfo) ([]goseek.Tool, error) {
+// translateTools 把 loom ToolInfo 翻译成 SDK 的 function tool。
+// nil/空 输入返回 nil,SDK 视作"不带工具"。
+func translateTools(tools []*loom.ToolInfo) ([]openai.ChatCompletionToolUnionParam, error) {
 	if len(tools) == 0 {
 		return nil, nil
 	}
-	out := make([]goseek.Tool, 0, len(tools))
+	out := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
 	for _, t := range tools {
 		if t == nil {
 			continue
 		}
-		var params []byte
+		params := shared.FunctionParameters{"type": "object", "properties": map[string]any{}}
 		if t.Parameters != nil {
 			b, err := jsonv2.Marshal(t.Parameters)
 			if err != nil {
 				return nil, fmt.Errorf("工具 %q 参数 schema marshal 失败: %w", t.Name, err)
 			}
-			params = b
+			if err := jsonv2.Unmarshal(b, &params); err != nil {
+				return nil, fmt.Errorf("工具 %q 参数 schema unmarshal 失败: %w", t.Name, err)
+			}
 		}
-		out = append(out, goseek.Tool{
-			Type: goseek.ToolTypeFunction,
-			Function: goseek.FunctionDefinition{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  params,
-			},
-		})
+		out = append(out, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+			Name:        t.Name,
+			Description: param.NewOpt(t.Description),
+			Parameters:  params,
+		}))
 	}
 	return out, nil
 }
 
-func translateToolChoice(tc *loom.ToolChoice) *goseek.ToolChoice {
+func translateToolChoice(tc *loom.ToolChoice) openai.ChatCompletionToolChoiceOptionUnionParam {
 	if tc == nil {
-		return nil
+		return openai.ChatCompletionToolChoiceOptionUnionParam{}
 	}
 	switch tc.Mode {
 	case loom.ToolChoiceAuto:
-		return goseek.AutoToolChoice()
+		return openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: param.NewOpt("auto")}
 	case loom.ToolChoiceNone:
-		return goseek.NoToolChoice()
+		return openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: param.NewOpt("none")}
 	case loom.ToolChoiceRequired:
-		return goseek.RequiredToolChoice()
+		return openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: param.NewOpt("required")}
 	case loom.ToolChoiceSpecific:
-		return goseek.NamedToolChoice(tc.Name)
+		return openai.ToolChoiceOptionFunctionToolChoice(openai.ChatCompletionNamedToolChoiceFunctionParam{Name: tc.Name})
 	default:
-		// 未知 Mode 不传(走 goseek 默认)
-		return nil
+		// 未知 Mode 不传(走服务端默认)
+		return openai.ChatCompletionToolChoiceOptionUnionParam{}
 	}
 }
 
-// translateToolCalls 把 goseek 同步响应的 ToolCalls 翻译成 loom 形式。
-func translateToolCalls(calls []goseek.ToolCall) []loom.ToolCall {
+// translateToolCalls 把同步响应的 ToolCalls 翻译成 loom 形式。
+func translateToolCalls(calls []openai.ChatCompletionMessageToolCallUnion) []loom.ToolCall {
 	if len(calls) == 0 {
 		return nil
 	}
 	out := make([]loom.ToolCall, 0, len(calls))
 	for _, c := range calls {
+		if c.Type != "function" {
+			continue
+		}
 		out = append(out, loom.ToolCall{
 			ID:        c.ID,
 			Name:      c.Function.Name,
@@ -413,20 +441,15 @@ func translateToolCalls(calls []goseek.ToolCall) []loom.ToolCall {
 	return out
 }
 
-// translateToolCallDeltas 流式 ToolCall 增量翻译。
-// goseek DeltaMessage.ToolCalls 已经是 per-call 的增量片段,只需字段重映射。
-func translateToolCallDeltas(deltas []goseek.ToolCallDelta) []loom.ToolCallDelta {
+// translateToolCallDeltas 流式 ToolCall 增量翻译(字段重映射)。
+func translateToolCallDeltas(deltas []openai.ChatCompletionChunkChoiceDeltaToolCall) []loom.ToolCallDelta {
 	if len(deltas) == 0 {
 		return nil
 	}
 	out := make([]loom.ToolCallDelta, 0, len(deltas))
 	for _, d := range deltas {
-		idx := 0
-		if d.Index != nil {
-			idx = *d.Index
-		}
 		out = append(out, loom.ToolCallDelta{
-			Index:     idx,
+			Index:     int(d.Index),
 			ID:        d.ID,
 			Name:      d.Function.Name,
 			Arguments: d.Function.Arguments,
@@ -435,32 +458,17 @@ func translateToolCallDeltas(deltas []goseek.ToolCallDelta) []loom.ToolCallDelta
 	return out
 }
 
-func translateRole(r loom.Role) goseek.MessageRole {
+func translateFinishReason(r string) loom.FinishReason {
 	switch r {
-	case loom.RoleSystem:
-		return goseek.MessageRoleSystem
-	case loom.RoleUser:
-		return goseek.MessageRoleUser
-	case loom.RoleAssistant:
-		return goseek.MessageRoleAssistant
-	case loom.RoleTool:
-		return goseek.MessageRoleTool
-	default:
-		return goseek.MessageRole(r)
-	}
-}
-
-func translateFinishReason(r goseek.FinishReason) loom.FinishReason {
-	switch r {
-	case goseek.FinishReasonStop:
+	case "stop":
 		return loom.FinishReasonStop
-	case goseek.FinishReasonLength:
+	case "length":
 		return loom.FinishReasonLength
-	case goseek.FinishReasonContentFilter:
+	case "content_filter":
 		return loom.FinishReasonContentFilter
-	case goseek.FinishReasonToolCalls:
+	case "tool_calls", "function_call":
 		return loom.FinishReasonToolCalls
-	case goseek.FinishReasonInsufficientSystemResource:
+	case "insufficient_system_resource":
 		return loom.FinishReasonError
 	case "":
 		return ""
@@ -469,26 +477,31 @@ func translateFinishReason(r goseek.FinishReason) loom.FinishReason {
 	}
 }
 
-func translateUsage(u *chatUsage) loom.Usage {
+func translateUsage(u *openai.CompletionUsage) loom.Usage {
 	if u == nil {
 		return loom.Usage{}
 	}
 	out := loom.Usage{
-		PromptTokens:     uint64(u.PromptTokens),
-		CompletionTokens: uint64(u.CompletionTokens),
-		CachedTokens:     uint64(u.PromptCacheHitTokens),
-		TotalTokens:      uint64(u.TotalTokens),
+		PromptTokens:     uint64(max(u.PromptTokens, 0)),
+		CompletionTokens: uint64(max(u.CompletionTokens, 0)),
+		TotalTokens:      uint64(max(u.TotalTokens, 0)),
 	}
-	if u.CompletionTokensDetails != nil && u.CompletionTokensDetails.ReasoningTokens != nil {
-		out.ReasoningTokens = *u.CompletionTokensDetails.ReasoningTokens
-		out.ReasoningTokensKnown = true
+	if u.JSON.PromptTokensDetails.Valid() {
+		out.CachedTokens = uint64(max(u.PromptTokensDetails.CachedTokens, 0))
+	}
+	// DeepSeek reports the cache-hit count under its own key rather than
+	// prompt_tokens_details.cached_tokens, so read the raw field as a fallback.
+	if out.CachedTokens == 0 {
+		if field, ok := u.JSON.ExtraFields["prompt_cache_hit_tokens"]; ok {
+			var cached int64
+			if err := jsonv2.Unmarshal([]byte(field.Raw()), &cached); err == nil && cached > 0 {
+				out.CachedTokens = uint64(cached)
+			}
+		}
+	}
+	if u.JSON.CompletionTokensDetails.Valid() {
+		out.ReasoningTokens = uint64(max(u.CompletionTokensDetails.ReasoningTokens, 0))
+		out.ReasoningTokensKnown = u.CompletionTokensDetails.JSON.ReasoningTokens.Valid()
 	}
 	return out
-}
-
-func derefString(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
 }

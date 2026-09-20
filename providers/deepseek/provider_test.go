@@ -1,28 +1,29 @@
 package deepseek
 
 import (
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
-	goseek "github.com/storynap/goseek"
+	"github.com/openai/openai-go/v3"
 
 	"github.com/loomagent/loom"
 )
 
 func TestClassifierTreats503AsTransientAndReadsRetryAfter(t *testing.T) {
-	serviceUnavailable := &goseek.APIError{StatusCode: http.StatusServiceUnavailable}
+	serviceUnavailable := &openai.Error{StatusCode: http.StatusServiceUnavailable}
 	if got := (classifier{}).ClassifyError(serviceUnavailable); got != loom.ErrorClassTransient {
 		t.Fatalf("503 class = %s, want transient", got)
 	}
 	if !(classifier{}).IsServiceUnavailable(serviceUnavailable) {
 		t.Fatal("503 must open the shared service-unavailable circuit")
 	}
-	rateLimited := &goseek.APIError{
+	rateLimited := &openai.Error{
 		StatusCode: http.StatusTooManyRequests,
-		Header:     http.Header{"Retry-After": []string{"7"}},
+		Response:   &http.Response{Header: http.Header{"Retry-After": []string{"7"}}},
 	}
 	if got := (classifier{}).ClassifyError(rateLimited); got != loom.ErrorClassRateLimit {
 		t.Fatalf("429 class = %s, want rate_limit", got)
@@ -52,7 +53,8 @@ func TestBuildRequestReasoningModeRequired(t *testing.T) {
 	}
 }
 
-// TestBuildRequestReasoningModeExplicit 显式传 enabled/disabled 正常构造。
+// TestBuildRequestReasoningModeExplicit 显式传 enabled/disabled 时,请求体带上
+// DeepSeek 专有的 thinking 对象(通过 SDK 的 extra fields 注入)。
 func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 	m, err := New(Config{APIKey: "test-key"})
 	if err != nil {
@@ -67,17 +69,29 @@ func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("mode=%s buildRequest: %v", mode, err)
 		}
-		if req.Thinking == nil {
-			t.Fatalf("mode=%s 期望显式发送 thinking 字段,实际为 nil", mode)
+		data, err := jsonv2.Marshal(req)
+		if err != nil {
+			t.Fatalf("mode=%s marshal: %v", mode, err)
 		}
-		if string(req.Thinking.Type) != string(mode) {
-			t.Fatalf("mode=%s thinking.type = %q", mode, req.Thinking.Type)
+		var body struct {
+			Thinking *struct {
+				Type string `json:"type"`
+			} `json:"thinking"`
+		}
+		if err := jsonv2.Unmarshal(data, &body); err != nil {
+			t.Fatalf("mode=%s unmarshal: %v", mode, err)
+		}
+		if body.Thinking == nil {
+			t.Fatalf("mode=%s 期望显式发送 thinking 字段,实际缺失: %s", mode, data)
+		}
+		if body.Thinking.Type != string(mode) {
+			t.Fatalf("mode=%s thinking.type = %q", mode, body.Thinking.Type)
 		}
 	}
 }
 
 func TestNormalizeDeepSeekContentExistsRisk(t *testing.T) {
-	apiErr := &goseek.APIError{
+	apiErr := &openai.Error{
 		StatusCode: 400,
 		Message:    "Content Exists Risk",
 	}
@@ -86,7 +100,7 @@ func TestNormalizeDeepSeekContentExistsRisk(t *testing.T) {
 	if !errors.Is(err, loom.ErrSensitiveContentRisk) {
 		t.Fatalf("normalized error = %v, want ErrSensitiveContentRisk", err)
 	}
-	var got *goseek.APIError
+	var got *openai.Error
 	if !errors.As(err, &got) || got != apiErr {
 		t.Fatalf("normalized error does not preserve original APIError")
 	}
@@ -102,11 +116,11 @@ func TestNormalizeDeepSeekContentExistsRiskRequiresOfficial400(t *testing.T) {
 	}{
 		{
 			name: "same message different status",
-			err:  &goseek.APIError{StatusCode: 500, Message: "Content Exists Risk"},
+			err:  &openai.Error{StatusCode: 500, Message: "Content Exists Risk"},
 		},
 		{
 			name: "ordinary bad request",
-			err:  &goseek.APIError{StatusCode: 400, Message: "invalid request"},
+			err:  &openai.Error{StatusCode: 400, Message: "invalid request"},
 		},
 		{
 			name: "plain string is not enough",

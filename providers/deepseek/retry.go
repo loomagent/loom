@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	goseek "github.com/storynap/goseek"
+	"github.com/openai/openai-go/v3"
 
 	"github.com/loomagent/loom"
 )
 
-// classifier 把 goseek 暴露的错误翻成 loom.ErrorClass。
-// 任何上层 wrap 过的 error 都通过 errors.As 解出 *goseek.APIError。
+// classifier 把官方 SDK 暴露的错误翻成 loom.ErrorClass。
+// 任何上层 wrap 过的 error 都通过 errors.As 解出 *openai.Error。
 type classifier struct{}
 
 // 编译期断言 — 框架引入新的 ErrorClassifier 字段时编译错暴露。
@@ -23,11 +23,10 @@ var _ loom.ErrorClassifier = classifier{}
 // ClassifyError 实现 loom.ErrorClassifier。
 //
 // 错误来源 + 映射:
-//   - *goseek.APIError(HTTP 非 2xx):
+//   - *openai.Error(HTTP 非 2xx):
 //   - 429                   → RateLimit(受共享 cooldown 和 elapsed budget 约束)
 //   - 503 / 其它 5xx         → Transient(有限 retry)
 //   - 401 / 402 / 403 / 400 → Permanent(auth / 余额不足 / bad request)
-//   - 5xx (其它)             → Transient(有限 retry)
 //   - 4xx (其它)             → Permanent(参数错 / 模型不存在等)
 //   - ctx.Canceled / DeadlineExceeded → Permanent(框架已在 classifyForBackoff
 //     兜底,这里 redundant 保险)
@@ -42,7 +41,7 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 	if errors.Is(err, loom.ErrSensitiveContentRisk) {
 		return loom.ErrorClassPermanent
 	}
-	if apiErr, ok := errors.AsType[*goseek.APIError](err); ok {
+	if apiErr, ok := errors.AsType[*openai.Error](err); ok {
 		switch apiErr.StatusCode {
 		case http.StatusTooManyRequests:
 			return loom.ErrorClassRateLimit
@@ -64,11 +63,11 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 // RetryAfter extracts DeepSeek's response header for shared credential-level
 // cooldown. Both delta-seconds and HTTP-date forms are accepted per RFC 9110.
 func (classifier) RetryAfter(err error) time.Duration {
-	apiErr, ok := errors.AsType[*goseek.APIError](err)
-	if !ok {
+	apiErr, ok := errors.AsType[*openai.Error](err)
+	if !ok || apiErr.Response == nil {
 		return 0
 	}
-	value := strings.TrimSpace(apiErr.Header.Get("Retry-After"))
+	value := strings.TrimSpace(apiErr.Response.Header.Get("Retry-After"))
 	if value == "" {
 		return 0
 	}
@@ -83,6 +82,6 @@ func (classifier) RetryAfter(err error) time.Duration {
 }
 
 func (classifier) IsServiceUnavailable(err error) bool {
-	apiErr, ok := errors.AsType[*goseek.APIError](err)
+	apiErr, ok := errors.AsType[*openai.Error](err)
 	return ok && apiErr.StatusCode == http.StatusServiceUnavailable
 }
