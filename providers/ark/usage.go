@@ -76,7 +76,7 @@ type usageUnmarshaler struct {
 	evidence usageEvidence
 }
 
-func (u *usageUnmarshaler) Unmarshal(raw []byte, value interface{}) error {
+func (u *usageUnmarshaler) Unmarshal(raw []byte, value any) error {
 	u.evidence = usageEvidence{} // usage can disappear again in the next frame
 	if err := u.inner.Unmarshal(raw, value); err != nil {
 		return err

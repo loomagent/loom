@@ -205,8 +205,7 @@ func TestArgsContractInternalValidatorError(t *testing.T) {
 	if err == nil {
 		t.Fatal("internal failure treated as success")
 	}
-	var argumentError *ToolArgumentError
-	if errors.As(err, &argumentError) {
+	if _, ok := errors.AsType[*ToolArgumentError](err); ok {
 		t.Fatalf("internal failure surfaced as a model-facing error: %v", err)
 	}
 	if !errors.Is(err, internal) {
@@ -296,8 +295,7 @@ func TestUintArgumentRejectsValuesThatDoNotFit(t *testing.T) {
 	// the handle.
 	for _, raw := range []string{`{"n":1e3}`, `{"n":18446744073709551616}`} {
 		_, err := contract.Decode(raw)
-		var argumentError *ToolArgumentError
-		if !errors.As(err, &argumentError) {
+		if _, ok := errors.AsType[*ToolArgumentError](err); !ok {
 			t.Fatalf("Decode(%s) error type = %T, want *ToolArgumentError", raw, err)
 		}
 		if !strings.Contains(err.Error(), "n") {
@@ -446,8 +444,7 @@ func TestArgsContractMisdirectedFieldIsInternal(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error")
 	}
-	var argumentError *ToolArgumentError
-	if errors.As(err, &argumentError) {
+	if _, ok := errors.AsType[*ToolArgumentError](err); ok {
 		t.Fatalf("a misdirected field surfaced as a model-facing error: %v", err)
 	}
 	if !strings.Contains(err.Error(), "unknown argument") {

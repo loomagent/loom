@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -136,7 +136,7 @@ func TestStore(t *testing.T, factory Factory) {
 		var wg sync.WaitGroup
 		seqs := make(chan uint64, workers)
 		errs := make(chan error, workers)
-		for i := 0; i < workers; i++ {
+		for i := range workers {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
@@ -159,7 +159,7 @@ func TestStore(t *testing.T, factory Factory) {
 		for seq := range seqs {
 			got = append(got, seq)
 		}
-		sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+		slices.Sort(got)
 		for i, seq := range got {
 			if seq != uint64(i+1) {
 				t.Fatalf("sequences = %v, want contiguous 1..%d", got, workers)
@@ -176,15 +176,13 @@ func TestStore(t *testing.T, factory Factory) {
 		refs := make(chan sourceregistry.Ref, workers)
 		errs := make(chan error, workers)
 		for range workers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				got, err := registry.EnsureBatch(context.Background(), []sourceregistry.Input{{URL: "https://contract.example/same"}})
 				if err == nil {
 					refs <- got[0]
 				}
 				errs <- err
-			}()
+			})
 		}
 		wg.Wait()
 		close(refs)

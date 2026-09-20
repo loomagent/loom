@@ -236,8 +236,7 @@ func (c *Client) retryable(ctx context.Context, err error, attempt int) (bool, t
 	if ctx.Err() != nil {
 		return false, 0
 	}
-	var httpErr HTTPError
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[HTTPError](err); ok {
 		switch httpErr.StatusCode {
 		case http.StatusTooManyRequests:
 			if httpErr.RetryAfter > 0 {
@@ -249,8 +248,7 @@ func (c *Client) retryable(ctx context.Context, err error, attempt int) (bool, t
 		}
 		return false, 0
 	}
-	var networkError net.Error
-	if errors.As(err, &networkError) {
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return true, c.backoff(attempt)
 	}
 	return false, 0

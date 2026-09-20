@@ -13,9 +13,6 @@ import (
 // build and inspect schemas without importing an internal package.
 type Schema = schema.Schema
 
-// boolPtr returns a pointer to v, for the boolean schema keywords.
-func boolPtr(v bool) *bool { return &v }
-
 // ConstJSON renders value as the raw JSON that a schema's const keyword holds.
 // A const is raw JSON rather than a Go value so a literal null is distinct from
 // no const at all, and a large integer keeps its exact digits.

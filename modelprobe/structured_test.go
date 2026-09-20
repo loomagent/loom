@@ -133,8 +133,7 @@ func TestStructuredProbeRetainsIndependentEvidence(t *testing.T) {
 				return reasoningResponse(1), nil
 			}}
 			r, err := Probe(t.Context(), b, Options{ErrorClassifier: func(err error) ErrorDisposition {
-				var local *loom.RequestValidationError
-				if errors.As(err, &local) {
+				if _, ok := errors.AsType[*loom.RequestValidationError](err); ok {
 					return ErrorUnsupported
 				}
 				return ErrorInconclusive

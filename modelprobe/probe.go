@@ -367,15 +367,13 @@ func preview(content string) string {
 // A provider rejection must identify the tested field; billing, authentication,
 // availability and unrelated invalid parameters are inconclusive.
 func outcomeForCheckError(name string, err error, classify ErrorClassifier) Outcome {
-	var local *loom.RequestValidationError
-	if errors.As(err, &local) {
+	if _, ok := errors.AsType[*loom.RequestValidationError](err); ok {
 		return OutcomeError
 	}
 	if name == CheckReasoningDefault {
 		return OutcomeError
 	}
-	var apiErr *zhipuai.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*zhipuai.APIError](err); ok {
 		field := "thinking"
 		if strings.HasPrefix(name, "reasoning.effort.") {
 			field = "reasoning_effort"
@@ -446,8 +444,7 @@ func requestEvidence(model loom.ChatModel, r loom.Reasoning) Evidence {
 }
 
 func errorAcceptance(err error, outcome Outcome) string {
-	var local *loom.RequestValidationError
-	if errors.As(err, &local) {
+	if _, ok := errors.AsType[*loom.RequestValidationError](err); ok {
 		return "local_rejected"
 	}
 	if outcome == OutcomeNegative {
