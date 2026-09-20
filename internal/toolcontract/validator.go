@@ -151,6 +151,12 @@ func checkSupported(s *schema.Schema, path string, patterns map[*schema.Schema]*
 	if s.Type != "" && !knownType(s.Type) {
 		return fmt.Errorf("toolcontract: unknown type %q at %s", s.Type, at)
 	}
+	if s.Format != "" && s.Pattern == "" {
+		// The model would be told the format while nothing enforced it. A format
+		// Loom can pattern, or an explicit pattern, keeps the advertised and the
+		// enforced contract the same.
+		return fmt.Errorf("toolcontract: format %q at %s has no pattern, so it would be advertised but not enforced; add a pattern or use a format Loom patterns", s.Format, at)
+	}
 	if s.Pattern != "" {
 		compiled, err := regexp.Compile(s.Pattern)
 		if err != nil {
