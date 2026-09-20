@@ -24,7 +24,7 @@ func newWebSearchArgs() webSearchArgs {
 	return webSearchArgs{
 		contract: MustArgsContract("web_search",
 			query, typ, dateFrom, dateTo,
-			Cross2(dateFrom, dateTo).Using(validateDateRange),
+			Cross(dateFrom, dateTo).Using(validateDateRange),
 		),
 		query:    query,
 		typ:      typ,
@@ -234,7 +234,7 @@ func TestArgsContractWholeRuleSkippedWhenFieldsAbsent(t *testing.T) {
 	a := String("a").Desc("Optional a.")
 	b := String("b").Desc("Optional b.")
 	contract := MustArgsContract("optional_pair", a, b,
-		Cross2(a, b).Using(func(_ context.Context, _, _ string) error {
+		Cross(a, b).Using(func(_ context.Context, _, _ string) error {
 			ran++
 			return nil
 		}),
@@ -257,7 +257,7 @@ func TestArgsContractWholeRuleRejectsUndeclaredHandle(t *testing.T) {
 	declared := String("a").Desc("A.")
 	undeclared := String("b").Desc("B.")
 	if _, err := NewArgsContract("bad", declared,
-		Cross2(declared, undeclared).Using(func(context.Context, string, string) error { return nil }),
+		Cross(declared, undeclared).Using(func(context.Context, string, string) error { return nil }),
 	); err == nil || !strings.Contains(err.Error(), "undeclared") {
 		t.Fatalf("undeclared dependency error = %v", err)
 	}
@@ -366,7 +366,7 @@ func TestArgsContractWholeRuleTargetsFieldViaHandle(t *testing.T) {
 		}
 		return nil
 	}
-	contract := MustArgsContract("range", dateFrom, dateTo, Cross2(dateFrom, dateTo).Using(rule))
+	contract := MustArgsContract("range", dateFrom, dateTo, Cross(dateFrom, dateTo).Using(rule))
 	_, err := contract.Decode(`{"date_from":"2026-08-20","date_to":"2026-08-01"}`)
 	var argumentError *ToolArgumentError
 	if !errors.As(err, &argumentError) {
@@ -383,7 +383,7 @@ func TestArgsContractWholeRuleTargetsFieldViaHandle(t *testing.T) {
 func TestArgsContractMisdirectedFieldIsInternal(t *testing.T) {
 	a := String("a").Desc("A.")
 	contract := MustArgsContract("misdirect", a,
-		Cross2(a, a).Using(func(context.Context, string, string) error {
+		Cross(a, a).Using(func(context.Context, string, string) error {
 			return InvalidAt("missing", "oops")
 		}),
 	)

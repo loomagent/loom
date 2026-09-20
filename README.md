@@ -110,7 +110,7 @@ limit := loom.Uint("limit").Max(20).Desc("Maximum results to return.")
 
 contract := loom.MustArgsContract("web_search",
 	query, resultType, dateFrom, dateTo, limit,
-	loom.Cross2(dateFrom, dateTo).Using(validateDateRange),
+	loom.Cross(dateFrom, dateTo).Using(validateDateRange),
 )
 
 tool := loom.NewArgsTool(contract, "Run a Google search.",
@@ -130,10 +130,10 @@ so providers that ignore `format` still constrain the value. Unknown arguments
 are rejected by default.
 
 Field checks take a `FieldValidator[T]`; whole-call checks are declared with
-`Cross2` / `Cross3` / `Cross4`, which take the typed handles they read:
+`Cross` / `Cross3` / `Cross4`, which take the typed handles they read:
 
 ```go
-loom.Cross2(dateFrom, dateTo).Using(validateDateRange)
+loom.Cross(dateFrom, dateTo).Using(validateDateRange)
 ```
 
 The handles make the rule's dependencies part of the contract: every handle is

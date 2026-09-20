@@ -113,7 +113,7 @@ func (b *argsBuilder) add(spec *argSpec) error {
 }
 
 // wholeValidator is one declared whole-call check together with the arguments
-// it reads. Cross2 and friends build these from typed handles.
+// it reads. Cross and friends build these from typed handles.
 type wholeValidator struct {
 	fields []string
 	fn     func(ctx context.Context, args Args) error
@@ -421,27 +421,28 @@ func (a *StringsArg) Validate(fn FieldValidator[[]string]) *StringsArg {
 	return a
 }
 
-// Cross2 declares a whole-call rule over two typed arguments. The handles name
-// the arguments the rule reads, so every name is checked against the contract
-// at build time and the rule is skipped when none of its arguments are present.
+// Cross declares a whole-call rule over two typed arguments. The handles name
+// the arguments the rule reads, so every name is checked against the contract at
+// build time and the rule is skipped when none of its arguments are present.
 //
-//	loom.Cross2(dateFrom, dateTo).Using(validateDateRange)
+//	loom.Cross(dateFrom, dateTo).Using(validateDateRange)
 //
-// Prefer a named function over an inline literal, so the rule can be unit tested
-// directly and is identifiable in stack traces.
-func Cross2[A, B any](first HandleWith[A], second HandleWith[B]) *CrossBuilder2[A, B] {
-	return &CrossBuilder2[A, B]{first: first, second: second}
+// Cross3 and Cross4 cover rules over three and four arguments. Prefer a named
+// function over an inline literal, so the rule can be unit tested directly and
+// is identifiable in stack traces.
+func Cross[A, B any](first HandleWith[A], second HandleWith[B]) *CrossBuilder[A, B] {
+	return &CrossBuilder[A, B]{first: first, second: second}
 }
 
-// CrossBuilder2 binds the arguments of a two-argument whole-call rule.
-type CrossBuilder2[A, B any] struct {
+// CrossBuilder binds the arguments of a two-argument whole-call rule.
+type CrossBuilder[A, B any] struct {
 	first  HandleWith[A]
 	second HandleWith[B]
 }
 
 // Using attaches the check. It is the only way to turn a builder into a
-// Declaration, so a Cross2 that forgot its function does not compile.
-func (c *CrossBuilder2[A, B]) Using(fn func(ctx context.Context, first A, second B) error) Declaration {
+// Declaration, so a Cross that forgot its function does not compile.
+func (c *CrossBuilder[A, B]) Using(fn func(ctx context.Context, first A, second B) error) Declaration {
 	return wholeValidator{
 		fields: []string{c.first.argumentName(), c.second.argumentName()},
 		fn: func(ctx context.Context, args Args) error {
@@ -450,7 +451,7 @@ func (c *CrossBuilder2[A, B]) Using(fn func(ctx context.Context, first A, second
 	}
 }
 
-// Cross3 declares a whole-call rule over three typed arguments. See Cross2.
+// Cross3 declares a whole-call rule over three typed arguments. See Cross.
 func Cross3[A, B, C any](first HandleWith[A], second HandleWith[B], third HandleWith[C]) *CrossBuilder3[A, B, C] {
 	return &CrossBuilder3[A, B, C]{first: first, second: second, third: third}
 }
@@ -462,7 +463,7 @@ type CrossBuilder3[A, B, C any] struct {
 	third  HandleWith[C]
 }
 
-// Using attaches the check. See CrossBuilder2.Using.
+// Using attaches the check. See CrossBuilder.Using.
 func (c *CrossBuilder3[A, B, C]) Using(fn func(ctx context.Context, first A, second B, third C) error) Declaration {
 	return wholeValidator{
 		fields: []string{c.first.argumentName(), c.second.argumentName(), c.third.argumentName()},
@@ -472,7 +473,7 @@ func (c *CrossBuilder3[A, B, C]) Using(fn func(ctx context.Context, first A, sec
 	}
 }
 
-// Cross4 declares a whole-call rule over four typed arguments. See Cross2.
+// Cross4 declares a whole-call rule over four typed arguments. See Cross.
 func Cross4[A, B, C, D any](first HandleWith[A], second HandleWith[B], third HandleWith[C], fourth HandleWith[D]) *CrossBuilder4[A, B, C, D] {
 	return &CrossBuilder4[A, B, C, D]{first: first, second: second, third: third, fourth: fourth}
 }
@@ -485,7 +486,7 @@ type CrossBuilder4[A, B, C, D any] struct {
 	fourth HandleWith[D]
 }
 
-// Using attaches the check. See CrossBuilder2.Using.
+// Using attaches the check. See CrossBuilder.Using.
 func (c *CrossBuilder4[A, B, C, D]) Using(fn func(ctx context.Context, first A, second B, third C, fourth D) error) Declaration {
 	return wholeValidator{
 		fields: []string{c.first.argumentName(), c.second.argumentName(), c.third.argumentName(), c.fourth.argumentName()},
