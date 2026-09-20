@@ -278,18 +278,20 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 }
 
 func probeSchema() *jsonschema.Schema {
-	type response struct {
-		OK    bool   `json:"ok" jsonschema:"Whether the probe succeeded. Must be true."`
-		Nonce string `json:"nonce"`
-	}
-	schema := loom.MustSchemaFor[response]()
 	trueValue := any(true)
-	schema.Properties["ok"].Const = &trueValue
 	// Only the response schema contains this per-experiment constraint. A fixed
-	// answer or prompt-following without reading the schema cannot pass it.
+	// answer or prompt-following without reading the schema cannot pass it, so
+	// the schema is built per call rather than declared once as a contract.
 	nonce := any(rand.Text())
-	schema.Properties["nonce"].Const = &nonce
-	return schema
+	return &jsonschema.Schema{
+		Type: "object",
+		Properties: map[string]*jsonschema.Schema{
+			"ok":    {Type: "boolean", Description: "Whether the probe succeeded. Must be true.", Const: &trueValue},
+			"nonce": {Type: "string", Const: &nonce},
+		},
+		Required:             []string{"ok", "nonce"},
+		AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}},
+	}
 }
 
 // DeriveReasoningSupport maps completed default, enable, and disable

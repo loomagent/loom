@@ -159,26 +159,28 @@ free, and safe to run even when another validator has already failed.
 
 ## Structured model output
 
-`ChatStructured[T]` derives its JSON Schema with `SchemaFor[T]`, including
-supported `validate` constraints such as string lengths. Tool arguments use
-`ArgsContract` instead; `SchemaFor` remains for structured output, where the
-model returns JSON that is decoded into a Go value. It supplies the same
-schema through native `json_schema` or a `json_object` prompt and validates the
-response locally. Use `WithStructuredValidator` for additional business rules
-or constraints that cannot be represented in JSON Schema.
-
-Every response must be one complete JSON value and pass local schema validation,
-regardless of whether the model supports `json_schema`, `json_object`, or only
-text output. Markdown fences, surrounding prose, and multiple JSON values are
-rejected; JSON whitespace is accepted. No strict-mode option is required:
+`ChatStructuredArgs` uses the same `ArgsContract` as tool arguments — the same
+`String` / `Uint` / `Enum` declarations, the same schema, the same typed handles
+— only here the contract constrains what the model returns instead of what the
+model sends. The provider receives the contract's schema through native
+`json_schema` or a `json_object` prompt, and the response is always validated
+against the same contract locally, so provider guidance and local enforcement
+cannot drift:
 
 ```go
-type Result struct {
-    Summary string `json:"summary" validate:"min=1,max=200"`
-}
+summary := loom.String("summary").Required().MinLen(1).MaxLen(200).Desc("Summary of the result.")
+contract := loom.MustArgsContract("summary_result", summary)
 
-result, response, err := loom.ChatStructured[Result](ctx, "summary", model, request)
+args, response, err := loom.ChatStructuredArgs(ctx, "summary", model, request, contract)
+summary.Get(args)
 ```
+
+Every response must be one complete JSON value that satisfies the contract,
+regardless of whether the model supports `json_schema`, `json_object`, or only
+text output. Markdown fences, surrounding prose, multiple JSON values, unknown
+arguments, and constraint violations are rejected; JSON whitespace is accepted.
+No strict-mode option is required. Use `WithStructuredValidator` for business
+rules that a schema cannot express.
 
 Invalid JSON or schema violations use the configured output retry limit
 (`WithStructuredMaxAttempts`, two attempts by default).
