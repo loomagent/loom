@@ -1,4 +1,6 @@
-// Structured model calls require complete JSON responses that satisfy the shared schema.
+// Structured model calls require complete JSON responses that satisfy the same
+// declared contract used for tool arguments, with the model output in place of
+// the model input.
 package loom
 
 import (
@@ -7,7 +9,6 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -19,58 +20,58 @@ const defaultStructuredOutputAttempts uint64 = 2
 // 别加 uint64 显式类型(会编译失败),也别并进上面的 typed 常量组(会触发 SA9004 并被 --fix 错改)。
 const maxStructuredOutputNameLen = 64
 
-// StructuredChatOption 配置 ChatStructured 的结构化输出和输出重试。
-type StructuredChatOption[T any] func(*structuredChatConfig[T])
+// StructuredOption 配置 ChatStructuredArgs 的结构化输出和输出重试。
+type StructuredOption func(*structuredConfig)
 
-type structuredChatConfig[T any] struct {
+type structuredConfig struct {
 	name        string
 	description string
 	maxAttempts uint64
-	validate    func(T) error
+	validate    func(Args) error
 	callOptions []CallModelOption
 }
 
-// WithStructuredName 设置传给 provider 的 response_format 名称。
-func WithStructuredName[T any](name string) StructuredChatOption[T] {
-	return func(cfg *structuredChatConfig[T]) {
+// WithStructuredName 设置传给 provider 的 response_format 名称。默认用契约名。
+func WithStructuredName(name string) StructuredOption {
+	return func(cfg *structuredConfig) {
 		cfg.name = name
 	}
 }
 
 // WithStructuredDescription 设置传给 provider 和提示词的结构说明。
-func WithStructuredDescription[T any](description string) StructuredChatOption[T] {
-	return func(cfg *structuredChatConfig[T]) {
+func WithStructuredDescription(description string) StructuredOption {
+	return func(cfg *structuredConfig) {
 		cfg.description = description
 	}
 }
 
-// WithStructuredMaxAttempts 设置输出不满足 schema 时的最大尝试次数。
-func WithStructuredMaxAttempts[T any](maxAttempts uint64) StructuredChatOption[T] {
-	return func(cfg *structuredChatConfig[T]) {
+// WithStructuredMaxAttempts 设置输出不满足契约时的最大尝试次数。
+func WithStructuredMaxAttempts(maxAttempts uint64) StructuredOption {
+	return func(cfg *structuredConfig) {
 		cfg.maxAttempts = maxAttempts
 	}
 }
 
-// WithStructuredValidator 在 schema 校验后追加业务校验,失败同样触发输出重试。
-func WithStructuredValidator[T any](validate func(T) error) StructuredChatOption[T] {
-	return func(cfg *structuredChatConfig[T]) {
+// WithStructuredValidator 在契约校验后追加业务校验,失败同样触发输出重试。
+func WithStructuredValidator(validate func(Args) error) StructuredOption {
+	return func(cfg *structuredConfig) {
 		cfg.validate = validate
 	}
 }
 
 // WithStructuredCallOptions 透传 CallModel 选项,如 per-call failover。
-func WithStructuredCallOptions[T any](opts ...CallModelOption) StructuredChatOption[T] {
-	return func(cfg *structuredChatConfig[T]) {
+func WithStructuredCallOptions(opts ...CallModelOption) StructuredOption {
+	return func(cfg *structuredConfig) {
 		cfg.callOptions = append(cfg.callOptions, opts...)
 	}
 }
 
 // WithStructuredFailover 为本次结构化调用启用模型 failover。
-func WithStructuredFailover[T any](cfg FailoverConfig) StructuredChatOption[T] {
-	return WithStructuredCallOptions[T](WithModelFailover(cfg))
+func WithStructuredFailover(cfg FailoverConfig) StructuredOption {
+	return WithStructuredCallOptions(WithModelFailover(cfg))
 }
 
-// StructuredOutputError 表示模型输出不完整、不是合法 JSON，或未通过本地 schema / 业务校验。
+// StructuredOutputError 表示模型输出不完整、不是合法 JSON，或未通过本地契约 / 业务校验。
 type StructuredOutputError struct {
 	Attempt uint64
 	Content string
@@ -85,25 +86,35 @@ func (e *StructuredOutputError) Unwrap() error {
 	return e.Err
 }
 
-// ChatStructured 调用模型并把输出解析为 T。
+// ChatStructuredArgs 调用模型并把输出按 contract 校验后返回 Args。
 //
-// Schema 从 T 及可映射的 validate 标签生成。Provider 原生支持 json_schema 时会传 schema;仅支持
-// json_object 时退化成 JSON object + prompt 约束;本地始终执行 parse + schema validate。
-// 响应必须整体为一个合法 JSON 值，不提取 Markdown 或解释中的 JSON。
+// 这是工具入参契约的镜像:同一套 ArgsContract 声明字段、约束和描述,只是这里约束的是
+// 模型的返回值而不是它的入参。读取方式和工具一样,通过声明时的 typed handle:
+//
+//	summary := loom.String("summary").MinLen(1).MaxLen(200).Desc("评审摘要")
+//	contract := loom.MustArgsContract("review", summary)
+//	args, _, err := loom.ChatStructuredArgs(ctx, "review", model, req, contract)
+//	summary.Get(args)
+//
+// Provider 原生支持 json_schema 时会传同一份 schema;仅支持 json_object 时退化成
+// JSON object + prompt 约束;本地始终按契约校验。响应必须整体为一个合法 JSON 值。
 // 不可映射的业务约束通过 WithStructuredValidator 校验。
-func ChatStructured[T any](
+func ChatStructuredArgs(
 	ctx context.Context,
 	purpose string,
 	model ChatModel,
 	req ChatRequest,
-	opts ...StructuredChatOption[T],
-) (T, *ChatResponse, error) {
-	var zero T
+	contract *ArgsContract,
+	opts ...StructuredOption,
+) (Args, *ChatResponse, error) {
 	if model == nil {
-		return zero, nil, errors.New("loom.ChatStructured: model 不能为 nil")
+		return Args{}, nil, errors.New("loom.ChatStructuredArgs: model 不能为 nil")
+	}
+	if contract == nil {
+		return Args{}, nil, errors.New("loom.ChatStructuredArgs: contract 不能为 nil")
 	}
 
-	cfg := structuredChatConfig[T]{maxAttempts: defaultStructuredOutputAttempts}
+	cfg := structuredConfig{maxAttempts: defaultStructuredOutputAttempts}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
@@ -113,21 +124,16 @@ func ChatStructured[T any](
 		cfg.maxAttempts = 1
 	}
 	if cfg.name == "" {
-		cfg.name = defaultStructuredOutputName[T]()
+		cfg.name = contract.Name()
 	}
 	cfg.name = NormalizeStructuredOutputName(cfg.name)
 	if cfg.description == "" {
 		cfg.description = "structured response"
 	}
 
-	schema, err := SchemaFor[T]()
-	if err != nil {
-		return zero, nil, fmt.Errorf("loom.ChatStructured: 生成 JSON schema: %w", err)
-	}
-	resolved, err := schema.Resolve(nil)
-	if err != nil {
-		return zero, nil, fmt.Errorf("loom.ChatStructured: 解析 JSON schema: %w", err)
-	}
+	// The provider sees a private clone; the contract keeps validating against
+	// its own copy, so a provider SDK cannot mutate what DecodeContext enforces.
+	schema := contract.Schema()
 
 	var lastResp *ChatResponse
 	var lastErr error
@@ -142,7 +148,7 @@ func ChatStructured[T any](
 		}))
 		resp, err := CallModel(ctx, purpose, model, req, callOptions...)
 		if err != nil {
-			return zero, resp, err
+			return Args{}, resp, err
 		}
 		lastResp = resp
 		if resp.FinishReason == FinishReasonLength {
@@ -153,13 +159,16 @@ func ChatStructured[T any](
 			}
 			continue
 		}
-		value, err := parseStructuredResponse[T](resp.Content, resolved, cfg.validate)
+		args, err := contract.DecodeContext(ctx, resp.Content)
+		if err == nil && cfg.validate != nil {
+			err = cfg.validate(args)
+		}
 		if err == nil {
-			return value, resp, nil
+			return args, resp, nil
 		}
 		lastErr = &StructuredOutputError{Attempt: attempt, Content: resp.Content, Err: err}
 	}
-	return zero, lastResp, lastErr
+	return Args{}, lastResp, lastErr
 }
 
 // NormalizeStructuredOutputName 生成 provider 可接受的 response_format name。
@@ -286,40 +295,6 @@ func withStructuredRetryMessages(messages []Message, resp *ChatResponse, err err
 请重新输出完整 JSON。只输出 JSON,不要输出 Markdown 或解释。`, err),
 	})
 	return out
-}
-
-func parseStructuredResponse[T any](content string, schema *jsonschema.Resolved, validate func(T) error) (T, error) {
-	var zero T
-	// Validate the whole response against the same schema regardless of provider capabilities.
-	raw := []byte(content)
-	var instance any
-	if err := jsonv2.Unmarshal(raw, &instance); err != nil {
-		return zero, fmt.Errorf("解析 JSON: %w", err)
-	}
-	if err := schema.Validate(instance); err != nil {
-		return zero, fmt.Errorf("校验 JSON schema: %w", err)
-	}
-	var out T
-	if err := jsonv2.Unmarshal(raw, &out); err != nil {
-		return zero, fmt.Errorf("反序列化结构体: %w", err)
-	}
-	if validate != nil {
-		if err := validate(out); err != nil {
-			return zero, fmt.Errorf("业务校验: %w", err)
-		}
-	}
-	return out, nil
-}
-
-func defaultStructuredOutputName[T any]() string {
-	t := reflect.TypeFor[T]()
-	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
-		t = t.Elem()
-	}
-	if t.Name() == "" {
-		return "structured_output"
-	}
-	return t.Name()
 }
 
 func trimForRetry(s string, limit int) string {

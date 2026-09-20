@@ -4,8 +4,6 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
-	"math/big"
-	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -323,443 +321,6 @@ func joinField(parent, child string) string {
 	return parent + "." + child
 }
 
-func explainSchemaError(schema *jsonschema.Schema, instance any, err error) []ToolArgumentIssue {
-	issues := diagnoseSchema(schema, instance, "")
-	if len(issues) == 0 {
-		issues = []ToolArgumentIssue{{Rule: "schema", Message: "input does not match the expected schema"}}
-	}
-	sortIssues(issues)
-	return issues
-}
-
-func diagnoseSchema(schema *jsonschema.Schema, value any, field string) []ToolArgumentIssue {
-	if schema == nil {
-		return nil
-	}
-	label := quoteField(field)
-	if matches, want := matchesSchemaType(schema, value); !matches {
-		return []ToolArgumentIssue{{Field: field, Rule: "type", Message: label + " must be " + want}}
-	}
-
-	var issues []ToolArgumentIssue
-	if schema.Const != nil && !equalJSONValue(value, *schema.Const) {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "const", Message: label + " must equal " + compactJSON(*schema.Const)})
-	}
-	if schema.Enum != nil && !containsJSONValue(schema.Enum, value) {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "oneof", Message: label + " must be one of " + compactJSON(schema.Enum)})
-	}
-	if len(schema.AnyOf) > 0 && !anySchemaMatches(schema.AnyOf, value) {
-		if alternatives, ok := constAlternatives(schema.AnyOf); ok {
-			issues = append(issues, ToolArgumentIssue{Field: field, Rule: "oneof", Message: label + " must be one of " + compactJSON(alternatives)})
-		} else {
-			issues = append(issues, ToolArgumentIssue{Field: field, Rule: "anyof", Message: label + " must satisfy at least one allowed constraint"})
-		}
-	}
-	issues = append(issues, diagnoseNotSchema(schema.Not, value, field)...)
-
-	if number, ok := jsonNumericValue(value); ok {
-		issues = append(issues, diagnoseNumberSchema(schema, number, field)...)
-	} else {
-		switch typed := value.(type) {
-		case string:
-			issues = append(issues, diagnoseStringSchema(schema, typed, field)...)
-		case []any:
-			issues = append(issues, diagnoseArraySchema(schema, typed, field)...)
-		case map[string]any:
-			issues = append(issues, diagnoseObjectSchema(schema, typed, field)...)
-		}
-	}
-	for _, constraint := range schema.AllOf {
-		issues = append(issues, diagnoseSchema(constraint, value, field)...)
-	}
-	return issues
-}
-
-func anySchemaMatches(schemas []*jsonschema.Schema, value any) bool {
-	for _, schema := range schemas {
-		if schema == nil {
-			continue
-		}
-		resolved, err := schema.Resolve(nil)
-		if err == nil && resolved.Validate(value) == nil {
-			return true
-		}
-	}
-	return false
-}
-
-func constAlternatives(schemas []*jsonschema.Schema) ([]any, bool) {
-	values := make([]any, 0, len(schemas))
-	for _, schema := range schemas {
-		if schema == nil || schema.Const == nil {
-			return nil, false
-		}
-		values = append(values, *schema.Const)
-	}
-	return values, true
-}
-
-func diagnoseNotSchema(schema *jsonschema.Schema, value any, field string) []ToolArgumentIssue {
-	if schema == nil {
-		return nil
-	}
-	label := quoteField(field)
-	if schema.Const != nil && equalJSONValue(value, *schema.Const) {
-		return []ToolArgumentIssue{{Field: field, Rule: "ne", Message: label + " must not equal " + compactJSON(*schema.Const)}}
-	}
-	if text, ok := value.(string); ok && schema.Pattern != "" {
-		pattern, err := regexp.Compile(schema.Pattern)
-		if err == nil && pattern.MatchString(text) {
-			if literal, kind, ok := literalPatternConstraint(schema.Pattern); ok && kind == "contains" {
-				return []ToolArgumentIssue{{Field: field, Rule: "excludes", Message: label + " must not contain " + strconv.Quote(literal)}}
-			}
-			return []ToolArgumentIssue{{Field: field, Rule: "not", Message: label + " must not match pattern " + strconv.Quote(schema.Pattern)}}
-		}
-	}
-	return nil
-}
-
-func matchesSchemaType(schema *jsonschema.Schema, value any) (bool, string) {
-	allowed := slices.Clone(schema.Types)
-	if schema.Type != "" {
-		allowed = []string{schema.Type}
-	}
-	if len(allowed) == 0 {
-		return true, "value"
-	}
-	actual := jsonValueType(value)
-	for _, want := range allowed {
-		if actual == want || (actual == "integer" && want == "number") {
-			return true, schemaTypeName(schema)
-		}
-	}
-	return false, schemaTypeName(schema)
-}
-
-func jsonValueType(value any) string {
-	if number, ok := jsonNumericValue(value); ok {
-		if number.IsInt() {
-			return "integer"
-		}
-		return "number"
-	}
-	switch value.(type) {
-	case nil:
-		return "null"
-	case bool:
-		return "boolean"
-	case string:
-		return "string"
-	case []any:
-		return "array"
-	case map[string]any:
-		return "object"
-	default:
-		return "unknown"
-	}
-}
-
-func diagnoseStringSchema(schema *jsonschema.Schema, value, field string) []ToolArgumentIssue {
-	label := quoteField(field)
-	length := len([]rune(value))
-	var issues []ToolArgumentIssue
-	if schema.MinLength != nil && length < *schema.MinLength {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "min", Message: label + " must contain at least " + strconv.Itoa(*schema.MinLength) + " characters"})
-	}
-	if schema.MaxLength != nil && length > *schema.MaxLength {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "max", Message: label + " must contain at most " + strconv.Itoa(*schema.MaxLength) + " characters"})
-	}
-	if schema.Pattern != "" {
-		pattern, err := regexp.Compile(schema.Pattern)
-		if err == nil && !pattern.MatchString(value) {
-			if schema.Pattern == `\S` {
-				issues = append(issues, ToolArgumentIssue{Field: field, Rule: "notblank", Message: label + " must not be blank"})
-			} else if literal, kind, ok := literalPatternConstraint(schema.Pattern); ok {
-				switch kind {
-				case "startswith":
-					issues = append(issues, ToolArgumentIssue{Field: field, Rule: kind, Message: label + " must start with " + strconv.Quote(literal)})
-				case "endswith":
-					issues = append(issues, ToolArgumentIssue{Field: field, Rule: kind, Message: label + " must end with " + strconv.Quote(literal)})
-				default:
-					issues = append(issues, ToolArgumentIssue{Field: field, Rule: kind, Message: label + " must contain " + strconv.Quote(literal)})
-				}
-			} else {
-				issues = append(issues, ToolArgumentIssue{Field: field, Rule: "pattern", Message: label + " must match pattern " + strconv.Quote(schema.Pattern)})
-			}
-		}
-	}
-	return issues
-}
-
-func literalPatternConstraint(pattern string) (literal, kind string, ok bool) {
-	kind = "contains"
-	if strings.HasPrefix(pattern, "^") {
-		kind = "startswith"
-		pattern = strings.TrimPrefix(pattern, "^")
-	}
-	if strings.HasSuffix(pattern, "$") {
-		if kind != "contains" {
-			return "", "", false
-		}
-		kind = "endswith"
-		pattern = strings.TrimSuffix(pattern, "$")
-	}
-	literal = unquoteRegexpLiteral(pattern)
-	return literal, kind, regexp.QuoteMeta(literal) == pattern
-}
-
-func unquoteRegexpLiteral(pattern string) string {
-	var b strings.Builder
-	for len(pattern) > 0 {
-		if pattern[0] == '\\' && len(pattern) > 1 && strings.ContainsRune(`\.+*?()|[]{}^$`, rune(pattern[1])) {
-			b.WriteByte(pattern[1])
-			pattern = pattern[2:]
-			continue
-		}
-		b.WriteByte(pattern[0])
-		pattern = pattern[1:]
-	}
-	return b.String()
-}
-
-func diagnoseNumberSchema(schema *jsonschema.Schema, value *big.Rat, field string) []ToolArgumentIssue {
-	label := quoteField(field)
-	var issues []ToolArgumentIssue
-	compare := func(bound float64) int { return value.Cmp(new(big.Rat).SetFloat64(bound)) }
-	if schema.Minimum != nil && compare(*schema.Minimum) < 0 {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "min", Message: label + " must be at least " + formatNumber(*schema.Minimum)})
-	}
-	if schema.Maximum != nil && compare(*schema.Maximum) > 0 {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "max", Message: label + " must be at most " + formatNumber(*schema.Maximum)})
-	}
-	if schema.ExclusiveMinimum != nil && compare(*schema.ExclusiveMinimum) <= 0 {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "gt", Message: label + " must be greater than " + formatNumber(*schema.ExclusiveMinimum)})
-	}
-	if schema.ExclusiveMaximum != nil && compare(*schema.ExclusiveMaximum) >= 0 {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "lt", Message: label + " must be less than " + formatNumber(*schema.ExclusiveMaximum)})
-	}
-	if schema.MultipleOf != nil && *schema.MultipleOf != 0 {
-		divisor := new(big.Rat).SetFloat64(*schema.MultipleOf)
-		if quotient := new(big.Rat).Quo(value, divisor); !quotient.IsInt() {
-			issues = append(issues, ToolArgumentIssue{Field: field, Rule: "multipleof", Message: label + " must be a multiple of " + formatNumber(*schema.MultipleOf)})
-		}
-	}
-	return issues
-}
-
-func diagnoseArraySchema(schema *jsonschema.Schema, value []any, field string) []ToolArgumentIssue {
-	label := quoteField(field)
-	var issues []ToolArgumentIssue
-	if schema.MinItems != nil && len(value) < *schema.MinItems {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "min", Message: label + " must contain at least " + strconv.Itoa(*schema.MinItems) + " items"})
-	}
-	if schema.MaxItems != nil && len(value) > *schema.MaxItems {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "max", Message: label + " must contain at most " + strconv.Itoa(*schema.MaxItems) + " items"})
-	}
-	if schema.UniqueItems {
-		// Keyed lookup rather than pairwise comparison: array contents come
-		// straight from the model, and a quadratic scan here burns seconds of
-		// CPU on a few thousand items — on a path that only runs once
-		// validation has already failed.
-		seen := make(map[string]struct{}, len(value))
-		for _, item := range value {
-			key := canonicalJSONKey(item)
-			if _, exists := seen[key]; exists {
-				issues = append(issues, ToolArgumentIssue{Field: field, Rule: "unique", Message: label + " must contain unique items"})
-				break
-			}
-			seen[key] = struct{}{}
-		}
-	}
-	if schema.Items != nil {
-		for index, item := range value {
-			issues = append(issues, diagnoseSchema(schema.Items, item, indexFieldPath(field, index))...)
-		}
-	}
-	return issues
-}
-
-func diagnoseObjectSchema(schema *jsonschema.Schema, value map[string]any, field string) []ToolArgumentIssue {
-	label := quoteField(field)
-	var issues []ToolArgumentIssue
-	if schema.MinProperties != nil && len(value) < *schema.MinProperties {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "min", Message: label + " must contain at least " + strconv.Itoa(*schema.MinProperties) + " fields"})
-	}
-	if schema.MaxProperties != nil && len(value) > *schema.MaxProperties {
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: "max", Message: label + " must contain at most " + strconv.Itoa(*schema.MaxProperties) + " fields"})
-	}
-	for _, name := range schema.Required {
-		if _, exists := value[name]; !exists {
-			path := joinFieldPath(field, name)
-			issues = append(issues, ToolArgumentIssue{Field: path, Rule: "required", Message: quoteField(path) + " is required"})
-		}
-	}
-	for _, name := range orderedPropertyNames(schema) {
-		if propertyValue, exists := value[name]; exists {
-			issues = append(issues, diagnoseSchema(schema.Properties[name], propertyValue, joinFieldPath(field, name))...)
-		}
-	}
-	for name, propertyValue := range value {
-		if schema.PropertyNames != nil {
-			// Key constraints are relabelled: rendered on the same path as the
-			// value they belong to, "m.ab must contain at least 3 characters"
-			// gives the model no way to tell whether the key or the value is
-			// wrong.
-			keyPath := joinFieldPath(field, name)
-			for _, issue := range diagnoseSchema(schema.PropertyNames, name, keyPath) {
-				issue.Message = "field name " + strconv.Quote(name) + " in " + label +
-					strings.TrimPrefix(issue.Message, quoteField(keyPath))
-				issues = append(issues, issue)
-			}
-		}
-		if _, exists := schema.Properties[name]; exists {
-			continue
-		}
-		path := joinFieldPath(field, name)
-		switch {
-		case isFalseSchema(schema.AdditionalProperties):
-			issues = append(issues, ToolArgumentIssue{Field: path, Rule: "unknown", Message: quoteField(path) + " is not an accepted field"})
-		case schema.AdditionalProperties != nil:
-			issues = append(issues, diagnoseSchema(schema.AdditionalProperties, propertyValue, path)...)
-		}
-	}
-	return issues
-}
-
-func orderedPropertyNames(schema *jsonschema.Schema) []string {
-	names := slices.Clone(schema.PropertyOrder)
-	seen := make(map[string]bool, len(names))
-	for _, name := range names {
-		seen[name] = true
-	}
-	var remaining []string
-	for name := range schema.Properties {
-		if !seen[name] {
-			remaining = append(remaining, name)
-		}
-	}
-	sort.Strings(remaining)
-	return append(names, remaining...)
-}
-
-func isFalseSchema(schema *jsonschema.Schema) bool {
-	return schema != nil && schema.Not != nil && reflect.ValueOf(*schema.Not).IsZero()
-}
-
-func containsJSONValue(values []any, target any) bool {
-	for _, value := range values {
-		if equalJSONValue(value, target) {
-			return true
-		}
-	}
-	return false
-}
-
-// canonicalJSONKey builds a lookup key matching equalJSONValue semantics:
-// numerically equal values share a key regardless of their Go type or literal
-// form (1, 1.0 and json.Number("1")), and object members are ordered so member
-// order never affects the key.
-func canonicalJSONKey(value any) string {
-	var builder strings.Builder
-	writeCanonicalJSONKey(&builder, value)
-	return builder.String()
-}
-
-func writeCanonicalJSONKey(builder *strings.Builder, value any) {
-	if rational, ok := jsonNumericValue(value); ok {
-		builder.WriteString("#n:")
-		builder.WriteString(rational.RatString())
-		return
-	}
-	switch typed := value.(type) {
-	case nil:
-		builder.WriteString("#z")
-	case bool:
-		builder.WriteString("#b:")
-		builder.WriteString(strconv.FormatBool(typed))
-	case string:
-		builder.WriteString("#s:")
-		builder.WriteString(strconv.Quote(typed))
-	case []any:
-		builder.WriteString("#a[")
-		for _, item := range typed {
-			writeCanonicalJSONKey(builder, item)
-			builder.WriteByte(',')
-		}
-		builder.WriteByte(']')
-	case map[string]any:
-		names := make([]string, 0, len(typed))
-		for name := range typed {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		builder.WriteString("#o{")
-		for _, name := range names {
-			builder.WriteString(strconv.Quote(name))
-			builder.WriteByte(':')
-			writeCanonicalJSONKey(builder, typed[name])
-			builder.WriteByte(',')
-		}
-		builder.WriteByte('}')
-	default:
-		// Unknown dynamic type: fall back to a type-qualified rendering so
-		// distinct values never collide into one key.
-		fmt.Fprintf(builder, "#?%T:%#v", typed, typed)
-	}
-}
-
-func equalJSONValue(left, right any) bool {
-	leftNumber, leftOK := jsonNumericValue(left)
-	rightNumber, rightOK := jsonNumericValue(right)
-	if leftOK && rightOK {
-		return leftNumber.Cmp(rightNumber) == 0
-	}
-	return reflect.DeepEqual(left, right)
-}
-
-func jsonNumericValue(value any) (*big.Rat, bool) {
-	rational := new(big.Rat)
-	switch value := value.(type) {
-	case float64:
-		return rational.SetFloat64(value), true
-	case float32:
-		return rational.SetFloat64(float64(value)), true
-	case int:
-		return rational.SetInt64(int64(value)), true
-	case int8:
-		return rational.SetInt64(int64(value)), true
-	case int16:
-		return rational.SetInt64(int64(value)), true
-	case int32:
-		return rational.SetInt64(int64(value)), true
-	case int64:
-		return rational.SetInt64(value), true
-	case uint:
-		return rational.SetUint64(uint64(value)), true
-	case uint8:
-		return rational.SetUint64(uint64(value)), true
-	case uint16:
-		return rational.SetUint64(uint64(value)), true
-	case uint32:
-		return rational.SetUint64(uint64(value)), true
-	case uint64:
-		return rational.SetUint64(value), true
-	default:
-		return nil, false
-	}
-}
-
-func indexFieldPath(prefix string, index int) string {
-	return prefix + "[" + strconv.Itoa(index) + "]"
-}
-
-func joinFieldPath(prefix, field string) string {
-	if prefix == "" {
-		return field
-	}
-	return prefix + "." + field
-}
-
 // sortIssues orders diagnostics by how useful they are to a model, then by
 // field for stability. Only the first few issues survive rendering, and a model
 // that invented twenty stray fields would otherwise push the one actionable
@@ -949,4 +510,69 @@ func compactJSON(value any) string {
 		return "[]"
 	}
 	return string(data)
+}
+
+func constAlternatives(schemas []*jsonschema.Schema) ([]any, bool) {
+	values := make([]any, 0, len(schemas))
+	for _, schema := range schemas {
+		if schema == nil || schema.Const == nil {
+			return nil, false
+		}
+		values = append(values, *schema.Const)
+	}
+	return values, true
+}
+
+func literalPatternConstraint(pattern string) (literal, kind string, ok bool) {
+	kind = "contains"
+	if strings.HasPrefix(pattern, "^") {
+		kind = "startswith"
+		pattern = strings.TrimPrefix(pattern, "^")
+	}
+	if strings.HasSuffix(pattern, "$") {
+		if kind != "contains" {
+			return "", "", false
+		}
+		kind = "endswith"
+		pattern = strings.TrimSuffix(pattern, "$")
+	}
+	literal = unquoteRegexpLiteral(pattern)
+	return literal, kind, regexp.QuoteMeta(literal) == pattern
+}
+
+func orderedPropertyNames(schema *jsonschema.Schema) []string {
+	names := slices.Clone(schema.PropertyOrder)
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		seen[name] = true
+	}
+	var remaining []string
+	for name := range schema.Properties {
+		if !seen[name] {
+			remaining = append(remaining, name)
+		}
+	}
+	sort.Strings(remaining)
+	return append(names, remaining...)
+}
+
+func joinFieldPath(prefix, field string) string {
+	if prefix == "" {
+		return field
+	}
+	return prefix + "." + field
+}
+
+func unquoteRegexpLiteral(pattern string) string {
+	var b strings.Builder
+	for len(pattern) > 0 {
+		if pattern[0] == '\\' && len(pattern) > 1 && strings.ContainsRune(`\.+*?()|[]{}^$`, rune(pattern[1])) {
+			b.WriteByte(pattern[1])
+			pattern = pattern[2:]
+			continue
+		}
+		b.WriteByte(pattern[0])
+		pattern = pattern[1:]
+	}
+	return b.String()
 }
