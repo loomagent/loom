@@ -318,6 +318,46 @@ func TestUintHandlePreservesFullRange(t *testing.T) {
 	}
 }
 
+// A strict bound must reach both the model and the local check: it is projected
+// into the schema and enforced on whatever the model sends.
+func TestNumericExclusiveBounds(t *testing.T) {
+	count := Uint("n").ExclusiveMin(0).ExclusiveMax(10)
+	contract := MustArgsContract("count", count)
+	schema := contract.Schema()
+	if got := schema.Properties["n"].ExclusiveMinimum; got == nil || *got != 0 {
+		t.Fatalf("exclusiveMinimum = %v, want 0", got)
+	}
+	if got := schema.Properties["n"].ExclusiveMaximum; got == nil || *got != 10 {
+		t.Fatalf("exclusiveMaximum = %v, want 10", got)
+	}
+	for _, tc := range []struct {
+		raw   string
+		valid bool
+	}{
+		{`{"n":0}`, false},  // equal to the strict lower bound
+		{`{"n":10}`, false}, // equal to the strict upper bound
+		{`{"n":1}`, true},
+		{`{"n":9}`, true},
+	} {
+		_, err := contract.Decode(tc.raw)
+		if tc.valid && err != nil {
+			t.Fatalf("Decode(%s) = %v, want accepted", tc.raw, err)
+		}
+		if !tc.valid && err == nil {
+			t.Fatalf("Decode(%s) accepted a value on a strict bound", tc.raw)
+		}
+	}
+
+	ratio := Float("f").ExclusiveMin(0.5)
+	ratioContract := MustArgsContract("ratio", ratio)
+	if _, err := ratioContract.Decode(`{"f":0.5}`); err == nil {
+		t.Fatal("value equal to the strict lower bound accepted")
+	}
+	if _, err := ratioContract.Decode(`{"f":0.6}`); err != nil {
+		t.Fatalf("value above the strict lower bound rejected: %v", err)
+	}
+}
+
 func TestArgsHasPanicsOnUndeclared(t *testing.T) {
 	contract := MustArgsContract("t", String("q").Desc("Q."))
 	args, err := contract.Decode(`{"q":"x"}`)

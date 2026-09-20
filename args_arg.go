@@ -81,11 +81,15 @@ type argSpec struct {
 	maxLength   *int
 	minimum     *float64
 	maximum     *float64
-	minItems    *int
-	maxItems    *int
-	uniqueItems bool
-	examples    []any
-	validators  []func(ctx context.Context, value jsontext.Value) error
+	// Strict bounds. Like Min/Max they are projected into the schema the model
+	// receives and enforced on the model's arguments locally.
+	exclusiveMinimum *float64
+	exclusiveMaximum *float64
+	minItems         *int
+	maxItems         *int
+	uniqueItems      bool
+	examples         []any
+	validators       []func(ctx context.Context, value jsontext.Value) error
 }
 
 // argsBuilder accumulates declarations in order. Property order is preserved
@@ -294,6 +298,22 @@ func (a *UintArg) Max(n uint64) *UintArg {
 	return a
 }
 
+// ExclusiveMin requires the value to be strictly greater than n. It is
+// projected into the schema and enforced locally, so the model sees the bound
+// and the check applies to whatever it sends.
+func (a *UintArg) ExclusiveMin(n uint64) *UintArg {
+	value := float64(n)
+	a.spec.exclusiveMinimum = &value
+	return a
+}
+
+// ExclusiveMax requires the value to be strictly less than n; see ExclusiveMin.
+func (a *UintArg) ExclusiveMax(n uint64) *UintArg {
+	value := float64(n)
+	a.spec.exclusiveMaximum = &value
+	return a
+}
+
 // Validate registers a per-field check; see StringArg.Validate.
 func (a *UintArg) Validate(fn FieldValidator[uint64]) *UintArg {
 	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
@@ -329,6 +349,14 @@ func (a *FloatArg) Example(value float64) *FloatArg {
 }
 func (a *FloatArg) Min(n float64) *FloatArg { a.spec.minimum = &n; return a }
 func (a *FloatArg) Max(n float64) *FloatArg { a.spec.maximum = &n; return a }
+
+// ExclusiveMin requires the value to be strictly greater than n; see
+// UintArg.ExclusiveMin.
+func (a *FloatArg) ExclusiveMin(n float64) *FloatArg { a.spec.exclusiveMinimum = &n; return a }
+
+// ExclusiveMax requires the value to be strictly less than n; see
+// UintArg.ExclusiveMin.
+func (a *FloatArg) ExclusiveMax(n float64) *FloatArg { a.spec.exclusiveMaximum = &n; return a }
 
 // Validate registers a per-field check; see StringArg.Validate.
 func (a *FloatArg) Validate(fn FieldValidator[float64]) *FloatArg {

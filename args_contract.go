@@ -298,11 +298,15 @@ func (s *argSpec) schema() *Schema {
 			property.Minimum = s.minimum
 		}
 		property.Maximum = s.maximum
+		property.ExclusiveMinimum = s.exclusiveMinimum
+		property.ExclusiveMaximum = s.exclusiveMaximum
 		property.Enum = s.enum
 	case argKindFloat:
 		property.Type = "number"
 		property.Minimum = s.minimum
 		property.Maximum = s.maximum
+		property.ExclusiveMinimum = s.exclusiveMinimum
+		property.ExclusiveMaximum = s.exclusiveMaximum
 	case argKindBool:
 		property.Type = "boolean"
 	case argKindStrings:
