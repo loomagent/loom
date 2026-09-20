@@ -66,67 +66,103 @@ func main() {
 }
 ```
 
-## Struct-derived tool schemas
+## Tools
 
-Define tool arguments once as a Go struct. `SchemaFor` and `MustSchemaFor`
-derive property types, names, required fields, descriptions, and nested shapes:
+Tools are declared with `ArgsContract` and `NewArgsTool`. The whole contract —
+the public tool name, each argument's type, description, required flag, and
+constraints — is written once, and handlers read arguments through typed
+handles, so no Go struct, no struct tags, and no string key at a read site are
+involved.
+
+Tool names are normally package constants. `ValidateToolName` and
+`NewArgsContract` require 1–64 characters matching `^[a-z][a-z0-9_]{0,63}$`;
+`ToolRegistry.Register` applies the same validation and rejects duplicate names.
+
+A contract binds the schema, the compiled validator, and the error contract
+once, and is immutable and safe for concurrent calls; compiling once avoids
+rebuilding the schema for every invocation. Arguments are kept as raw JSON until
+a handle reads them, so integers preserve their full 64-bit range instead of
+being rounded through float64.
+
+Errors expose `ToolArgumentError` metadata and render a bounded, compact
+non-JSON `expected arguments` contract for model self-correction without dumping
+the full schema. A validated `example arguments` JSON object is included when
+the declared examples form a complete call.
+
+## Declaring tool arguments
+
+Each argument is a typed handle; the handle is both the declaration and the way
+the handler reads the value:
 
 ```go
-type calculatorRequest struct {
-	Expression string `json:"expression" jsonschema:"Mathematical expression to evaluate." validate:"min=1,notblank" example:"(2 + 3) * 4"`
-	Precision  int    `json:"precision,omitempty" jsonschema:"Optional decimal precision." validate:"omitempty,min=0,max=12"`
+func validateDateRange(_ context.Context, from, to string) error {
+	if from != "" && to != "" && from > to {
+		return loom.InvalidAt("date_to", "date_to (%s) must not precede date_from (%s)", to, from)
+	}
+	return nil
 }
 
-const ToolName = "calculator"
+query := loom.String("query").Required().MinLen(1).Desc("Google search query.")
+resultType := loom.Enum("type", "search", "news").Desc("Result type; defaults to search.")
+dateFrom := loom.Date("date_from").Desc(`Optional lower bound, e.g. "2026-08-17".`)
+dateTo := loom.Date("date_to").Desc(`Optional upper bound, e.g. "2026-08-18".`)
+limit := loom.Uint("limit").Max(20).Desc("Maximum results to return.")
 
-contract := loom.MustToolContract[calculatorRequest](ToolName)
-tool := loom.NewTool(
-	contract,
-	"Evaluate a mathematical expression.",
-	func(ctx context.Context, request calculatorRequest) (string, error) {
-		// ...
+contract := loom.MustArgsContract("web_search",
+	query, resultType, dateFrom, dateTo, limit,
+	loom.Cross(dateFrom, dateTo).Using(validateDateRange),
+)
+
+tool := loom.NewArgsTool(contract, "Run a Google search.",
+	func(ctx context.Context, args loom.Args) (string, error) {
+		return search(ctx, query.Get(args), resultType.Get(args), int(limit.Get(args)))
 	},
 )
 ```
 
-Fields without `omitempty` or `omitzero` are required. Validation tags are
-executed by `go-playground/validator`, the validator used by Gin. Rules with a
-direct schema equivalent—including `required`, size and comparison rules,
-`eq`/`ne`, `oneof`, string prefix/suffix/containment rules, `unique`, `dive`,
-and Loom's `notblank`—are also projected into JSON Schema. Cross-field and
-custom rules remain runtime-only. `DecodeToolArguments` checks the incoming
-JSON against the generated schema and validates the decoded struct, so model
-guidance and server-side enforcement stay in sync. Derived object schemas
-reject unknown properties by default. An `example` tag is
-projected into JSON Schema. When every required argument has an example, Loom
-also assembles a complete example call and accepts it only after both Schema
-and struct validation succeed.
+`Get` returns the argument with the type fixed at declaration, so a read site
+has no string key and no type assertion. An optional argument the model omitted
+reads back as its zero value, and `Present` distinguishes "omitted" from
+"present but empty". Integers are unsigned (`Uint`), so counting arguments
+cannot be negative and the schema rejects negatives too. `Date`, `Time`,
+`DateTime`, and `UUID` project both a `format` and a matching shape `pattern`,
+so providers that ignore `format` still constrain the value. Unknown arguments
+are rejected by default.
 
-`ToolContract` binds the tool name, generated Schema, compiled validator, and
-error contract once. `NewTool` then passes already validated arguments to
-the handler. Contracts are immutable and safe for concurrent calls; compiling
-once avoids rebuilding and resolving the Schema for every invocation. Argument
-decoding preserves the full `int64`/`uint64` range instead of routing integers
-through `float64`.
+Field checks take a `FieldValidator[T]`; whole-call checks are declared with
+`Cross` / `Cross3` / `Cross4`, which take the typed handles they read:
 
-`NewTool` is the only public tool constructor. Tools without parameters use
-`ToolContract[loom.NoArguments]` and accept the empty JSON object `{}`; raw JSON
-handlers remain an internal implementation detail.
+```go
+loom.Cross(dateFrom, dateTo).Using(validateDateRange)
+```
 
-Tool names are normally package constants. `ValidateToolName` and
-`NewToolContract` require 1–64 characters matching
-`^[a-z][a-z0-9_]{0,63}$`; `ToolRegistry.Register` applies the same validation
-and rejects duplicate names.
+The handles make the rule's dependencies part of the contract: every handle is
+checked against the declared arguments when the contract is built, the rule is
+skipped when none of its arguments are present, and the check receives typed
+values rather than `Args`. Prefer a named function over an inline literal, so a
+rule can be unit tested directly and is identifiable in stack traces. A rule
+that closes over its handles can also point an error at a field without a
+string, using `InvalidOn(dateTo, ...)`; `InvalidAt` names the field as a string
+for a rule that cannot close over the handle. A field name that is not a
+declared argument is treated as an internal error rather than a model-facing
+correction request. Validators report model-facing problems with `Invalid`,
+`InvalidAt`, or `InvalidOn`; any other error is treated as an internal failure,
+and `errors.Join` may report several problems from one validator.
 
-Errors expose `ToolArgumentError` metadata and render a bounded, compact
-non-JSON `expected arguments` contract for model self-correction without
-dumping the full schema. A validated `example arguments` JSON object is included
-when the struct declares a complete example.
+Validation runs in two layers. JSON Schema runs first and enforces type,
+presence, enumeration, and the declared range and format constraints; when it
+rejects the call, declared validators do not run, because they assume a
+well-shaped value. Once the schema passes, every validator runs and its problems
+are collected, so the model receives all business-rule violations in a single
+turn instead of one per retry. Validators must therefore be cheap, side-effect
+free, and safe to run even when another validator has already failed.
 
 ## Structured model output
 
 `ChatStructured[T]` derives its JSON Schema with `SchemaFor[T]`, including
-supported `validate` constraints such as string lengths. It supplies the same
+supported `validate` constraints such as string lengths. Tool arguments use
+`ArgsContract` instead; `SchemaFor` remains for structured output, where the
+model returns JSON that is decoded into a Go value. It supplies the same
 schema through native `json_schema` or a `json_object` prompt and validates the
 response locally. Use `WithStructuredValidator` for additional business rules
 or constraints that cannot be represented in JSON Schema.

@@ -30,7 +30,7 @@ func TestValidateToolName(t *testing.T) {
 
 func TestToolRegistryRejectsDuplicateName(t *testing.T) {
 	newNamedTool := func() Tool {
-		return NewTool(MustToolContract[NoArguments]("duplicate"), "test", func(context.Context, NoArguments) (string, error) {
+		return NewArgsTool(MustArgsContract("duplicate"), "test", func(context.Context, Args) (string, error) {
 			return "ok", nil
 		})
 	}

@@ -1,7 +1,7 @@
 package deepseek
 
 import (
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -35,8 +35,13 @@ func TestUsagePresenceOnWire(t *testing.T) {
 					if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer test" {
 						t.Errorf("request contract: %s", r.URL.Path)
 					}
+					raw, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Error(err)
+						return
+					}
 					var body map[string]any
-					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					if err := jsonv2.Unmarshal(raw, &body); err != nil {
 						t.Error(err)
 						return
 					}

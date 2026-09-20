@@ -2,7 +2,6 @@ package react
 
 import (
 	"context"
-	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -18,14 +17,6 @@ type scriptedModel struct {
 	responses []*loom.ChatResponse
 	errs      []error
 	requests  []loom.ChatRequest
-}
-
-type echoTextArguments struct {
-	Text string `json:"text"`
-}
-
-type echoNumberArguments struct {
-	N int `json:"n"`
 }
 
 func (m *scriptedModel) Name() string {
@@ -171,9 +162,9 @@ func TestRunExecutesToolsAndFinishes(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "call-1", Name: "echo", Arguments: `{"text":"hello"}`}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "done", FinishReason: loom.FinishReasonStop},
 	}}
-	tools := loom.NewToolRegistry(loom.NewTool(loom.MustToolContract[echoTextArguments]("echo"), "echo", func(_ context.Context, args echoTextArguments) (string, error) {
-		data, err := jsonv2.Marshal(args)
-		return string(data), err
+	text := loom.String("text").Required().Desc("Text to echo.")
+	tools := loom.NewToolRegistry(loom.NewArgsTool(loom.MustArgsContract("echo", text), "echo", func(_ context.Context, args loom.Args) (string, error) {
+		return `{"text":"` + text.Get(args) + `"}`, nil
 	}))
 
 	var result *Result
@@ -201,7 +192,7 @@ func TestRunSoftLandingDisablesTools(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "call-1", Name: "echo", Arguments: `{}`}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "landed", FinishReason: loom.FinishReasonStop},
 	}}
-	tools := loom.NewToolRegistry(loom.NewTool(loom.MustToolContract[loom.NoArguments]("echo"), "echo", func(context.Context, loom.NoArguments) (string, error) { return "ok", nil }))
+	tools := loom.NewToolRegistry(loom.NewArgsTool(loom.MustArgsContract("echo"), "echo", func(context.Context, loom.Args) (string, error) { return "ok", nil }))
 
 	var result *Result
 	_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
@@ -225,7 +216,7 @@ func TestRunSoftLandingDisablesTools(t *testing.T) {
 
 func TestRunSoftLandsBeforeDeadlineReserve(t *testing.T) {
 	model := &scriptedModel{responses: []*loom.ChatResponse{{Content: "landed", FinishReason: loom.FinishReasonStop}}}
-	tools := loom.NewToolRegistry(loom.NewTool(loom.MustToolContract[loom.NoArguments]("echo"), "echo", func(context.Context, loom.NoArguments) (string, error) { return "ok", nil }))
+	tools := loom.NewToolRegistry(loom.NewArgsTool(loom.MustArgsContract("echo"), "echo", func(context.Context, loom.Args) (string, error) { return "ok", nil }))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
@@ -299,7 +290,9 @@ func TestRunEnforcesPerToolLimitWithinOneResponse(t *testing.T) {
 		{Content: "done", FinishReason: loom.FinishReasonStop},
 	}}
 	invocations := 0
-	tools := loom.NewToolRegistry(loom.NewTool(loom.MustToolContract[echoNumberArguments]("echo"), "echo", func(context.Context, echoNumberArguments) (string, error) {
+	tools := loom.NewToolRegistry(loom.NewArgsTool(loom.MustArgsContract("echo",
+		loom.Uint("n").Required().Desc("Number to echo."),
+	), "echo", func(context.Context, loom.Args) (string, error) {
 		invocations++
 		return "ok", nil
 	}))

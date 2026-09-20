@@ -55,18 +55,12 @@ func TestExplainSchemaErrorUsesSchemaNotCauseText(t *testing.T) {
 		}
 	}
 
-	// items is "omitempty,min=2": an empty array satisfies the validator, so
-	// minItems is deliberately not projected and the bound is enforced by the
-	// validator instead. Bounds an empty value does satisfy — limit's max, and
-	// meta's — stay in the schema, as asserted above.
 	if message, exists := got["items:min"]; exists {
 		t.Errorf("items:min = %q, want no schema-level bound for an omitempty field", message)
 	}
 }
 
 func TestExplainSchemaErrorFallsBackForUnsupportedKeywords(t *testing.T) {
-	// Two empty branches make oneOf fail because both match. oneOf is not part
-	// of Loom's generated validator projection, so the generic fallback applies.
 	schema := &jsonschema.Schema{OneOf: []*jsonschema.Schema{{}, {}}}
 	issues := explainSchemaError(schema, "c", errors.New("opaque"))
 	if len(issues) != 1 || issues[0].Rule != "schema" || !strings.Contains(issues[0].Message, "expected schema") {
@@ -95,22 +89,15 @@ func TestToolArgumentErrorBoundsModelFacingOutput(t *testing.T) {
 	}
 }
 
-// A well-formed JSON document whose value does not fit the target field must be
-// reported as a type problem, not as malformed JSON, and must not leak the Go
-// struct name into a model-facing message.
-func TestDecodeReportsTypeMismatchRatherThanMalformedJSON(t *testing.T) {
-	type webSearchArgs struct {
-		Query string `json:"query"`
-		TopK  int    `json:"top_k,omitempty"`
-	}
-	loose := &jsonschema.Schema{
-		Type: "object",
-		Properties: map[string]*jsonschema.Schema{
-			"query": {Type: "string"},
-			"top_k": {},
-		},
-	}
-	_, err := DecodeToolArgumentsWithSchemaFor[webSearchArgs]("web_search", `{"query":"go","top_k":"5"}`, loose)
+// A value whose JSON type does not fit the declared argument must be reported as
+// a schema problem that names the field, not as malformed JSON, and it must not
+// leak a Go type name into the model-facing message.
+func TestArgsTypeMismatchNamesFieldAndType(t *testing.T) {
+	contract := MustArgsContract("web_search",
+		String("query").Required().Desc("Search query."),
+		Uint("top_k").Desc("Result count."),
+	)
+	_, err := contract.Decode(`{"query":"go","top_k":"5"}`)
 	if err == nil {
 		t.Fatal("type mismatch must fail")
 	}
@@ -124,89 +111,15 @@ func TestDecodeReportsTypeMismatchRatherThanMalformedJSON(t *testing.T) {
 	if strings.Contains(err.Error(), "malformed JSON") {
 		t.Errorf("valid JSON reported as malformed: %v", err)
 	}
-	if strings.Contains(err.Error(), "webSearchArgs") {
-		t.Errorf("Go struct name leaked to the model: %v", err)
-	}
 	if !strings.Contains(err.Error(), "top_k") || !strings.Contains(err.Error(), "integer") {
 		t.Errorf("error does not name the field and expected type: %v", err)
 	}
 }
 
-// datetime=<layout> must project the format its layout actually describes, and
-// the diagnostic must name the layout so the model can correct itself.
-func TestDatetimeLayoutProjectsFormatAndNamesLayout(t *testing.T) {
-	type dateArgs struct {
-		When string `json:"when" validate:"required,datetime=2006-01-02"`
-	}
-	schema, err := SchemaFor[dateArgs]()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := schema.Properties["when"].Format; got != "date" {
-		t.Errorf("when format = %q, want date for a date-only layout", got)
-	}
-	_, err = DecodeToolArgumentsFor[dateArgs]("t", `{"when":"2026-08-25T10:00:00Z"}`)
-	if err == nil {
-		t.Fatal("a timestamp must not satisfy a date-only layout")
-	}
-	if !strings.Contains(err.Error(), "2006-01-02") {
-		t.Errorf("diagnostic does not name the layout: %v", err)
-	}
-	if _, err := DecodeToolArgumentsFor[dateArgs]("t", `{"when":"2026-08-25"}`); err != nil {
-		t.Errorf("a value matching the layout must be accepted: %v", err)
-	}
-}
-
-// An or-rule's tag already carries its argument; appending Param again produced
-// constraints like "url|startswith=/=/".
-func TestOrRuleDiagnosticIsNotMangled(t *testing.T) {
-	type orArgs struct {
-		P string `json:"p" validate:"required,url|startswith=/"`
-	}
-	_, err := DecodeToolArgumentsFor[orArgs]("t", `{"p":"???"}`)
-	if err == nil {
-		t.Fatal("value satisfying neither alternative must fail")
-	}
-	if strings.Contains(err.Error(), "=/=/") {
-		t.Errorf("or-rule rendered with a duplicated argument: %v", err)
-	}
-}
-
-// Arguments that are not a struct have no struct rules to run; they must not be
-// reported as a misconfigured tool.
-func TestNonStructArgumentsSkipStructValidation(t *testing.T) {
-	if _, err := DecodeToolArgumentsFor[[]string]("t", `["a"]`); err != nil {
-		t.Errorf("slice arguments = %v, want accepted", err)
-	}
-	type ptrArgs struct {
-		A string `json:"a,omitempty"`
-	}
-	if _, err := DecodeToolArgumentsFor[*ptrArgs]("t", `null`); err != nil {
-		t.Errorf("null into a pointer argument = %v, want accepted", err)
-	}
-}
-
-// A key that violates propertyNames must not read like a value violation.
-func TestMapKeyViolationIsLabelledAsKey(t *testing.T) {
-	type mapArgs struct {
-		A string            `json:"a"`
-		M map[string]string `json:"m,omitempty" validate:"omitempty,dive,keys,min=3,endkeys,min=10"`
-	}
-	_, err := DecodeToolArgumentsFor[mapArgs]("t", `{"a":"x","m":{"ab":"0123456789"}}`)
-	if err == nil {
-		t.Fatal("a too-short key must fail")
-	}
-	if !strings.Contains(err.Error(), "field name") {
-		t.Errorf("key violation not labelled as a key: %v", err)
-	}
-}
-
 // A model that invents many stray fields must not push the one actionable
 // diagnostic — the missing required field — out of the rendered message.
-func TestRequiredIssueSurvivesManyUnknownFields(t *testing.T) {
-	type strictArgs struct {
-		Zzz string `json:"zzz" validate:"required"`
-	}
+func TestArgsRequiredIssueSurvivesManyUnknownFields(t *testing.T) {
+	contract := MustArgsContract("strict", String("zzz").Required().Desc("Required value."))
 	payload := map[string]any{}
 	for index := range 20 {
 		payload[fmt.Sprintf("a%02d", index)] = index
@@ -215,11 +128,11 @@ func TestRequiredIssueSurvivesManyUnknownFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, decodeErr := DecodeToolArgumentsFor[strictArgs]("t", string(raw))
+	_, decodeErr := contract.Decode(string(raw))
 	if decodeErr == nil {
 		t.Fatal("missing required field must fail")
 	}
-	if !strings.Contains(decodeErr.Error(), `"zzz" is required`) {
+	if !strings.Contains(decodeErr.Error(), "zzz") {
 		t.Errorf("the actionable diagnostic was crowded out: %v", decodeErr)
 	}
 	if !strings.Contains(decodeErr.Error(), "not accepted") {
@@ -227,18 +140,16 @@ func TestRequiredIssueSurvivesManyUnknownFields(t *testing.T) {
 	}
 }
 
-// Structured issues are bounded too, not just the rendered string: a consumer
+// Structured issues are bounded, not just the rendered string: a consumer
 // walking Issues must not receive an unbounded blob of model-authored text.
-func TestIssuesAreBoundedIndependentlyOfError(t *testing.T) {
-	type strictArgs struct {
-		A string `json:"a,omitempty"`
-	}
+func TestArgsIssuesAreBoundedIndependentlyOfError(t *testing.T) {
+	contract := MustArgsContract("strict", String("a").Desc("Optional."))
 	huge := strings.Repeat("x", 100_000)
 	raw, err := jsonv2.Marshal(map[string]any{huge: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, decodeErr := DecodeToolArgumentsFor[strictArgs]("t", string(raw))
+	_, decodeErr := contract.Decode(string(raw))
 	if decodeErr == nil {
 		t.Fatal("unknown field must fail")
 	}

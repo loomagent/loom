@@ -20,10 +20,6 @@ import (
 // ToolName is the name exposed to models.
 const ToolName = "calculator"
 
-type request struct {
-	Expression string `json:"expression" jsonschema:"Mathematical expression using Starlark syntax, for example '(2 + 3) * 4', 'math.sqrt(144)', or 'math.pow(2, 8)'." validate:"min=1,notblank" example:"(2 + 3) * 4"`
-}
-
 type response struct {
 	Expression string `json:"expression"`
 	Result     string `json:"result"`
@@ -32,17 +28,26 @@ type response struct {
 // New constructs a calculator Loom tool.
 func New() loom.Tool {
 	description := "Evaluate a mathematical expression in a restricted Starlark environment. Supports arithmetic, parentheses, and functions from the Starlark math module."
-	return loom.NewTool(loom.MustToolContract[request](ToolName), description, invoke)
+	expression := loom.String("expression").
+		Required().
+		MinLen(1).
+		NotBlank().
+		Example("(2 + 3) * 4").
+		Desc("Mathematical expression using Starlark syntax, for example '(2 + 3) * 4', 'math.sqrt(144)', or 'math.pow(2, 8)'.")
+	contract := loom.MustArgsContract(ToolName, expression)
+	return loom.NewArgsTool(contract, description, func(ctx context.Context, args loom.Args) (string, error) {
+		return invoke(ctx, expression.Get(args))
+	})
 }
 
-func invoke(ctx context.Context, input request) (string, error) {
+func invoke(ctx context.Context, rawExpression string) (string, error) {
 	ctx, span := otel.Tracer("github.com/loomagent/loom/tools/calculator").Start(ctx, "calculator.evaluate")
 	defer span.End()
 
-	input.Expression = strings.TrimSpace(input.Expression)
-	span.SetAttributes(attribute.String("calculator.expression", input.Expression))
+	expression := strings.TrimSpace(rawExpression)
+	span.SetAttributes(attribute.String("calculator.expression", expression))
 
-	result, err := Evaluate(ctx, input.Expression)
+	result, err := Evaluate(ctx, expression)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -50,7 +55,7 @@ func invoke(ctx context.Context, input request) (string, error) {
 	}
 	span.SetAttributes(attribute.String("calculator.result", result))
 
-	out, err := jsonv2.Marshal(response{Expression: input.Expression, Result: result})
+	out, err := jsonv2.Marshal(response{Expression: expression, Result: result})
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

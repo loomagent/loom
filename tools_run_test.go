@@ -2,30 +2,22 @@ package loom
 
 import (
 	"context"
-	jsonv2 "encoding/json/v2"
 	"errors"
 	"testing"
 )
 
-type echoToolArguments struct {
-	Value string `json:"value"`
-}
-
-type queryToolArguments struct {
-	Query string `json:"query"`
-}
-
 func newEchoTool() Tool {
-	return NewTool(MustToolContract[echoToolArguments]("echo"), "echo back",
-		func(_ context.Context, args echoToolArguments) (string, error) {
-			return `{"got":"` + args.Value + `"}`, nil
+	value := String("value").Required().Desc("Value to echo back.")
+	return NewArgsTool(MustArgsContract("echo", value), "echo back",
+		func(_ context.Context, args Args) (string, error) {
+			return `{"got":"` + value.Get(args) + `"}`, nil
 		},
 	)
 }
 
 func newFailingTool() Tool {
-	return NewTool(MustToolContract[NoArguments]("bad"), "always fail",
-		func(context.Context, NoArguments) (string, error) {
+	return NewArgsTool(MustArgsContract("bad"), "always fail",
+		func(context.Context, Args) (string, error) {
 			return "", errors.New("boom")
 		},
 	)
@@ -100,15 +92,15 @@ func TestExecuteToolCalls_ToolFails(t *testing.T) {
 
 func TestRunToolByName_Success(t *testing.T) {
 	reg := NewToolRegistry()
-	_ = reg.Register(NewTool(MustToolContract[queryToolArguments]("query"), "q",
-		func(_ context.Context, args queryToolArguments) (string, error) {
-			data, err := jsonv2.Marshal(args)
-			return string(data), err
+	query := String("query").Required().Desc("Query text.")
+	_ = reg.Register(NewArgsTool(MustArgsContract("query", query), "q",
+		func(_ context.Context, args Args) (string, error) {
+			return `{"query":"` + query.Get(args) + `"}`, nil
 		},
 	))
 
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
-		output, err := RunToolByName(ctx, w, "查询 1", reg, "query", queryToolArguments{Query: "ai"})
+		output, err := RunToolByName(ctx, w, "查询 1", reg, "query", map[string]any{"query": "ai"})
 		if err != nil {
 			return err
 		}
@@ -116,7 +108,7 @@ func TestRunToolByName_Success(t *testing.T) {
 			t.Errorf("output: %s", output)
 		}
 		// 再调一次,验证 callID 递增
-		output2, _ := RunToolByName(ctx, w, "查询 2", reg, "query", queryToolArguments{Query: "ml"})
+		output2, _ := RunToolByName(ctx, w, "查询 2", reg, "query", map[string]any{"query": "ml"})
 		if output2 != `{"query":"ml"}` {
 			t.Errorf("output2: %s", output2)
 		}

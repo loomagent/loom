@@ -1,7 +1,7 @@
 package deepseek
 
 import (
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -24,7 +24,12 @@ func TestSchemaRequestReachesUnknownModel(t *testing.T) {
 					t.Errorf("unexpected endpoint/auth: %s", r.URL.Path)
 				}
 				var body map[string]any
-				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				raw, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if err := jsonv2.Unmarshal(raw, &body); err != nil {
 					t.Error(err)
 					return
 				}
@@ -106,7 +111,7 @@ func TestReasoningTelemetryPresence(t *testing.T) {
 		{`{"completion_tokens_details":{"reasoning_tokens":595}}`, true, 595},
 	} {
 		var wire chatUsage
-		if err := json.Unmarshal([]byte(tt.raw), &wire); err != nil {
+		if err := jsonv2.Unmarshal([]byte(tt.raw), &wire); err != nil {
 			t.Fatal(err)
 		}
 		got := translateUsage(&wire)

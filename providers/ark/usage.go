@@ -3,7 +3,7 @@ package ark
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -48,7 +48,7 @@ func (t usageTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(raw))
-	if err := json.Unmarshal(raw, evidence); err != nil {
+	if err := jsonv2.Unmarshal(raw, evidence); err != nil {
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("ark usage evidence: %w", err)
 	}
@@ -81,5 +81,5 @@ func (u *usageUnmarshaler) Unmarshal(raw []byte, value interface{}) error {
 	if err := u.inner.Unmarshal(raw, value); err != nil {
 		return err
 	}
-	return json.Unmarshal(raw, &u.evidence)
+	return jsonv2.Unmarshal(raw, &u.evidence)
 }
