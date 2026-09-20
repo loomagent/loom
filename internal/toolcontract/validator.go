@@ -164,33 +164,12 @@ func checkSupported(s *schema.Schema, path string, patterns map[*schema.Schema]*
 		}
 		patterns[s] = compiled
 	}
-	for _, name := range PropertyNames(s) {
+	for _, name := range s.PropertyNames() {
 		if err := checkSupported(s.Properties[name], path+"/properties/"+name, patterns); err != nil {
 			return err
 		}
 	}
 	return checkSupported(s.Items, path+"/items", patterns)
-}
-
-// PropertyNames returns a schema's property names in declaration order, then
-// alphabetically for anything without a recorded order.
-func PropertyNames(s *schema.Schema) []string {
-	if s == nil {
-		return nil
-	}
-	names := append([]string(nil), s.PropertyOrder...)
-	seen := make(map[string]bool, len(names))
-	for _, name := range names {
-		seen[name] = true
-	}
-	var remaining []string
-	for name := range s.Properties {
-		if !seen[name] {
-			remaining = append(remaining, name)
-		}
-	}
-	sort.Strings(remaining)
-	return append(names, remaining...)
 }
 
 func knownType(name string) bool {

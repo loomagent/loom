@@ -9,6 +9,7 @@ package schema
 
 import (
 	jsonv2 "encoding/json/v2"
+	"sort"
 )
 
 // Schema is a JSON Schema document or subschema. A schema is a plain value:
@@ -69,4 +70,25 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 	}
 	*s = Schema(decoded)
 	return nil
+}
+
+// PropertyNames returns the schema's property names in declaration order, then
+// alphabetically for anything without a recorded order.
+func (s *Schema) PropertyNames() []string {
+	if s == nil {
+		return nil
+	}
+	names := append([]string(nil), s.PropertyOrder...)
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		seen[name] = true
+	}
+	var remaining []string
+	for name := range s.Properties {
+		if !seen[name] {
+			remaining = append(remaining, name)
+		}
+	}
+	sort.Strings(remaining)
+	return append(names, remaining...)
 }

@@ -26,7 +26,7 @@ func validateDeclaredExamples(schema *Schema, path string) error {
 			return fmt.Errorf("example at %s does not satisfy JSON Schema: %w", examplePath(path, index), err)
 		}
 	}
-	for _, name := range orderedPropertyNames(schema) {
+	for _, name := range schema.PropertyNames() {
 		if err := validateDeclaredExamples(schema.Properties[name], joinFieldPath(path, name)); err != nil {
 			return err
 		}
@@ -63,7 +63,7 @@ func buildSchemaExample(schema *Schema) (example any, complete, declared bool) {
 		return nil, false, false
 	}
 	object := make(map[string]any)
-	for _, name := range orderedPropertyNames(schema) {
+	for _, name := range schema.PropertyNames() {
 		property := schema.Properties[name]
 		value, ok, propertyDeclared := buildSchemaExample(property)
 		if ok {
