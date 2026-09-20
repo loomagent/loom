@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/loomagent/loom/internal/toolcontract"
@@ -20,36 +19,21 @@ import (
 
 var errMultipleJSONValues = errors.New("multiple JSON values")
 
-var toolArgumentValidator = newToolArgumentValidator()
-
-func newToolArgumentValidator() *validator.Validate {
-	validate := validator.New(validator.WithRequiredStructEnabled())
-	if err := validate.RegisterValidation("notblank", func(field validator.FieldLevel) bool {
-		return field.Field().Kind() == reflect.String && strings.TrimSpace(field.Field().String()) != ""
-	}); err != nil {
-		panic(fmt.Sprintf("loom: register notblank validation: %v", err))
-	}
-	validate.RegisterTagNameFunc(func(field reflect.StructField) string {
-		name, _, skip := jsonFieldName(field)
-		if skip {
-			return ""
-		}
-		return name
-	})
-	return validate
-}
-
-// SchemaFor derives a JSON Schema from T.
+// SchemaFor derives a JSON Schema from T for structured model output.
+//
+// Tool arguments use ArgsContract instead; this remains for ChatStructured,
+// where the model returns JSON that is decoded into a Go value.
 //
 // Exported struct fields become object properties. The json tag controls the
 // property name and whether it is optional: fields tagged with omitempty or
 // omitzero are optional; all other fields are required. The jsonschema tag is
 // used as the property description.
 //
-// A go-playground/validator validate tag adds runtime constraints. Rules with
-// direct JSON Schema equivalents are projected as well; cross-field, custom,
-// and other runtime-only rules remain enforced by validator. Container rules
-// after dive are projected onto item or map-value schemas.
+// A go-playground/validator-style validate tag adds constraints. Rules with a
+// direct JSON Schema equivalent are projected, so model guidance and local
+// enforcement stay in sync; cross-field and custom rules are the caller's
+// responsibility through ChatStructured's validator. Container rules after dive
+// are projected onto item or map-value schemas.
 func SchemaFor[T any]() (*jsonschema.Schema, error) {
 	schema, err := jsonschema.For[T](nil)
 	if err != nil {
@@ -74,101 +58,28 @@ func MustSchemaFor[T any]() *jsonschema.Schema {
 	return schema
 }
 
-// DecodeToolArguments validates one JSON tool-call argument object against the
-// schema derived from T, then decodes it into T. This keeps model-facing JSON
-// Schema and server-side validation on the same contract.
-func DecodeToolArguments[T any](argumentsJSON string) (T, error) {
-	return DecodeToolArgumentsFor[T]("", argumentsJSON)
-}
-
-// DecodeToolArgumentsFor is DecodeToolArguments with a tool name included in
-// validation errors.
-func DecodeToolArgumentsFor[T any](toolName, argumentsJSON string) (T, error) {
-	var zero T
-	schema, err := SchemaFor[T]()
-	if err != nil {
-		return zero, err
-	}
-	return DecodeToolArgumentsWithSchemaFor[T](toolName, argumentsJSON, schema)
-}
-
-// DecodeToolArgumentsWithSchema is like DecodeToolArguments, but validates
-// against schema. It is useful when a tool adds runtime constraints, such as a
-// configurable maximum, to a schema initially derived from T. The schema must
-// still describe T.
-func DecodeToolArgumentsWithSchema[T any](argumentsJSON string, schema *jsonschema.Schema) (T, error) {
-	return DecodeToolArgumentsWithSchemaFor[T]("", argumentsJSON, schema)
-}
-
-// DecodeToolArgumentsWithSchemaFor is DecodeToolArgumentsWithSchema with a
-// tool name included in validation errors.
+// cloneSchema deep-copies a schema.
 //
-// Like the other DecodeToolArguments functions, this resolves the schema and
-// rebuilds the argument guidance on every call, which costs roughly an order of
-// magnitude more than a precompiled contract. Use it for one-off decoding;
-// anything on a request path should build a ToolContract once and call its
-// Decode method instead.
-func DecodeToolArgumentsWithSchemaFor[T any](toolName, argumentsJSON string, schema *jsonschema.Schema) (T, error) {
-	return decodeToolArguments[T](toolName, argumentsJSON, schema, nil, nil, argumentGuidance{})
-}
-
-func decodeToolArguments[T any](toolName, argumentsJSON string, schema *jsonschema.Schema, resolved *jsonschema.Resolved, validator *toolcontract.Validator, guidance argumentGuidance) (T, error) {
-	var zero T
+// jsonschema.Schema.CloneSchemas only clones nested *Schema values; slices and
+// pointers holding plain values — Required, Enum, Examples, Minimum, MaxLength
+// and friends — stay shared with the original. That is not enough here: a
+// contract hands its schema to callers that may normalize it in place, and any
+// such write would reach straight into the schema the contract validates
+// against, racing with concurrent calls. Marshalling through JSON is exact for
+// a JSON Schema and leaves nothing aliased.
+func cloneSchema(schema *jsonschema.Schema) *jsonschema.Schema {
 	if schema == nil {
-		return zero, fmt.Errorf("loom: tool argument schema is nil")
+		return nil
 	}
-
-	if resolved == nil {
-		var err error
-		resolved, err = schema.Resolve(nil)
-		if err != nil {
-			return zero, fmt.Errorf("loom: resolve tool argument schema: %w", err)
-		}
-	}
-	if !guidance.built {
-		var err error
-		guidance, err = buildArgumentGuidance[T](schema, resolved)
-		if err != nil {
-			return zero, fmt.Errorf("loom: build tool argument guidance: %w", err)
-		}
-	}
-	if validator == nil {
-		var err error
-		validator, err = compileValidationSchema(schema)
-		if err != nil {
-			return zero, fmt.Errorf("loom: compile tool argument schema: %w", err)
-		}
-	}
-
-	// Providers commonly send an empty string rather than "{}" when a model
-	// calls a tool that takes no arguments, or none of its optional ones. Treat
-	// blank arguments as an empty JSON object so this convention is not
-	// reported as malformed JSON, and so a call that is genuinely missing a
-	// required field gets a field-level diagnostic instead of a syntax error.
-	if strings.TrimSpace(argumentsJSON) == "" {
-		argumentsJSON = "{}"
-	}
-
-	raw, err := readStrictJSON(argumentsJSON)
+	data, err := jsonv2.Marshal(schema)
 	if err != nil {
-		return zero, newJSONToolArgumentError(toolName, guidance, err)
+		return schema.CloneSchemas()
 	}
-
-	if validationError := validator.Validate(raw); validationError != nil {
-		return zero, newSchemaToolArgumentError(toolName, guidance, validationError)
+	var clone jsonschema.Schema
+	if err := jsonv2.Unmarshal(data, &clone); err != nil {
+		return schema.CloneSchemas()
 	}
-
-	var arguments T
-	if err := jsonv2.Unmarshal(raw, &arguments, jsonv2.RejectUnknownMembers(true)); err != nil {
-		if typeError, ok := errors.AsType[*jsonv2.SemanticError](err); ok {
-			return zero, newTypeMismatchToolArgumentError(toolName, guidance, typeError)
-		}
-		return zero, newJSONToolArgumentError(toolName, guidance, err)
-	}
-	if err := validateToolArgumentStruct(arguments); err != nil {
-		return zero, newStructToolArgumentError(toolName, guidance, err)
-	}
-	return arguments, nil
+	return &clone
 }
 
 func compileValidationSchema(schema *jsonschema.Schema) (*toolcontract.Validator, error) {
@@ -192,29 +103,6 @@ func readStrictJSON(input string) (jsontext.Value, error) {
 		return nil, err
 	}
 	return raw, nil
-}
-
-func validateToolArgumentStruct(value any) (err error) {
-	// go-playground only validates structs. Arguments typed as a slice, map, or
-	// scalar carry no struct rules, and handing one to Struct yields an
-	// InvalidValidationError that reaches the model as "validation is
-	// misconfigured" — which blames the tool for a perfectly good call.
-	target := reflect.ValueOf(value)
-	for target.Kind() == reflect.Pointer {
-		if target.IsNil() {
-			return nil
-		}
-		target = target.Elem()
-	}
-	if target.Kind() != reflect.Struct {
-		return nil
-	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("invalid validator tag: %v", recovered)
-		}
-	}()
-	return toolArgumentValidator.Struct(value)
 }
 
 func applyValidationTags(schema *jsonschema.Schema, typ reflect.Type) error {

@@ -2,7 +2,10 @@ package loom
 
 import (
 	"context"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
+	"strings"
 )
 
 // Arg is one declaration in an args contract: either a typed argument or a
@@ -31,7 +34,8 @@ type argSpec struct {
 	minItems    *int
 	maxItems    *int
 	uniqueItems bool
-	field       func(ctx context.Context, value any) error
+	examples    []any
+	validators  []func(ctx context.Context, value jsontext.Value) error
 }
 
 // argsBuilder accumulates declarations in order. Property order is preserved
@@ -82,13 +86,12 @@ var formatPatterns = map[string]string{
 	"uuid":      `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`,
 }
 
-// String declares a string argument. String returns the builder for chaining.
+// String declares a string argument.
 func String(name string) *StringArg {
 	return &StringArg{spec: &argSpec{name: name, kind: argKindString}}
 }
 
-// Enum declares a string argument restricted to values. The value is required
-// to be one of the listed strings when present.
+// Enum declares a string argument restricted to values.
 func Enum(name string, values ...string) *StringArg {
 	arg := String(name)
 	for _, value := range values {
@@ -109,6 +112,10 @@ func Time(name string) *StringArg { return String(name).Format("time") }
 // shorthand for Format("date-time").
 func DateTime(name string) *StringArg { return String(name).Format("date-time") }
 
+// UUID declares a string argument holding a UUID. It is shorthand for
+// Format("uuid").
+func UUID(name string) *StringArg { return String(name).Format("uuid") }
+
 // StringArg declares and configures a string argument.
 type StringArg struct{ spec *argSpec }
 
@@ -123,6 +130,13 @@ func (a *StringArg) Required() *StringArg {
 // Desc sets the model-facing argument description.
 func (a *StringArg) Desc(text string) *StringArg {
 	a.spec.description = text
+	return a
+}
+
+// Example attaches a model-facing example value. When every required argument
+// has one, the assembled example call is offered to the model for reference.
+func (a *StringArg) Example(value string) *StringArg {
+	a.spec.examples = append(a.spec.examples, value)
 	return a
 }
 
@@ -152,15 +166,35 @@ func (a *StringArg) Format(format string) *StringArg {
 	return a
 }
 
+// NotBlank rejects values that are empty or contain only whitespace. It is the
+// declared-argument equivalent of the validator's notblank rule.
+func (a *StringArg) NotBlank() *StringArg {
+	name := a.spec.name
+	a.spec.validators = append(a.spec.validators, func(_ context.Context, value jsontext.Value) error {
+		var text string
+		if err := jsonv2.Unmarshal(value, &text); err != nil {
+			return err
+		}
+		if strings.TrimSpace(text) == "" {
+			return Invalid("%s must not be blank", name)
+		}
+		return nil
+	})
+	return a
+}
+
 // Validate registers a per-field check that runs after schema validation, only
 // when the model actually sent the argument. Return Invalid or InvalidAt to
 // report a model-facing problem; any other error is treated as an internal
 // failure. A single validator may report several problems with errors.Join.
 func (a *StringArg) Validate(fn func(ctx context.Context, value string) error) *StringArg {
-	a.spec.field = func(ctx context.Context, value any) error {
-		text, _ := value.(string)
-		return fn(ctx, text)
-	}
+	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
+		var value string
+		if err := jsonv2.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		return fn(ctx, value)
+	})
 	return a
 }
 
@@ -180,6 +214,12 @@ func (a *IntArg) Desc(text string) *IntArg {
 	return a
 }
 
+// Example attaches a model-facing example value; see StringArg.Example.
+func (a *IntArg) Example(value int64) *IntArg {
+	a.spec.examples = append(a.spec.examples, value)
+	return a
+}
+
 // Min sets the inclusive lower bound.
 func (a *IntArg) Min(n int64) *IntArg {
 	value := float64(n)
@@ -196,10 +236,13 @@ func (a *IntArg) Max(n int64) *IntArg {
 
 // Validate registers a per-field check; see StringArg.Validate.
 func (a *IntArg) Validate(fn func(ctx context.Context, value int64) error) *IntArg {
-	a.spec.field = func(ctx context.Context, value any) error {
-		number, _ := value.(float64)
-		return fn(ctx, int64(number))
-	}
+	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
+		var value int64
+		if err := jsonv2.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		return fn(ctx, value)
+	})
 	return a
 }
 
@@ -218,15 +261,24 @@ func (a *FloatArg) Desc(text string) *FloatArg {
 	a.spec.description = text
 	return a
 }
+
+// Example attaches a model-facing example value; see StringArg.Example.
+func (a *FloatArg) Example(value float64) *FloatArg {
+	a.spec.examples = append(a.spec.examples, value)
+	return a
+}
 func (a *FloatArg) Min(n float64) *FloatArg { a.spec.minimum = &n; return a }
 func (a *FloatArg) Max(n float64) *FloatArg { a.spec.maximum = &n; return a }
 
 // Validate registers a per-field check; see StringArg.Validate.
 func (a *FloatArg) Validate(fn func(ctx context.Context, value float64) error) *FloatArg {
-	a.spec.field = func(ctx context.Context, value any) error {
-		number, _ := value.(float64)
-		return fn(ctx, number)
-	}
+	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
+		var value float64
+		if err := jsonv2.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		return fn(ctx, value)
+	})
 	return a
 }
 
@@ -246,12 +298,21 @@ func (a *BoolArg) Desc(text string) *BoolArg {
 	return a
 }
 
+// Example attaches a model-facing example value; see StringArg.Example.
+func (a *BoolArg) Example(value bool) *BoolArg {
+	a.spec.examples = append(a.spec.examples, value)
+	return a
+}
+
 // Validate registers a per-field check; see StringArg.Validate.
 func (a *BoolArg) Validate(fn func(ctx context.Context, value bool) error) *BoolArg {
-	a.spec.field = func(ctx context.Context, value any) error {
-		flag, _ := value.(bool)
-		return fn(ctx, flag)
-	}
+	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
+		var value bool
+		if err := jsonv2.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		return fn(ctx, value)
+	})
 	return a
 }
 
@@ -271,6 +332,14 @@ func (a *StringsArg) Desc(text string) *StringsArg {
 	return a
 }
 
+// Example attaches a model-facing example value; see StringArg.Example.
+func (a *StringsArg) Example(values ...string) *StringsArg {
+	copyOfValues := make([]string, len(values))
+	copy(copyOfValues, values)
+	a.spec.examples = append(a.spec.examples, copyOfValues)
+	return a
+}
+
 // MinItems sets the minimum number of elements.
 func (a *StringsArg) MinItems(n int) *StringsArg { a.spec.minItems = &n; return a }
 
@@ -282,15 +351,13 @@ func (a *StringsArg) Unique() *StringsArg { a.spec.uniqueItems = true; return a 
 
 // Validate registers a per-field check; see StringArg.Validate.
 func (a *StringsArg) Validate(fn func(ctx context.Context, value []string) error) *StringsArg {
-	a.spec.field = func(ctx context.Context, value any) error {
-		items, _ := value.([]any)
-		out := make([]string, 0, len(items))
-		for _, item := range items {
-			text, _ := item.(string)
-			out = append(out, text)
+	a.spec.validators = append(a.spec.validators, func(ctx context.Context, raw jsontext.Value) error {
+		var value []string
+		if err := jsonv2.Unmarshal(raw, &value); err != nil {
+			return err
 		}
-		return fn(ctx, out)
-	}
+		return fn(ctx, value)
+	})
 	return a
 }
 

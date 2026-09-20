@@ -1,6 +1,8 @@
 package loom
 
 import (
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 )
 
@@ -14,8 +16,11 @@ import (
 // and panics — by the time a handler runs, the model's input has already been
 // checked against the contract, so those can only fail for reasons the handler
 // itself controls.
+//
+// Arguments are kept as raw JSON until a getter reads them, so numbers keep
+// their full int64/uint64 precision instead of being rounded through float64.
 type Args struct {
-	values   map[string]any
+	values   map[string]jsontext.Value
 	declared map[string]argKind
 }
 
@@ -30,76 +35,69 @@ func (a Args) Has(name string) bool {
 // String returns a declared string argument, or "" when it was omitted.
 func (a Args) String(name string) string {
 	a.expect(name, argKindString)
-	value, ok := a.values[name]
-	if !ok {
-		return ""
-	}
-	text, _ := value.(string)
-	return text
+	var value string
+	a.decode(name, &value)
+	return value
 }
 
 // Int returns a declared integer argument, or 0 when it was omitted.
 func (a Args) Int(name string) int64 {
 	a.expect(name, argKindInt)
-	value, ok := a.values[name]
-	if !ok {
-		return 0
-	}
-	number, _ := value.(float64)
-	return int64(number)
+	var value int64
+	a.decode(name, &value)
+	return value
 }
 
 // Float returns a declared number argument, or 0 when it was omitted.
 func (a Args) Float(name string) float64 {
 	a.expect(name, argKindFloat)
-	value, ok := a.values[name]
-	if !ok {
-		return 0
-	}
-	number, _ := value.(float64)
-	return number
+	var value float64
+	a.decode(name, &value)
+	return value
 }
 
 // Bool returns a declared boolean argument, or false when it was omitted.
 func (a Args) Bool(name string) bool {
 	a.expect(name, argKindBool)
-	value, ok := a.values[name]
-	if !ok {
-		return false
-	}
-	flag, _ := value.(bool)
-	return flag
+	var value bool
+	a.decode(name, &value)
+	return value
 }
 
 // Strings returns a declared string-array argument, or nil when it was omitted.
 // The returned slice is a copy; callers may mutate it freely.
 func (a Args) Strings(name string) []string {
 	a.expect(name, argKindStrings)
-	value, ok := a.values[name]
-	if !ok {
-		return nil
-	}
-	items, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		text, ok := item.(string)
-		if !ok {
-			return nil
-		}
-		out = append(out, text)
-	}
-	return out
+	var value []string
+	a.decode(name, &value)
+	return value
 }
 
-// Raw returns the argument as decoded from JSON, or nil when it was omitted.
-// Values follow encoding/json/v2 defaults: objects are map[string]any, arrays
-// are []any, and numbers are float64.
+// Raw returns the argument decoded as a generic JSON value, or nil when it was
+// omitted. Numbers are float64; use the typed getters when precision matters.
 func (a Args) Raw(name string) any {
 	a.declare(name)
-	return a.values[name]
+	raw, ok := a.values[name]
+	if !ok {
+		return nil
+	}
+	var value any
+	if err := jsonv2.Unmarshal(raw, &value); err != nil {
+		return nil
+	}
+	return value
+}
+
+func (a Args) decode(name string, out any) {
+	raw, ok := a.values[name]
+	if !ok {
+		return
+	}
+	// The contract already validated this value against the schema, so a decode
+	// failure here is a bug in the contract, not in the model's input.
+	if err := jsonv2.Unmarshal(raw, out); err != nil {
+		panic(fmt.Sprintf("loom: decode tool argument %q: %v", name, err))
+	}
 }
 
 func (a Args) declare(name string) argKind {

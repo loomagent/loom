@@ -2,7 +2,7 @@ package loom
 
 import (
 	"context"
-	"errors"
+	"encoding/json/jsontext"
 	"fmt"
 	"strings"
 
@@ -135,11 +135,8 @@ func (c *ArgsContract) DecodeContext(ctx context.Context, argumentsJSON string) 
 	if validationError := c.validator.Validate(raw); validationError != nil {
 		return Args{}, newSchemaToolArgumentError(c.name, c.guidance, validationError)
 	}
-	var values map[string]any
-	if err := jsonv2.Unmarshal(raw, &values, jsonv2.RejectUnknownMembers(true)); err != nil {
-		if typeError, ok := errors.AsType[*jsonv2.SemanticError](err); ok {
-			return Args{}, newTypeMismatchToolArgumentError(c.name, c.guidance, typeError)
-		}
+	var values map[string]jsontext.Value
+	if err := jsonv2.Unmarshal(raw, &values); err != nil {
 		return Args{}, newJSONToolArgumentError(c.name, c.guidance, err)
 	}
 	args := Args{values: values, declared: c.declared}
@@ -159,18 +156,20 @@ func (c *ArgsContract) DecodeContext(ctx context.Context, argumentsJSON string) 
 func (c *ArgsContract) runValidators(ctx context.Context, args Args) ([]ToolArgumentIssue, error) {
 	var issues []ToolArgumentIssue
 	for _, spec := range c.order {
-		if spec.field == nil {
+		if len(spec.validators) == 0 {
 			continue
 		}
 		value, present := args.values[spec.name]
 		if !present {
 			continue
 		}
-		collected, fatal := classifyValidatorError(ctx, spec.name, spec.field(ctx, value))
-		if fatal != nil {
-			return nil, fatal
+		for _, validate := range spec.validators {
+			collected, fatal := classifyValidatorError(ctx, spec.name, validate(ctx, value))
+			if fatal != nil {
+				return nil, fatal
+			}
+			issues = append(issues, collected...)
 		}
-		issues = append(issues, collected...)
 	}
 	for _, validate := range c.whole {
 		collected, fatal := classifyValidatorError(ctx, "", validate(ctx, args))
@@ -204,7 +203,7 @@ func (b *argsBuilder) schema() *jsonschema.Schema {
 
 // schema maps one declaration onto its JSON Schema property.
 func (s *argSpec) schema() *jsonschema.Schema {
-	property := &jsonschema.Schema{Description: s.description}
+	property := &jsonschema.Schema{Description: s.description, Examples: s.examples}
 	switch s.kind {
 	case argKindString:
 		property.Type = "string"

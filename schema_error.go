@@ -1,7 +1,6 @@
 package loom
 
 import (
-	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/loomagent/loom/internal/toolcontract"
@@ -25,7 +23,6 @@ type ToolArgumentErrorKind string
 const (
 	ToolArgumentErrorMalformedJSON ToolArgumentErrorKind = "malformed_json"
 	ToolArgumentErrorSchema        ToolArgumentErrorKind = "schema_validation"
-	ToolArgumentErrorStruct        ToolArgumentErrorKind = "struct_validation"
 
 	maxToolArgumentMessages     = 8
 	maxToolArgumentMessageRunes = 512
@@ -171,109 +168,6 @@ func newJSONToolArgumentError(tool string, guidance argumentGuidance, err error)
 		ExpectedArguments: guidance.expected,
 		ExampleArguments:  guidance.example,
 		Err:               err,
-	}
-}
-
-// newTypeMismatchToolArgumentError reports a value whose JSON type does not fit
-// the argument field it decodes into. The document itself parsed cleanly, so
-// calling it malformed would send the model hunting for a syntax error that is
-// not there. Only the JSON field path is reported; Go type internals are not
-// exposed to the model.
-func newTypeMismatchToolArgumentError(tool string, guidance argumentGuidance, typeError *jsonv2.SemanticError) error {
-	label := "arguments"
-	field := strings.TrimPrefix(string(typeError.JSONPointer), "/")
-	if field != "" {
-		label = quoteField(field)
-	}
-	message := ""
-	if typeError.JSONKind == jsontext.KindNumber && isIntegerType(typeError.GoType) {
-		if number, ok := new(big.Rat).SetString(string(typeError.JSONValue)); ok && number.IsInt() && !integerFitsType(number.Num(), typeError.GoType) {
-			message = label + " is outside the supported " + strconv.Itoa(typeError.GoType.Bits()) + "-bit integer range"
-		}
-	}
-	if message == "" {
-		message = label + " must be " + jsonTypeNameForGoType(typeError.GoType)
-	}
-	if typeError.JSONKind != jsontext.KindInvalid && !strings.Contains(message, "outside the supported") {
-		message += ", but got " + typeError.JSONKind.String()
-	}
-	return &ToolArgumentError{
-		Tool:              tool,
-		Kind:              ToolArgumentErrorSchema,
-		Issues:            clampIssues([]ToolArgumentIssue{{Field: field, Rule: "type", Message: message}}),
-		ExpectedArguments: guidance.expected,
-		ExampleArguments:  guidance.example,
-		Err:               typeError,
-	}
-}
-
-func integerFitsType(integer *big.Int, typ reflect.Type) bool {
-	switch typ.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		bits := typ.Bits()
-		return integer.BitLen() < bits || integer.BitLen() == bits && integer.Sign() < 0
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return integer.Sign() >= 0 && integer.BitLen() <= typ.Bits()
-	case reflect.Invalid, reflect.Bool, reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128,
-		reflect.Array, reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer,
-		reflect.Slice, reflect.String, reflect.Struct, reflect.UnsafePointer:
-		return false
-	default:
-		return false
-	}
-}
-
-func isIntegerType(typ reflect.Type) bool {
-	if typ == nil {
-		return false
-	}
-	switch typ.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return true
-	case reflect.Invalid, reflect.Bool, reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128,
-		reflect.Array, reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer,
-		reflect.Slice, reflect.String, reflect.Struct, reflect.UnsafePointer:
-		return false
-	default:
-		return false
-	}
-}
-
-// jsonTypeNameForGoType names the JSON type a Go type accepts, so diagnostics
-// speak the model's vocabulary rather than Go's.
-func jsonTypeNameForGoType(typ reflect.Type) string {
-	for typ != nil && (typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Interface) {
-		if typ.Kind() == reflect.Interface {
-			return "a JSON value"
-		}
-		typ = typ.Elem()
-	}
-	if typ == nil {
-		return "a JSON value"
-	}
-	switch typ.Kind() {
-	case reflect.Bool:
-		return "a boolean"
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return "an integer"
-	case reflect.Float32, reflect.Float64:
-		return "a number"
-	case reflect.String:
-		return "a string"
-	case reflect.Slice, reflect.Array:
-		return "an array"
-	case reflect.Map, reflect.Struct:
-		return "an object"
-	case reflect.Invalid, reflect.Complex64, reflect.Complex128, reflect.Chan,
-		reflect.Func, reflect.Interface, reflect.Pointer, reflect.UnsafePointer:
-		// No JSON type describes these; the pointer and interface cases are
-		// unwrapped above, and the rest cannot appear in a decodable argument.
-		return "a JSON value"
-	default:
-		// Unreachable: every reflect.Kind is listed above.
-		return "a JSON value"
 	}
 }
 
@@ -427,164 +321,6 @@ func joinField(parent, child string) string {
 		return parent
 	}
 	return parent + "." + child
-}
-
-func newStructToolArgumentError(tool string, guidance argumentGuidance, err error) error {
-	return &ToolArgumentError{
-		Tool:              tool,
-		Kind:              ToolArgumentErrorStruct,
-		Issues:            clampIssues(explainValidatorError(err)),
-		ExpectedArguments: guidance.expected,
-		ExampleArguments:  guidance.example,
-		Err:               err,
-	}
-}
-
-func explainValidatorError(err error) []ToolArgumentIssue {
-	validationErrors, ok := errors.AsType[validator.ValidationErrors](err)
-	if !ok {
-		return []ToolArgumentIssue{{Rule: "validate", Message: "tool argument validation is misconfigured"}}
-	}
-	issues := make([]ToolArgumentIssue, 0, len(validationErrors))
-	for _, fieldError := range validationErrors {
-		field := validatorFieldPath(fieldError)
-		rule := fieldError.Tag()
-		param := fieldError.Param()
-		label := quoteField(field)
-		message := ""
-		switch rule {
-		case "required":
-			message = label + " is required"
-		case "min":
-			message = label + minimumMessage(fieldError.Kind(), param)
-		case "max":
-			message = label + maximumMessage(fieldError.Kind(), param)
-		case "len":
-			message = label + lengthMessage(fieldError.Kind(), param)
-		case "gt":
-			message = label + comparisonMessage(fieldError.Kind(), "greater than", param)
-		case "gte":
-			message = label + comparisonMessage(fieldError.Kind(), "at least", param)
-		case "lt":
-			message = label + comparisonMessage(fieldError.Kind(), "less than", param)
-		case "lte":
-			message = label + comparisonMessage(fieldError.Kind(), "at most", param)
-		case "eq":
-			message = label + equalityMessage(fieldError.Kind(), "equal", param)
-		case "ne":
-			message = label + equalityMessage(fieldError.Kind(), "not equal", param)
-		case "oneof":
-			message = label + " must be one of " + compactJSON(parseOneOfValues(param))
-		case "contains":
-			message = label + " must contain " + strconv.Quote(param)
-		case "startswith":
-			message = label + " must start with " + strconv.Quote(param)
-		case "endswith":
-			message = label + " must end with " + strconv.Quote(param)
-		case "excludes":
-			message = label + " must not contain " + strconv.Quote(param)
-		case "unique":
-			message = label + " must contain unique items"
-		case "notblank":
-			message = label + " must not be blank"
-		case "datetime":
-			// Naming the layout is the whole point: without it the model cannot
-			// tell "2026-08-25" from "2026-08-25T10:00:00Z" and has nothing to
-			// correct towards.
-			if param != "" {
-				message = label + " must be a datetime in layout " + strconv.Quote(param)
-			} else {
-				message = label + " must be a valid datetime"
-			}
-		case "url", "http_url", "https_url", "email", "uri", "hostname", "ipv4", "ipv6", "uuid", "uuid3", "uuid4", "uuid5":
-			message = label + " must be a valid " + strings.ReplaceAll(rule, "_", " ")
-		default:
-			constraint := rule
-			// For an or-rule the tag already reads "url|startswith=/" and Param
-			// returns the winning alternative's argument; appending it again
-			// would render "url|startswith=/=/".
-			if param != "" && !strings.Contains(rule, "|") {
-				constraint += "=" + param
-			}
-			message = label + " must satisfy " + strconv.Quote(constraint)
-		}
-		issues = append(issues, ToolArgumentIssue{Field: field, Rule: rule, Message: message})
-	}
-	sortIssues(issues)
-	return issues
-}
-
-// kindPhrasing picks how a bound reads for a given kind: strings are measured
-// in characters, containers in items, and everything else is compared as a
-// plain value. Every reflect.Kind is accounted for here so the five message
-// helpers below stay one line each.
-func kindPhrasing(kind reflect.Kind, characters, items, value string) string {
-	switch kind {
-	case reflect.String:
-		return characters
-	case reflect.Array, reflect.Slice, reflect.Map:
-		return items
-	case reflect.Bool,
-		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Uintptr, reflect.Float32, reflect.Float64,
-		reflect.Complex64, reflect.Complex128,
-		reflect.Invalid, reflect.Chan, reflect.Func, reflect.Interface,
-		reflect.Pointer, reflect.Struct, reflect.UnsafePointer:
-		return value
-	default:
-		// Unreachable: every reflect.Kind is listed above.
-		return value
-	}
-}
-
-func comparisonMessage(kind reflect.Kind, comparison, param string) string {
-	return kindPhrasing(kind,
-		" must contain a number of characters "+comparison+" "+param,
-		" must contain a number of items "+comparison+" "+param,
-		" must be "+comparison+" "+param)
-}
-
-func equalityMessage(kind reflect.Kind, comparison, param string) string {
-	// A string is compared as a value here, not by length, so it shares the
-	// value wording — quoted, since the parameter is literal text.
-	value := " must be " + comparison + " to " + strconv.Quote(param)
-	return kindPhrasing(kind,
-		value,
-		" must contain a number of items "+comparison+" to "+param,
-		value)
-}
-
-func validatorFieldPath(fieldError validator.FieldError) string {
-	path := fieldError.Namespace()
-	if _, rest, ok := strings.Cut(path, "."); ok {
-		path = rest
-	}
-	if path == "" {
-		path = fieldError.Field()
-	}
-	return path
-}
-
-func minimumMessage(kind reflect.Kind, param string) string {
-	return kindPhrasing(kind,
-		" must contain at least "+param+" characters",
-		" must contain at least "+param+" items",
-		" must be at least "+param)
-}
-
-func maximumMessage(kind reflect.Kind, param string) string {
-	return kindPhrasing(kind,
-		" must contain at most "+param+" characters",
-		" must contain at most "+param+" items",
-		" must be at most "+param)
-}
-
-func lengthMessage(kind reflect.Kind, param string) string {
-	return kindPhrasing(kind,
-		" must contain exactly "+param+" characters",
-		" must contain exactly "+param+" items",
-		" must equal "+param)
 }
 
 func explainSchemaError(schema *jsonschema.Schema, instance any, err error) []ToolArgumentIssue {

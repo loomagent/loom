@@ -1,7 +1,6 @@
 package loom
 
 import (
-	jsonv2 "encoding/json/v2"
 	"fmt"
 	"slices"
 
@@ -18,52 +17,6 @@ type argumentGuidance struct {
 	built    bool
 	expected string
 	example  string
-}
-
-func buildArgumentGuidance[T any](schema *jsonschema.Schema, resolved *jsonschema.Resolved) (argumentGuidance, error) {
-	guidance := argumentGuidance{built: true, expected: summarizeExpectedArguments(schema)}
-	if err := validateDeclaredExamples(schema, schema, ""); err != nil {
-		return argumentGuidance{}, err
-	}
-
-	// An example is a best-effort aid for the model. When one was assembled
-	// purely by the framework, failing to produce a valid instance just means
-	// no example is attached — it must not stop the contract from being built.
-	// A required map field, for instance, has no valid empty instance to show.
-	// Author-declared examples are held to the stricter rule below, since an
-	// example that violates its own schema is a mistake worth surfacing.
-	example, complete, declared := buildSchemaExample(schema)
-	if !complete {
-		return guidance, nil
-	}
-	reject := func(format string, err error) (argumentGuidance, error) {
-		if declared {
-			return argumentGuidance{}, fmt.Errorf(format, err)
-		}
-		return guidance, nil
-	}
-	if err := resolved.Validate(example); err != nil {
-		return reject("assembled example does not satisfy JSON Schema: %w", err)
-	}
-	data, err := jsonv2.Marshal(example)
-	if err != nil {
-		return reject("marshal assembled example: %w", err)
-	}
-	var typed T
-	if err := jsonv2.Unmarshal(data, &typed); err != nil {
-		return reject("decode assembled example into argument struct: %w", err)
-	}
-	if err := validateToolArgumentStruct(typed); err != nil {
-		return reject("assembled example does not satisfy struct validation: %w", err)
-	}
-	data, err = jsonv2.Marshal(typed)
-	if err != nil {
-		return reject("marshal validated argument example: %w", err)
-	}
-	if len([]rune(string(data))) <= maxExampleArgumentRunes {
-		guidance.example = string(data)
-	}
-	return guidance, nil
 }
 
 func validateDeclaredExamples(root, schema *jsonschema.Schema, path string) error {

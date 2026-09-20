@@ -66,69 +66,33 @@ func main() {
 }
 ```
 
-## Struct-derived tool schemas
+## Tools
 
-Define tool arguments once as a Go struct. `SchemaFor` and `MustSchemaFor`
-derive property types, names, required fields, descriptions, and nested shapes:
-
-```go
-type calculatorRequest struct {
-	Expression string `json:"expression" jsonschema:"Mathematical expression to evaluate." validate:"min=1,notblank" example:"(2 + 3) * 4"`
-	Precision  int    `json:"precision,omitempty" jsonschema:"Optional decimal precision." validate:"omitempty,min=0,max=12"`
-}
-
-const ToolName = "calculator"
-
-contract := loom.MustToolContract[calculatorRequest](ToolName)
-tool := loom.NewTool(
-	contract,
-	"Evaluate a mathematical expression.",
-	func(ctx context.Context, request calculatorRequest) (string, error) {
-		// ...
-	},
-)
-```
-
-Fields without `omitempty` or `omitzero` are required. Validation tags are
-executed by `go-playground/validator`, the validator used by Gin. Rules with a
-direct schema equivalent—including `required`, size and comparison rules,
-`eq`/`ne`, `oneof`, string prefix/suffix/containment rules, `unique`, `dive`,
-and Loom's `notblank`—are also projected into JSON Schema. Cross-field and
-custom rules remain runtime-only. `DecodeToolArguments` checks the incoming
-JSON against the generated schema and validates the decoded struct, so model
-guidance and server-side enforcement stay in sync. Derived object schemas
-reject unknown properties by default. An `example` tag is
-projected into JSON Schema. When every required argument has an example, Loom
-also assembles a complete example call and accepts it only after both Schema
-and struct validation succeed.
-
-`ToolContract` binds the tool name, generated Schema, compiled validator, and
-error contract once. `NewTool` then passes already validated arguments to
-the handler. Contracts are immutable and safe for concurrent calls; compiling
-once avoids rebuilding and resolving the Schema for every invocation. Argument
-decoding preserves the full `int64`/`uint64` range instead of routing integers
-through `float64`.
-
-`NewTool` and `NewArgsTool` are the public tool constructors. Tools without
-parameters use `ToolContract[loom.NoArguments]` and accept the empty JSON object
-`{}`; raw JSON handlers remain an internal implementation detail.
+Tools are declared with `ArgsContract` and `NewArgsTool`. The whole contract —
+the public tool name, each argument's type, description, required flag, and
+constraints — is written once, and handlers read arguments through typed `Args`
+getters. No Go struct and no struct tags are involved.
 
 Tool names are normally package constants. `ValidateToolName` and
-`NewToolContract` require 1–64 characters matching
-`^[a-z][a-z0-9_]{0,63}$`; `ToolRegistry.Register` applies the same validation
-and rejects duplicate names.
+`NewArgsContract` require 1–64 characters matching `^[a-z][a-z0-9_]{0,63}$`;
+`ToolRegistry.Register` applies the same validation and rejects duplicate names.
+
+A contract binds the schema, the compiled validator, and the error contract
+once, and is immutable and safe for concurrent calls; compiling once avoids
+rebuilding the schema for every invocation. Arguments are kept as raw JSON until
+a getter reads them, so numbers preserve their full int64/uint64 range instead
+of being rounded through float64.
 
 Errors expose `ToolArgumentError` metadata and render a bounded, compact
-non-JSON `expected arguments` contract for model self-correction without
-dumping the full schema. A validated `example arguments` JSON object is included
-when the struct declares a complete example.
+non-JSON `expected arguments` contract for model self-correction without dumping
+the full schema. A validated `example arguments` JSON object is included when
+the declared examples form a complete call.
 
-## Declared-argument tools
+## Declaring tool arguments
 
-When a tool's arguments are simple, `ArgsContract` and `NewArgsTool` declare the
-whole contract as one list instead of a Go struct. The tool name, each
-argument's type, description, required flag, and constraints live together, and
-per-field or whole-call validation is declared alongside them:
+The tool name, each argument's type, description, required flag, and
+constraints live together in one list, and per-field or whole-call validation is
+declared alongside them:
 
 ```go
 contract := loom.MustArgsContract("web_search",
@@ -177,7 +141,9 @@ free, and safe to run even when another validator has already failed.
 ## Structured model output
 
 `ChatStructured[T]` derives its JSON Schema with `SchemaFor[T]`, including
-supported `validate` constraints such as string lengths. It supplies the same
+supported `validate` constraints such as string lengths. Tool arguments use
+`ArgsContract` instead; `SchemaFor` remains for structured output, where the
+model returns JSON that is decoded into a Go value. It supplies the same
 schema through native `json_schema` or a `json_object` prompt and validates the
 response locally. Use `WithStructuredValidator` for additional business rules
 or constraints that cannot be represented in JSON Schema.
