@@ -3,7 +3,8 @@ package deepseek
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv1 "encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,7 +62,13 @@ func newChatClient(apiKey, baseURL string) (*chatClient, error) {
 // Send the requested protocol fields as-is. Neither model names nor SDK enums
 // decide whether the upstream model can accept them. Loom owns all retries.
 func (c *chatClient) send(ctx context.Context, body chatRequest) (*http.Response, error) {
-	payload, err := json.Marshal(body)
+	// The request embeds SDK structs whose `omitempty` still follows v1
+	// semantics. encoding/json/v2 redefined `omitempty` in terms of the JSON type
+	// system — only null, "", [] and {} count as empty — so marshalling with v2
+	// would emit zero scalars such as logprobs:false and stream:false that the
+	// caller never asked for. Keep v1 marshalling here until those structs move
+	// to `omitzero`.
+	payload, err := jsonv1.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal DeepSeek request: %w", err)
 	}
@@ -94,7 +101,7 @@ func (c *chatClient) send(ctx context.Context, body chatRequest) (*http.Response
 		Message string `json:"message"`
 		Detail  string `json:"detail"`
 	}
-	_ = json.Unmarshal(raw, &failure)
+	_ = jsonv2.Unmarshal(raw, &failure)
 	message := failure.Error.Message
 	if message == "" {
 		message = failure.Message
@@ -111,8 +118,12 @@ func (c *chatClient) CreateChatCompletion(ctx context.Context, req chatRequest) 
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	var out chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := jsonv2.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

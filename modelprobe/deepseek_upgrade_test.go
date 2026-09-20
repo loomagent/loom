@@ -2,9 +2,11 @@ package modelprobe
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,11 +28,16 @@ func TestDeepSeekSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 						Type string `json:"type"`
 					} `json:"thinking"`
 					ResponseFormat *struct {
-						Type       string          `json:"type"`
-						JSONSchema json.RawMessage `json:"json_schema"`
+						Type       string         `json:"type"`
+						JSONSchema jsontext.Value `json:"json_schema"`
 					} `json:"response_format"`
 				}
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				raw, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if err := jsonv2.Unmarshal(raw, &req); err != nil {
 					t.Error(err)
 					return
 				}
@@ -59,11 +66,11 @@ func TestDeepSeekSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 								} `json:"properties"`
 							} `json:"schema"`
 						}
-						if err := json.Unmarshal(req.ResponseFormat.JSONSchema, &format); err != nil {
+						if err := jsonv2.Unmarshal(req.ResponseFormat.JSONSchema, &format); err != nil {
 							t.Error(err)
 							return
 						}
-						data, err := json.Marshal(map[string]any{"ok": true, "nonce": format.Schema.Properties["nonce"].Const})
+						data, err := jsonv2.Marshal(map[string]any{"ok": true, "nonce": format.Schema.Properties["nonce"].Const})
 						if err != nil {
 							t.Error(err)
 							return
@@ -75,11 +82,16 @@ func TestDeepSeekSchemaUpgradeBeyondDeclaredCapabilities(t *testing.T) {
 				if req.Thinking != nil && req.Thinking.Type == "disabled" {
 					reasoning, tokens = "", 0
 				}
-				_ = json.NewEncoder(w).Encode(map[string]any{
+				data, err := jsonv2.Marshal(map[string]any{
 					"model":   "deepseek-flash",
 					"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"content": content, "reasoning_content": reasoning}}},
 					"usage":   map[string]any{"completion_tokens_details": map[string]any{"reasoning_tokens": tokens}},
 				})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				_, _ = w.Write(data)
 			}))
 			defer server.Close()
 			builder := BuilderFunc(func(_ context.Context, caps loom.ModelCapabilities) (loom.ChatModel, error) {
