@@ -17,7 +17,7 @@ import (
 func schemaRequest(t *testing.T) loom.ChatRequest {
 	t.Helper()
 	var schema loom.Schema
-	if err := json.Unmarshal([]byte(`{"type":"object","properties":{"answer":{"$ref":"#/$defs/answer"},"tags":{"type":"array","items":{"type":"string","enum":["a","b"]},"minItems":1}},"required":["answer","tags"],"additionalProperties":false,"$defs":{"answer":{"type":"integer","minimum":3,"maximum":9}}}`), &schema); err != nil {
+	if err := json.Unmarshal([]byte(`{"type":"object","properties":{"answer":{"type":"integer","minimum":3,"maximum":9},"tags":{"type":"array","items":{"type":"string","enum":["a","b"]},"minItems":1}},"required":["answer","tags"],"additionalProperties":false}`), &schema); err != nil {
 		t.Fatal(err)
 	}
 	req := request()

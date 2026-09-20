@@ -415,14 +415,8 @@ func appendSchemaConstraintParts(parts []string, schema *Schema) []string {
 	if schema.Const != nil {
 		parts = append(parts, "equals "+compactJSON(*schema.Const))
 	}
-	if schema.Not != nil && schema.Not.Const != nil {
-		parts = append(parts, "not "+compactJSON(*schema.Not.Const))
-	}
 	if schema.Enum != nil {
 		parts = append(parts, "one of "+compactJSON(schema.Enum))
-	}
-	if alternatives, ok := constAlternatives(schema.AnyOf); ok && len(alternatives) > 0 {
-		parts = append(parts, "one of "+compactJSON(alternatives))
 	}
 	if schema.Format != "" {
 		parts = append(parts, "format "+schema.Format)
@@ -458,11 +452,6 @@ func appendSchemaConstraintParts(parts []string, schema *Schema) []string {
 			parts = append(parts, "pattern "+strconv.Quote(schema.Pattern))
 		}
 	}
-	if schema.Not != nil && schema.Not.Pattern != "" {
-		if literal, _, ok := literalPatternConstraint(schema.Not.Pattern); ok {
-			parts = append(parts, "excludes "+strconv.Quote(literal))
-		}
-	}
 	if schema.MinItems != nil {
 		parts = append(parts, "min items "+strconv.Itoa(*schema.MinItems))
 	}
@@ -471,15 +460,6 @@ func appendSchemaConstraintParts(parts []string, schema *Schema) []string {
 	}
 	if schema.UniqueItems {
 		parts = append(parts, "unique items")
-	}
-	if schema.MinProperties != nil {
-		parts = append(parts, "min fields "+strconv.Itoa(*schema.MinProperties))
-	}
-	if schema.MaxProperties != nil {
-		parts = append(parts, "max fields "+strconv.Itoa(*schema.MaxProperties))
-	}
-	for _, constraint := range schema.AllOf {
-		parts = appendSchemaConstraintParts(parts, constraint)
 	}
 	return parts
 }
@@ -501,17 +481,6 @@ func compactJSON(value any) string {
 		return "[]"
 	}
 	return string(data)
-}
-
-func constAlternatives(schemas []*Schema) ([]any, bool) {
-	values := make([]any, 0, len(schemas))
-	for _, schema := range schemas {
-		if schema == nil || schema.Const == nil {
-			return nil, false
-		}
-		values = append(values, *schema.Const)
-	}
-	return values, true
 }
 
 func literalPatternConstraint(pattern string) (literal, kind string, ok bool) {
