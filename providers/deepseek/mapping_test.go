@@ -402,3 +402,41 @@ func TestChatReadsReasoningContentOnlyFromAString(t *testing.T) {
 		})
 	}
 }
+
+// The endpoint requires an assistant turn's reasoning back on the next call of a thinking
+// tool loop; without it the API answers with "The reasoning_content in the thinking mode must
+// be passed back to the API".
+func TestBuildRequestCarriesReasoningBack(t *testing.T) {
+	model, err := New(Config{APIKey: "k", ModelName: "deepseek-reasoner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := model.buildRequest(loom.ChatRequest{
+		Messages: []loom.Message{
+			{Role: loom.RoleUser, Content: "hi"},
+			{
+				Role:             loom.RoleAssistant,
+				Content:          "calling",
+				ReasoningContent: "the reasoning that must come back",
+				ToolCalls:        []loom.ToolCall{{ID: "c1", Name: "lookup", Arguments: `{}`}},
+			},
+			{Role: loom.RoleTool, Content: "result", ToolCallID: "c1"},
+		},
+		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := jsonv2.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := jsonv2.Unmarshal(data, &body); err != nil {
+		t.Fatal(err)
+	}
+	assistant := body["messages"].([]any)[1].(map[string]any)
+	if assistant["reasoning_content"] != "the reasoning that must come back" {
+		t.Fatalf("assistant message = %#v", assistant)
+	}
+}

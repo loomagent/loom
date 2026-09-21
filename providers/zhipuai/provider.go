@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/shared"
 
@@ -77,7 +76,7 @@ func New(cfg Config) (*Model, error) {
 		capabilities = *cfg.Capabilities
 	}
 	return &Model{
-		client:       newClient(cfg, baseURL),
+		client:       openaicompat.Client(cfg.APIKey, baseURL, cfg.HTTPClient),
 		name:         cfg.ModelName,
 		retryCfg:     retryCfg,
 		capabilities: capabilities,
@@ -151,7 +150,7 @@ var wire = openaicompat.Provider{
 // buildRequest translates a loom.ChatRequest into the go-openai request structure.
 func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewParams, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
-	messages, err := translateMessages(req.Messages)
+	messages, err := openaicompat.Messages(req.Messages, openaicompat.ReasoningContentField)
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: translate messages: %w", err)
 	}
@@ -269,37 +268,6 @@ func translateReasoningFromRequest(caps loom.ModelCapabilities, r loom.Reasoning
 	return translateReasoning(resolved)
 }
 
-func translateMessages(msgs []loom.Message) ([]openai.ChatCompletionMessageParamUnion, error) {
-	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(msgs))
-	for _, m := range msgs {
-		var gm openai.ChatCompletionMessageParamUnion
-		switch m.Role {
-		case loom.RoleSystem:
-			gm = openai.SystemMessage(m.Content)
-		case loom.RoleAssistant:
-			gm = openai.AssistantMessage(m.Content)
-			if m.ReasoningContent != "" {
-				gm.OfAssistant.SetExtraFields(map[string]any{"reasoning_content": m.ReasoningContent})
-			}
-			if m.Name != "" {
-				gm.OfAssistant.Name = param.NewOpt(m.Name)
-			}
-			for _, tc := range m.ToolCalls {
-				gm.OfAssistant.ToolCalls = append(gm.OfAssistant.ToolCalls, openai.ChatCompletionMessageToolCallUnionParam{
-					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{ID: tc.ID, Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{Name: tc.Name, Arguments: tc.Arguments}},
-				})
-			}
-		case loom.RoleTool:
-			gm = openai.ToolMessage(m.Content, m.ToolCallID)
-		case loom.RoleUser:
-			gm = openai.UserMessage(m.Content)
-		default:
-			return nil, fmt.Errorf("message %d uses unknown role %q", len(out), m.Role)
-		}
-		out = append(out, gm)
-	}
-	return out, nil
-}
 func translateFinishReason(fr string) loom.FinishReason {
 	switch fr {
 	case "stop":
@@ -331,19 +299,4 @@ func finishError(reason string) error {
 	default:
 		return &APIError{Code: "invalid_finish_reason", Message: fmt.Sprintf("unexpected finish_reason %q", reason)}
 	}
-}
-
-// newClient builds the SDK client. Retries belong to loom, so the SDK must not retry
-// underneath: its default retries would multiply the attempts and bypass the shared
-// rate-limit cooldown.
-func newClient(cfg Config, baseURL string) openai.Client {
-	options := []option.RequestOption{
-		option.WithAPIKey(cfg.APIKey),
-		option.WithBaseURL(strings.TrimRight(baseURL, "/") + "/"),
-		option.WithMaxRetries(0),
-	}
-	if cfg.HTTPClient != nil {
-		options = append(options, option.WithHTTPClient(cfg.HTTPClient))
-	}
-	return openai.NewClient(options...)
 }
