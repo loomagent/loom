@@ -2,96 +2,105 @@ package loom
 
 import "context"
 
-// Writer agent 业务方写出 Item 的通用接口。
+// Writer is the general interface product code uses to write Items.
 //
-// 三层接口:
-//   - Writer:基础写入面(Turn 根和 Step 都实现)
-//   - Step:Writer + 是嵌套容器(由 Writer.Step 的闭包返回)
-//   - TurnWriter:Writer + Turn 根专属(FinalAnswer)
+// Three layers:
+//   - Writer: the base writing surface, implemented by both the Turn root and Step
+//   - Step: a Writer that is also a nested container, returned by Writer.Step's closure
+//   - TurnWriter: a Writer plus what only the Turn root can do, FinalAnswer
 //
-// 设计原则:
-//   - **OOP 风格**:agent 拿到 Writer / Step / TurnWriter 对象后,直接调它的方法,
-//     不暴露 ItemRef / ParentRef 等底层细节。
-//   - **闭包风格**:Step 嵌套和流式 Stream 都用闭包,框架自动管 Close/Finish/Abort,
-//     业务方不会漏关、不会写错 outcome。
-//   - **类型分层约束**:FinalAnswer 仅在 TurnWriter 上;Step 上无 FinalAnswer,
-//     编译期防止"在 Step 内写最终答案"这种错误。
+// Design principles:
+//   - **OOP style**: agent code receives a Writer / Step / TurnWriter object and
+//     calls its methods; lower-level details such as ItemRef and ParentRef stay
+//     hidden.
+//   - **Closure style**: nested Steps and streams both use closures, so the
+//     framework manages Close/Finish/Abort and product code cannot forget to close
+//     or record the wrong outcome.
+//   - **Layered by type**: FinalAnswer exists only on TurnWriter. A Step has none,
+//     so writing a final answer from inside a step does not compile.
 //
-// 错误约定:
-//   - Write* 失败一般是 Sink 抖动,框架默认 swallow + OnSinkErr 回调,返回 nil。
-//     StrictSink=true 时返回 error,agent 可选择中止。
-//   - Sealed 后再写返回 ErrTurnClosed,agent 应静默退出。
+// Errors:
+//   - A failed Write* is usually a sink hiccup, so by default it is swallowed and
+//     reported through OnSinkErr, and the method returns nil. With StrictSink=true
+//     it returns the error and the agent may choose to stop.
+//   - Writing after the Turn is sealed returns ErrTurnClosed, and the agent should
+//     exit quietly.
 type Writer interface {
-	// Path 返回本 Writer 所在的完整路径,如 "turn[0].step[0].step[1]"。
-	// 用于 log / 调试 / 业务方传给 helper。
+	// Path returns the full path this Writer sits at, such as
+	// "turn[0].step[0].step[1]". Use it for logging and debugging, or pass it to a
+	// helper.
 	Path() string
 
-	// ===== 一次性写入(立即 Completed) =====
+	// ===== One-shot writes, Completed immediately =====
 	//
-	// 所有方法接受 label 参数 — 人类可读短标签,可空("" 时 UI 用 Kind+Index 派生默认)。
+	// Every method takes a label: a short human-readable tag that may be empty. A UI
+	// derives a default from the Kind and Index when it is.
 
-	// WriteReasoning 写一段 LLM 推理(reasoning_content)。
-	// 也用于业务方主动写的"过程笔记"(分析/总结/诊断等),UI 按 label 关键字或 path
-	// 自行决定渲染样式 — 框架不规定子分类。
+	// WriteReasoning writes one block of model reasoning, its reasoning_content. It
+	// also carries process notes product code writes deliberately, such as an
+	// analysis, a summary, or a diagnosis. A UI decides how to render them from the
+	// label or the path; the framework does not define subcategories.
 	WriteReasoning(ctx context.Context, label, text string) error
 
-	// WriteToolCall 写一次工具调用记录。
-	// 不实际执行工具 — 业务方负责调 tool.Invoke,再用 WriteToolResult 配对写结果。
-	// (后续会提供 Writer.RunTool helper 一步到位。)
+	// WriteToolCall writes a record of one tool call. It does not run the tool:
+	// product code calls tool.Invoke and then pairs the outcome with
+	// WriteToolResult.
 	WriteToolCall(ctx context.Context, label string, call ToolCall) error
 
-	// WriteToolResult 写一次工具执行结果。
-	// result.CallID 必须跟前面 WriteToolCall 的 ToolCall.CallID 配对。
+	// WriteToolResult writes the result of one tool run. result.CallID must pair with
+	// ToolCall.CallID from the earlier WriteToolCall.
 	WriteToolResult(ctx context.Context, label string, result ToolResult) error
 
-	// ===== 流式写入(闭包) =====
+	// ===== Streaming writes (closures) =====
 
-	// StreamReasoning 流式写 reasoning。
-	// 也用于流式生成的长文本(草稿 / 修订 / 答案构思等)— 跟一次性 WriteReasoning 同源。
-	// 闭包内通过 ReasoningStream 累加 chunk。
-	// 闭包返 nil → 框架自动 Finish(用累积值或 SetFinalText 给的值);
-	// 返 error → 框架自动 Abort,error 向上传递。
+	// StreamReasoning streams reasoning. It also carries long text produced
+	// incrementally, such as a draft, a revision, or a sketch of an answer, and is
+	// the same kind of item as a one-shot WriteReasoning. Inside the closure,
+	// ReasoningStream accumulates chunks. A nil return finishes the item with the
+	// accumulated value or the one given to SetFinalText; an error aborts it and
+	// propagates.
 	StreamReasoning(ctx context.Context, label string, fn func(ReasoningStream) error) error
 
-	// ===== sub flow 嵌套(闭包) =====
+	// ===== Nested sub flows (closures) =====
 
-	// Step 开一个嵌套子步骤(代码编排 sub flow)。
-	// 闭包内拿到 Step(is-a Writer),可以继续 Write* / Stream* / 嵌套 Step。
+	// Step opens a nested sub-step, a code-orchestrated sub flow. Inside the closure
+	// you get a Step, which is a Writer, and can keep writing, streaming, and
+	// nesting.
 	//
-	// 闭包接收的 ctx 是 step span 的子 ctx — 闭包内调 StreamLLMToStep /
-	// runOneTool 等 helper 时,它们起的子 span 自动嵌在 step 之下。
-	// **重要**:闭包内调任何接受 ctx 的函数(LLM / tool / DB)都应传 stepCtx
-	// (而非外层捕获的 ctx),否则子 span 会挂到错误的父节点。
+	// The ctx the closure receives is a child of the step's span, so helpers called
+	// inside it start their spans underneath the step. **Important**: pass that
+	// stepCtx, not an outer captured ctx, to anything that takes a context (an LLM
+	// call, a tool, a database query), or its child span hangs off the wrong parent.
 	//
-	// 闭包返 nil → Step 标 Completed;
-	// 返 ErrStepIncomplete → Step 标 Incomplete,错误**不向上传递**(被 step 吸收);
-	// 返其它非 nil error → Step 标 Failed,error 向上传递。
+	// A nil return marks the Step Completed. ErrStepIncomplete marks it Incomplete,
+	// and the error is absorbed rather than propagated. Any other non-nil error
+	// marks it Failed and propagates.
 	//
-	// label 是 UI 展示标题,可为空(匿名作用域)。
+	// label is the title a UI shows, and may be empty for an anonymous scope.
 	Step(ctx context.Context, label string, fn func(stepCtx context.Context, s Step) error) error
 }
 
-// Step is-a Writer,代表一个嵌套容器。
-// 接口面跟 Writer 完全一致 — 没有显式 Close 方法,框架在 Writer.Step 的闭包结束时
-// 自动 Close,outcome 由闭包返回值决定。
+// Step is a Writer representing a nested container. Its surface is exactly
+// Writer's: there is no explicit Close, because the framework closes it when
+// Writer.Step's closure ends, and the closure's return value decides the outcome.
 type Step interface {
 	Writer
 }
 
-// TurnWriter is-a Writer + Turn 根专属能力(FinalAnswer)。
-// 仅 Handler 收到的根 Writer 是 TurnWriter,Step 不是。
+// TurnWriter is a Writer plus what only the Turn root can do: the final answer.
+// The root Writer a Handler receives is a TurnWriter; a Step is not.
 //
-// FinalAnswer 写入后 Turn 进入 sealed 状态:后续任何 Write* / Stream* / Step
-// 都返回 ErrTurnClosed。
+// Once the final answer is written the Turn is sealed, and every later Write*,
+// Stream*, or Step returns ErrTurnClosed.
 type TurnWriter interface {
 	Writer
 
-	// FinalAnswer 写最终回答(立即 Completed)。每个 Turn 只能调一次,
-	// 第二次调返回 ErrTurnClosed。
+	// FinalAnswer writes the final answer, Completed at once. It may be called once
+	// per Turn; the second call returns ErrTurnClosed.
 	FinalAnswer(ctx context.Context, text string) error
 
-	// StreamFinalAnswer 流式写最终回答。
-	// 闭包结束(返 nil)即 Turn 封口,后续写入返 ErrTurnClosed。
-	// 闭包返 error → 不封口(business 可选择重试或直接 return)。
+	// StreamFinalAnswer streams the final answer. A nil return from the closure seals
+	// the Turn, and later writes return ErrTurnClosed. An error leaves it unsealed, so
+	// product code may retry or return.
 	StreamFinalAnswer(ctx context.Context, fn func(FinalAnswerStream) error) error
 }

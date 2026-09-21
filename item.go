@@ -2,123 +2,133 @@ package loom
 
 import "time"
 
-// ItemKind Item 的种类。每个 Kind 用到的字段集合不同,见 Item struct 的字段注释。
+// ItemKind is the kind of an Item. Each kind uses a different set of fields; see the field
+// comments on Item.
 type ItemKind string
 
 const (
-	// ItemKindUserMessage 用户提问。每个 Turn 单例。
-	// 字段:Text。
+	// ItemKindUserMessage is the user's question. One per Turn.
+	// Fields: Text.
 	ItemKindUserMessage ItemKind = "user_message"
 
-	// ItemKindReasoning LLM 推理过程(reasoning_content)。
-	// 字段:Text。
+	// ItemKindReasoning is the model's reasoning, its reasoning_content.
+	// Fields: Text.
 	ItemKindReasoning ItemKind = "reasoning"
 
-	// ItemKindStep 嵌套容器(代码编排 sub flow)。
-	// 字段:Label + Children。
+	// ItemKindStep is a nested container, a code-orchestrated sub flow.
+	// Fields: Label and Children.
 	ItemKindStep ItemKind = "step"
 
-	// ItemKindToolCall LLM 发起的工具调用。
-	// 字段:ToolName / ToolCallID / Arguments。
+	// ItemKindToolCall is a tool call the model asked for.
+	// Fields: ToolName, ToolCallID, Arguments.
 	ItemKindToolCall ItemKind = "tool_call"
 
-	// ItemKindToolResult 工具执行结果。
-	// 字段:ToolName / ToolCallID / Output / Error。
+	// ItemKindToolResult is the result of running a tool.
+	// Fields: ToolName, ToolCallID, Output, Error.
 	ItemKindToolResult ItemKind = "tool_result"
 
-	// ItemKindFinalAnswer 最终回答。每个 Turn 单例。
-	// 字段:Text。Turn 状态机:写入后 Turn 标 Completed。
+	// ItemKindFinalAnswer is the final answer. One per Turn.
+	// Fields: Text. Writing one moves the Turn to Completed.
 	ItemKindFinalAnswer ItemKind = "final_answer"
 )
 
-// ItemStatus 单个 Item 的生命周期状态。
+// ItemStatus is the lifecycle state of one Item.
 type ItemStatus string
 
 const (
-	// ItemStatusInProgress 流式中 / 未闭合。
+	// ItemStatusInProgress is still streaming or otherwise open.
 	ItemStatusInProgress ItemStatus = "in_progress"
-	// ItemStatusCompleted 正常完成。
+	// ItemStatusCompleted finished normally.
 	ItemStatusCompleted ItemStatus = "completed"
-	// ItemStatusCancelled 被取消(用户主动 / 超时 / host 取消),不是错误。
+	// ItemStatusCancelled was cancelled by the user, a timeout, or the host. It is not
+	// an error.
 	ItemStatusCancelled ItemStatus = "cancelled"
-	// ItemStatusFailed 真错误(Error 字段必填)。
+	// ItemStatusFailed is a real error, so Error is required.
 	ItemStatusFailed ItemStatus = "failed"
 )
 
-// ItemError Item 失败时的结构化错误。
-// Tool 调用失败、Reasoning 中断、Step 失败等都用此结构。
+// ItemError is the structured error of a failed Item. A failed tool call, an
+// interrupted reasoning block, and a failed step all use it.
 type ItemError struct {
-	// Code 机器可识别的错误码(open enum,业务可扩)。
-	// 常见:"tool_failed" / "llm_error" / "validation_failed" / ...
+	// Code is a machine-readable error code, an open enum the product may extend.
+	// Common values: "tool_failed", "llm_error", "validation_failed", and so on.
 	Code string
-	// Message 人类可读错误描述。
+	// Message is a human-readable description.
 	Message string
 }
 
-// Item Turn 内的一个节点(用户输入 / agent 输出过程 / step 容器 / ...)。
+// Item is one node inside a Turn: the user's input, part of the agent's output
+// process, a step container, and so on.
 //
-// 设计原则:**通用 struct + Kind 字段**,不用 sealed interface。
-// 优势:JSON 序列化直接落库 / 跨语言友好 / Sink 实现读字段不用 type switch。
+// The design is deliberately one generic struct plus a Kind field rather than a
+// sealed interface: JSON serialization goes straight to storage, other languages
+// can read it, and a Sink reads fields without a type switch.
 //
-// 字段使用约定(按 Kind 分):
-//   - user_message / reasoning / final_answer:Text
-//   - step:Label + Children(嵌套子 item)
-//   - tool_call:ToolName / ToolCallID / Arguments
-//   - tool_result:ToolName / ToolCallID / Output / Error
-//   - failed item(任意 Kind 状态=Failed):Error 必填
+// Which fields a given Kind uses:
+//   - user_message / reasoning / final_answer: Text
+//   - step: Label and Children (nested items)
+//   - tool_call: ToolName, ToolCallID, Arguments
+//   - tool_result: ToolName, ToolCallID, Output, Error
+//   - any Kind whose status is Failed: Error is required
 //
-// 仅 Kind=step 时 Children 才允许非空。
+// Children may only be non-empty when Kind=step.
 type Item struct {
-	// Kind 决定本 Item 用哪些字段。
+	// Kind decides which fields this Item uses.
 	Kind ItemKind
 
-	// Index 同 parent 下同 Kind 的 0-based 下标。
-	// 例:某 step 内的第 2 个 reasoning,Index=1。
+	// Index is the 0-based position of this Kind under the same parent. The second
+	// reasoning inside a step has Index=1.
 	Index uint64
 
-	// Path 完整路径,如 "turn[0].step[1].reasoning[0]"。
-	// 派生自 (Turn.Index, 在 Items 树中的位置, Kind, Index),由框架填充。
+	// Path is the full path, such as "turn[0].step[1].reasoning[0]". The framework
+	// derives it from the Turn index, the position in the Items tree, the Kind, and
+	// Index.
 	Path string
 
-	// Status Item 生命周期状态。
+	// Status is this Item's lifecycle state.
 	Status ItemStatus
 
-	// ===== Kind-specific 字段(只填一部分,按 Kind 决定) =====
+	// ===== Kind-specific fields, of which only some are filled =====
 
-	// Text user_message / reasoning / final_answer / note 用。
+	// Text is used by user_message, reasoning, final_answer, and note.
 	Text string
 	// MessageSource / MessagePurpose are only used by persisted user messages.
 	MessageSource  MessageSource
 	MessagePurpose MessagePurpose
-	// Label 所有 Item 通用的人类可读标签(可空 — UI 渲染时自行用 Kind+Index 派生默认)。
-	// step 用作阶段标题,reasoning / tool_call / tool_result 用作子项短描述。
+	// Label is a human-readable label any Item may carry, and may be empty: a UI can
+	// derive a default from the Kind and Index. A step uses it as its phase title;
+	// reasoning, tool_call, and tool_result use it as a short description.
 	Label string
-	// ToolName tool_call / tool_result 用。
+	// ToolName is used by tool_call and tool_result.
 	ToolName string
-	// ToolCallID tool_call / tool_result 用,配对标识(LLM 分配)。
+	// ToolCallID is used by tool_call and tool_result as the pairing identity the
+	// model assigned.
 	ToolCallID string
-	// Arguments tool_call 用,工具入参(JSON 字符串)。
+	// Arguments is used by tool_call: the tool's input as a JSON string.
 	Arguments string
-	// Output tool_result 用,工具返回(JSON 字符串,任意结构)。
+	// Output is used by tool_result: the tool's return value as a JSON string of
+	// any structure.
 	Output string
-	// Error item 失败时填(Status=Failed 必填,其它状态留 nil)。
+	// Error is set when the item failed. It is required for Failed and nil for any
+	// other status.
 	Error *ItemError
 
-	// ===== 嵌套(仅 Kind=step) =====
+	// ===== Nesting (Kind=step only) =====
 
-	// Children 嵌套子 items。仅 Kind=step 时允许非空,其它 Kind 必须 nil。
-	// 任意深度嵌套 — step 可嵌套 step 表达 sub flow。
+	// Children holds nested items. It may be non-empty only when Kind=step, and must
+	// be nil otherwise. Nesting goes to any depth: a step contains a step to express
+	// a sub flow.
 	Children []Item
 
-	// ===== Token 累计(仅 Kind=step 有意义) =====
+	// ===== Token accumulation (meaningful for Kind=step only) =====
 
-	// Usage 本 step 及其子树下所有 LLM 调用的累计 token 用量。
-	// LLMCalledEvent 触发时,框架沿触发 scope 的 indices 链向上累加到各祖先 step
-	// 的 Usage(也累加到 turnState 根)。
-	// 其它 Kind 该字段保持零值。
+	// Usage accumulates the token usage of every LLM call in this step and its
+	// subtree. When an LLMCalledEvent fires, the framework walks the index chain of
+	// the scope that triggered it up through each ancestor step's Usage, the turn
+	// root included. Every other Kind leaves this at its zero value.
 	Usage Usage
 
-	// ===== 时间戳 =====
+	// ===== Timestamps =====
 
 	StartedAt time.Time
 	UpdatedAt time.Time

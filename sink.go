@@ -2,20 +2,23 @@ package loom
 
 import "context"
 
-// Sink agent 框架的下游事件消费端口。
+// Sink is where an agent framework's downstream events are consumed.
 //
-// 实现可插拔:
-//   - sinks/memory:测试用,内存收集事件
-//   - sinks/log:zap 结构化日志
-//   - sinks/tee:多个 Sink 组合 fan-out
-//   - 业务侧实现:EntSink(落库)/ WSSink(推前端)/ ProtoStreamSink 等
+// Implementations are pluggable:
+//   - sinks/memory: for tests, collecting events in memory
+//   - sinks/log: structured logging through zap
+//   - sinks/tee: fan-out to several Sinks
+//   - product code: an EntSink for persistence, a WSSink pushing to a frontend,
+//     a ProtoStreamSink, and so on
 //
-// Sink 失败的处理由 RunOptions.OnSinkErr 决定:
-//   - 默认 swallow + 回调 log warn,主流程继续
-//   - StrictSink=true 时任一失败立即让整 Turn 失败
+// RunOptions.OnSinkErr decides what a sink failure means:
+//   - by default it is swallowed and reported through the callback, and the main
+//     flow continues
+//   - with StrictSink=true any failure fails the whole Turn at once
 //
-// Sink 实现需要线程安全:同一 Turn 在一个 goroutine 内串行调用,
-// 但不同 Sink 实现可能被多个并发 Turn 共享。
+// A Sink implementation must be safe for concurrent use. One Turn calls its sinks
+// serially from a single goroutine, but one Sink may be shared by several Turns
+// at the same time.
 type Sink interface {
 	ItemStarted(ctx context.Context, ev ItemStartedEvent) error
 	ItemDelta(ctx context.Context, ev ItemDeltaEvent) error

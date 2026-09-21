@@ -5,42 +5,44 @@ import (
 	"time"
 )
 
-// turnRoot 实现 TurnWriter 接口。
-// Writer 方法全部继承 writerScope,仅 FinalAnswer / StreamFinalAnswer 为 turn 根专属。
+// turnRoot implements TurnWriter. Every Writer method comes from writerScope; only
+// FinalAnswer and StreamFinalAnswer belong to the turn root.
 type turnRoot struct {
 	*writerScope
 }
 
-// 编译期接口断言。
+// Compile-time interface assertions.
 var _ TurnWriter = (*turnRoot)(nil)
 
-// newTurnRoot 构造 Turn 根 Writer(供 Run 使用)。
+// newTurnRoot builds the Turn root Writer that Run hands to a handler.
 func newTurnRoot(state *turnState) *turnRoot {
 	return &turnRoot{writerScope: newRootScope(state)}
 }
 
-// FinalAnswer 写最终回答(立即 Completed)。
-// 每个 Turn 只能调一次,第二次返 ErrTurnClosed。
+// FinalAnswer writes the final answer, Completed at once. It may be called once
+// per Turn; the second call returns ErrTurnClosed.
 func (t *turnRoot) FinalAnswer(ctx context.Context, text string) error {
 	return t.writeFinalAnswer(ctx, text, false, nil)
 }
 
-// StreamFinalAnswer 流式写最终回答。
-// 闭包返 nil → Turn 封口;返 error → 不封口(业务方可重试或直接 return)。
+// StreamFinalAnswer streams the final answer. A nil return seals the Turn; an
+// error leaves it unsealed, so product code may retry or return.
 func (t *turnRoot) StreamFinalAnswer(ctx context.Context, fn func(FinalAnswerStream) error) error {
 	return t.writeFinalAnswer(ctx, "", true, fn)
 }
 
-// writeFinalAnswer 一次性 / 流式共用入口。
-//   - streaming=false:item 立即 Completed,sealed 后 emit Started+Finished
-//   - streaming=true:item 先 InProgress,跑闭包,根据返回值 finalize,成功时才 sealed
+// writeFinalAnswer is the shared entry point for the one-shot and streaming paths.
+//   - streaming=false: the item is Completed at once, and Started and Finished are
+//     emitted after sealing
+//   - streaming=true: the item starts InProgress, the closure runs, the item is
+//     finalized from its return value, and the Turn seals only on success
 func (t *turnRoot) writeFinalAnswer(
 	ctx context.Context,
 	text string,
 	streaming bool,
 	fn func(FinalAnswerStream) error,
 ) error {
-	// 1. check sealed + 分配 final_answer item
+	// 1. check the seal and allocate the final_answer item
 	t.state.mu.Lock()
 	if t.state.isClosed() {
 		t.state.mu.Unlock()
@@ -54,7 +56,7 @@ func (t *turnRoot) writeFinalAnswer(
 		Kind:      ItemKindFinalAnswer,
 		Index:     idx,
 		Path:      path,
-		Status:    ItemStatusInProgress, // 流式先 InProgress;一次性下面立即覆盖
+		Status:    ItemStatusInProgress, // streaming starts here; the one-shot path overwrites it below
 		StartedAt: now,
 		UpdatedAt: now,
 	}
@@ -70,13 +72,13 @@ func (t *turnRoot) writeFinalAnswer(
 	t.state.emitItemStarted(ctx, item)
 
 	if !streaming {
-		// 一次性:封口 + emit Finished
+		// One-shot: seal, then emit Finished
 		t.seal(ctx)
 		t.state.emitItemFinished(ctx, item)
 		return nil
 	}
 
-	// 流式:跑闭包 → finalize → 成功才封口
+	// Streaming: run the closure, finalize, and seal only on success
 	stream := &itemTextStream{state: t.state, itemPath: path}
 	fnErr := fn(stream)
 	snapshot := t.finalizeStreamItem(selfIdx, stream.core.finalize(), fnErr)
@@ -87,8 +89,8 @@ func (t *turnRoot) writeFinalAnswer(
 	return fnErr
 }
 
-// seal 翻 state.closeReason = {Completed, "final_answer"}。
-// 调用方不持 mu,本方法内部加锁。
+// seal sets state.closeReason to {Completed, "final_answer"}. The caller holds no
+// lock; this method takes it.
 func (t *turnRoot) seal(_ context.Context) {
 	t.state.mu.Lock()
 	defer t.state.mu.Unlock()
