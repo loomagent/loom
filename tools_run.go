@@ -8,19 +8,17 @@ import (
 	"fmt"
 )
 
-// ExecuteToolCalls 批量执行 LLM 返回的一组 ToolCall(典型 ReAct 场景)。
+// ExecuteToolCalls runs the set of tool calls a model returned, the typical ReAct
+// case. For every call it writes the tool_call, looks the tool up and invokes it,
+// then writes the tool_result.
 //
-// 对每个 ToolCall:
-//  1. WriteToolCall 写记录(label = call.Name)
-//  2. registry.Lookup(call.Name).Invoke(ctx, call.Arguments)
-//  3. WriteToolResult 写结果
+// This first version runs serially.
 //
-// 第一版串行执行;后续可加并发选项。
+// The results come back in the order of the calls argument. A failed sink write, in
+// strict mode, returns early with an error; one tool failing does not stop the rest,
+// it fills in Err and the next call runs.
 //
-// 返回结果按入参 calls 顺序排列。任一 Sink 写入失败(strict 模式)返 error 早退;
-// 单个 tool 执行失败不中断 — Err 字段填,继续执行下一个。
-//
-// 业务方典型用法:
+// A typical use:
 //
 //	results, err := loom.ExecuteToolCalls(ctx, w, registry, resp.ToolCalls)
 //	if err != nil { return err }
@@ -45,24 +43,26 @@ func ExecuteToolCalls(
 	return out, nil
 }
 
-// ToolExecResult 单个工具执行结果。
+// ToolExecResult is the outcome of running one tool.
 type ToolExecResult struct {
-	Call   ToolCall // 原始 ToolCall(含 ID/Name/Arguments)
-	Output string   // 工具返回值(失败时可能为空)
-	Err    error    // tool 未注册 / Invoke 失败时填;Sink 写入失败也会出现在这
+	Call   ToolCall // the original ToolCall, with its ID, name, and arguments
+	Output string   // the tool's return value, possibly empty on failure
+	Err    error    // set when the tool is unregistered or Invoke fails; a sink write failure lands here too
 }
 
-// RunToolByName 代码编排场景:业务方主动调一个工具,args 是任意 Go 值。
+// RunToolByName is the code-orchestration case: product code calls one tool itself,
+// with args as any Go value.
 //
-// 与 ExecuteToolCalls 区别:
-//   - args 是 Go struct/map,内部 jsonv2.Marshal,业务方不手拼 JSON
-//   - callID 由 loom 自动生成("call_0" / "call_1" /...turn 内递增)
-//   - 单调一次,不接受批量
+// How it differs from ExecuteToolCalls:
+//   - args is a Go struct or map that jsonv2.Marshal handles here, so product code
+//     never assembles JSON by hand
+//   - loom assigns the call ID ("call_0", "call_1", ...), incrementing within the turn
+//   - one call at a time, no batches
 //
-// 业务方典型用法:
+// A typical use:
 //
 //	type SearchArgs struct{ Query string `json:"query"` }
-//	output, err := loom.RunToolByName(ctx, w, "搜索: AI", registry,
+//	output, err := loom.RunToolByName(ctx, w, "search: AI", registry,
 //	    "web_search", SearchArgs{Query: "ai"})
 func RunToolByName(
 	ctx context.Context,
@@ -84,7 +84,7 @@ func RunToolByName(
 	return runOneTool(ctx, w, label, registry, call)
 }
 
-// runOneTool 内部共用:写 tool_call → invoke → 写 tool_result。
+// runOneTool is shared internally: write the tool_call, invoke, write the tool_result.
 func runOneTool(
 	ctx context.Context,
 	w Writer,
@@ -92,25 +92,27 @@ func runOneTool(
 	registry *ToolRegistry,
 	call ToolCall,
 ) (string, error) {
-	// 1. 写 tool_call
+	// 1. write the tool_call
 	if err := w.WriteToolCall(ctx, label, call); err != nil {
 		return "", err
 	}
 
-	// 从 writer 拿 captureContent 配置(decide tool span 是否落 args/output)
+	// Take captureContent from the writer, which decides whether the tool span records
+	// args and output
 	captureContent := false
 	if sa, ok := w.(scopeAccessor); ok {
 		captureContent = sa.underlyingScope().state.captureContent
 	}
 
-	// 2. 查工具
+	// 2. look the tool up
 	tool, ok := registry.Lookup(call.Name)
 	if !ok || tool == nil {
 		toolErr := &ItemError{
 			Code:    "tool_not_found",
 			Message: fmt.Sprintf("tool %q not registered", call.Name),
 		}
-		// OTel:tool 未注册也起 span,标 Error,便于 trace UI 看到这一类失败。
+		// OTel: an unregistered tool still gets a span, marked Error, so a trace UI can
+		// show this class of failure
 		_, toolSpan := startToolSpan(ctx, call, captureContent)
 		finalizeToolSpan(toolSpan, "", captureContent, fmt.Errorf("%s", toolErr.Message))
 		_ = w.WriteToolResult(ctx, label, ToolResult{
@@ -121,8 +123,9 @@ func runOneTool(
 		return "", fmt.Errorf("loom: %s", toolErr.Message)
 	}
 
-	// 3. 执行 + 写 tool_result(整个 invoke 全程包在 tool span 内,tool 内部如再起子 span
-	//    自然嵌在它之下 — 见 loomtools/* 各 tool 实现)
+	// 3. invoke, then write the tool_result. The whole invoke runs inside the tool
+	// span, so any child span a tool starts nests below it; see the loomtools/*
+	// implementations
 	toolCtx, toolSpan := startToolSpan(ctx, call, captureContent)
 	output, invokeErr := tool.Invoke(toolCtx, call.Arguments)
 	finalizeToolSpan(toolSpan, output, captureContent, invokeErr)
@@ -144,15 +147,16 @@ func runOneTool(
 	return output, invokeErr
 }
 
-// scopeAccessor helper 用,从 Writer 取出底层 writerScope(进而拿到 turnState)。
-// loom 内置 Writer 实现(writerScope / step / turnRoot)都通过 embedding 满足。
+// scopeAccessor is what a helper uses to reach the writerScope behind a Writer, and
+// from it the turnState. Every built-in Writer in loom (writerScope, step, turnRoot)
+// satisfies it through embedding.
 type scopeAccessor interface {
 	underlyingScope() *writerScope
 }
 
-// resolveCallID 为代码编排场景生成 callID。
-// 优先用 turnState.nextToolCallIDLocked("call_N");
-// 业务方传第三方 Writer 实现时 fallback 到 rand hex。
+// resolveCallID builds a call ID for the code-orchestration case. It prefers
+// turnState.nextToolCallIDLocked, "call_N", and falls back to random hex when product
+// code passes a third-party Writer implementation.
 func resolveCallID(w Writer) string {
 	if sa, ok := w.(scopeAccessor); ok {
 		s := sa.underlyingScope().state

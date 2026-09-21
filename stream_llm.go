@@ -7,25 +7,28 @@ import (
 	"strings"
 )
 
-// StreamLLMToStep 把 LLM 流式输出自动桥接到 Writer 写出:
-//   - reasoning_content chunk → 实时 emit 到一条 reasoning item(流式)
-//   - content chunk           → 累积到返回值 ChatResponse.Content(不直接写 item;
-//     业务方拿到后自决:写 FinalAnswer / 跳过)
-//   - tool_call chunks        → 按 Index 拼装成完整 ToolCall,落 WriteToolCall
+// StreamLLMToStep bridges a streaming LLM response to Writer output:
+//   - a reasoning_content chunk is emitted to a reasoning item as it arrives
+//   - a content chunk accumulates into the returned ChatResponse.Content rather than
+//     writing an item, leaving product code to write the final answer or skip it
+//   - tool_call chunks are assembled into complete ToolCalls by Index
 //
-// reasoning lazy 开:
-//   - 模型不返 reasoning_content → 不开 reasoning item,不落空 item
-//   - 模型返 reasoning → 第一个 reasoning chunk 出现时立即开 StreamReasoning 闭包,
-//     之前阶段累积的 reasoning 也立即 flush
+// Reasoning opens lazily:
+//   - a model that returns no reasoning_content gets no reasoning item and no empty
+//     item
+//   - a model that reasons opens the StreamReasoning closure on the first chunk, and
+//     flushes whatever accumulated before it
 //
-// 返回 ChatResponse 含 Content / ReasoningContent / ToolCalls / Usage / FinishReason / Model。
-// ReasoningContent 累积完整 reasoning 总文本 — DeepSeek thinking 模式要求 multi-turn
-// tool calling 时必须把上一轮 assistant message 的 reasoning_content 原样透传给 API
-// (否则报 "The reasoning_content in the thinking mode must be passed back to the API")。
-// 同一份 reasoning 也通过 ReasoningStream 落到 item,业务方拿 resp.ReasoningContent 拼下一轮
-// 是为了协议合规,不需要业务方再次写 item。
+// The returned ChatResponse carries Content, ReasoningContent, ToolCalls, Usage,
+// FinishReason, and Model. ReasoningContent holds the whole reasoning text, because
+// DeepSeek's thinking mode requires the previous assistant message's
+// reasoning_content to be passed back unchanged across a multi-turn tool-calling
+// loop; otherwise the API reports "The reasoning_content in the thinking mode must be
+// passed back to the API". That same reasoning also lands in an item through
+// ReasoningStream, so product code only needs to take resp.ReasoningContent into the
+// next round for protocol compliance, not to write another item.
 //
-// 业务方典型 ReAct 循环用法:
+// A typical ReAct loop in product code:
 //
 //	for {
 //	    resp, err := loom.StreamLLMToStep(ctx, w, "react.main", model, req)
@@ -34,7 +37,7 @@ import (
 //	        return w.FinalAnswer(ctx, resp.Content)
 //	    }
 //	    results, _ := loom.ExecuteToolCalls(ctx, w, registry, resp.ToolCalls)
-//	    // 拼回 msgs 进入下一轮
+//	    // append to msgs for the next round
 //	}
 func StreamLLMToStep(
 	ctx context.Context,
@@ -43,8 +46,9 @@ func StreamLLMToStep(
 	model ChatModel,
 	req ChatRequest,
 ) (*ChatResponse, error) {
-	// OTel:起 LLM span(GenAI semconv)。captureContent 决定 prompt/completion 是否写
-	// span attribute(从 turnState 透传)。
+	// OTel: start the LLM span, following the GenAI semantic conventions.
+	// captureContent, which comes through turnState, decides whether the prompt and the
+	// completion are written to span attributes.
 	captureContent := false
 	if sa, ok := w.(scopeAccessor); ok {
 		captureContent = sa.underlyingScope().state.captureContent
@@ -59,12 +63,12 @@ func StreamLLMToStep(
 	defer func() {
 		_ = stream.Close()
 	}()
-	ctx = llmCtx // 后续 reasoning stream / tool_call 写入都用这个 ctx,自然嵌入 LLM span
+	ctx = llmCtx // later reasoning and tool-call writes use this ctx and nest under the LLM span
 
 	var (
 		contentBuf        strings.Builder
 		bufferedReasoning strings.Builder
-		totalReasoning    strings.Builder // 累积完整 reasoning,供 resp.ReasoningContent 协议透传
+		totalReasoning    strings.Builder // the whole reasoning, for the protocol handoff in resp.ReasoningContent
 		toolCallsAcc      = map[int]*ToolCall{}
 		toolCallsOrder    []int
 		usage             *Usage
@@ -72,8 +76,9 @@ func StreamLLMToStep(
 		modelID           string
 	)
 
-	// consume 处理一个 chunk。rs != nil 时 reasoning 实时 emit;否则累积到 buffer。
-	// totalReasoning 始终累积(给协议透传用),跟 rs/buffer 分支正交。
+	// consume handles one chunk. With rs non-nil, reasoning is emitted live; otherwise
+	// it accumulates in the buffer. totalReasoning always accumulates, for the protocol
+	// handoff, independently of the rs and buffer branches.
 	consume := func(chunk *Chunk, rs ReasoningStream) error {
 		if chunk.ReasoningContentDelta != "" {
 			totalReasoning.WriteString(chunk.ReasoningContentDelta)
@@ -109,12 +114,12 @@ func StreamLLMToStep(
 		return nil
 	}
 
-	// 阶段 1:消费 stream 直到看到第一个 reasoning chunk 或 EOF。
+	// Stage 1: consume the stream until the first reasoning chunk or EOF.
 	reasoningSeen := false
 	for !reasoningSeen {
 		chunk, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
-			break // 全程无 reasoning
+			break // no reasoning at all
 		}
 		if err != nil {
 			return nil, err
@@ -130,17 +135,17 @@ func StreamLLMToStep(
 		}
 	}
 
-	// 阶段 2:有 reasoning 才开 StreamReasoning。
+	// Stage 2: open StreamReasoning only when there is reasoning.
 	if reasoningSeen {
 		rsErr := w.StreamReasoning(ctx, "", func(rs ReasoningStream) error {
-			// flush 阶段 1 累积的 reasoning(从看到第一个 reasoning 到这里之间的)
+			// Flush what stage 1 accumulated, from the first reasoning chunk to here
 			if buf := bufferedReasoning.String(); buf != "" {
 				if err := rs.AppendText(ctx, buf); err != nil {
 					return err
 				}
 				bufferedReasoning.Reset()
 			}
-			// 继续消费剩余 stream
+			// Keep consuming the rest of the stream
 			for {
 				chunk, err := stream.Recv()
 				if errors.Is(err, io.EOF) {
@@ -163,15 +168,16 @@ func StreamLLMToStep(
 		}
 	}
 
-	// 阶段 3:把累积的 tool_calls 收成切片,拼装 ChatResponse。
-	// 注意:此处不 WriteToolCall — 让 ExecuteToolCalls/runOneTool 在真正 invoke 前
-	// 写 tool_call item,保证 tool_call/tool_result 一一对应,避免提前落 item 后业务方
-	// 决定 skip 调用导致悬挂。LLM 没传 ID 时按 turn 内部计数派一个。
+	// Stage 3: collect the accumulated tool calls and build the ChatResponse.
+	// Note that no tool_call item is written here. ExecuteToolCalls and runOneTool write
+	// it just before invoking, which keeps tool_call and tool_result paired and avoids
+	// a dangling item when product code decides to skip a call. When the model supplied
+	// no ID, one is assigned from the turn's internal counter.
 	var calls []ToolCall
 	for _, idx := range toolCallsOrder {
 		c := toolCallsAcc[idx]
 		if c == nil {
-			continue // 不变量上不会发生:order 跟 map 同时被 append
+			continue // unreachable: order and map are appended together
 		}
 		if c.ID == "" {
 			c.ID = resolveCallID(w)
@@ -190,9 +196,10 @@ func StreamLLMToStep(
 		resp.Usage = *usage
 	}
 
-	// 阶段 4:emit LLMCalled — 让 sink 把 usage 累加到 step / turn 维度。
-	// 没有 usage 帧时不 emit(避免污染累计字段 + 触发空 UPDATE)。
-	// turn 根 / 任意 step 都用同一份逻辑:scope 沿 indices 累加。
+	// Stage 4: emit LLMCalled, so a sink can accumulate usage at the step and turn
+	// level. Without a usage frame it is not emitted, which avoids polluting the
+	// accumulated fields and an empty UPDATE. The turn root and any step use the same
+	// logic: the scope accumulates along the index chain.
 	if usage != nil && nonZeroUsage(*usage) {
 		if sa, ok := w.(scopeAccessor); ok {
 			scope := sa.underlyingScope()
@@ -200,7 +207,8 @@ func StreamLLMToStep(
 		}
 	}
 
-	// 阶段 5:OTel — 填响应 attribute(usage / model / finish_reason / completion),End span。
+	// Stage 5: OTel. Fill the response attributes (usage, model, finish_reason,
+	// completion) and end the span.
 	finalizeLLMSpan(llmSpan, resp, captureContent, nil)
 	return resp, nil
 }

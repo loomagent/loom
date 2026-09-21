@@ -5,21 +5,26 @@ import (
 	"strings"
 )
 
-// HistoryToMessages 把历史 Turn 列表 + 本轮 input 转成 LLM Message 序列,可直接喂 ChatModel。
+// HistoryToMessages turns the history turns plus this round's input into a sequence
+// of LLM Messages that can be handed straight to a ChatModel.
 //
-// 转换规则(按 Turn.Items 树深度优先遍历):
+// Rules, walking the Turn.Items tree depth first:
 //   - user_message  → Message{Role: RoleUser, Content: Text}
-//   - reasoning     → 累积,塞入紧随其后第一条 assistant message 的 ReasoningContent
-//   - tool_call     → 累积,遇到下个 tool_result/final_answer 时合并成一条 assistant message
+//   - reasoning     → accumulated, and folded into the ReasoningContent of the first
+//     assistant message that follows it
+//   - tool_call     → accumulated, and merged into one assistant message when the
+//     next tool_result or final_answer appears
 //   - tool_result   → Message{Role: RoleTool, ToolCallID, Content: Output}
-//   - final_answer  → Message{Role: RoleAssistant, Content: Text}(带累积的 ReasoningContent)
-//   - note / step   → 不出现在喂 LLM 的对话流(过程信息,LLM 不需要)
+//   - final_answer  → Message{Role: RoleAssistant, Content: Text}, carrying the
+//     accumulated ReasoningContent
+//   - note / step   → absent from the conversation fed to the model, since process
+//     information is not something the model needs
 //
-// reasoning 配对原则:紧跟它之后第一条 assistant message。这样 LLM 看到的
-// "reasoning + 该轮产出" 跟原始 LLM 调用时的形态一致。多个 reasoning 在同一条
-// assistant message 之前出现时,用 "\n\n" 拼接。
+// Reasoning pairs with the first assistant message after it, so the model sees
+// "reasoning plus that round's output" in the same shape it produced. Several
+// reasoning blocks before one assistant message are joined with "\n\n".
 //
-// 末尾追加本轮 input 作为 user message。
+// This round's input is appended last as a user message.
 func HistoryToMessages(history []Turn, input UserMessage) ([]Message, error) {
 	var out []Message
 	for i := range history {
@@ -37,25 +42,26 @@ func validateHistoryTurnForMessages(turn *Turn) error {
 	case TurnStatusCompleted:
 		return nil
 	case TurnStatusQueued:
-		return fmt.Errorf("history turn[%d] status=%s,尚未执行完成,不能拼 LLM 上下文", turn.Index, turn.Status)
+		return fmt.Errorf("history turn[%d] has status=%s and has not finished; it cannot form LLM context", turn.Index, turn.Status)
 	case TurnStatusInProgress:
-		return fmt.Errorf("history turn[%d] status=%s,仍在执行中,不能拼 LLM 上下文", turn.Index, turn.Status)
+		return fmt.Errorf("history turn[%d] has status=%s and is still running; it cannot form LLM context", turn.Index, turn.Status)
 	case TurnStatusCancelled:
-		return fmt.Errorf("history turn[%d] status=%s,未正确结束,不能拼 LLM 上下文", turn.Index, turn.Status)
+		return fmt.Errorf("history turn[%d] has status=%s and did not end cleanly; it cannot form LLM context", turn.Index, turn.Status)
 	case TurnStatusFailed:
-		return fmt.Errorf("history turn[%d] status=%s,未正确结束,不能拼 LLM 上下文", turn.Index, turn.Status)
+		return fmt.Errorf("history turn[%d] has status=%s and did not end cleanly; it cannot form LLM context", turn.Index, turn.Status)
 	default:
-		return fmt.Errorf("history turn[%d] status=%q 未知,不能拼 LLM 上下文", turn.Index, turn.Status)
+		return fmt.Errorf("history turn[%d] has unknown status=%q; it cannot form LLM context", turn.Index, turn.Status)
 	}
 }
 
-// turnToMessages 把单个 Turn 转成 LLM Message 列表。
+// turnToMessages turns one Turn into a list of LLM Messages.
 func turnToMessages(turn *Turn) []Message {
 	var out []Message
 	var pendingCalls []ToolCall
 	var pendingReasoning strings.Builder
 
-	// appendAssistantMsg 构造 assistant message,自动塞入 pendingReasoning 并清空。
+	// appendAssistantMsg builds an assistant message, folding in pendingReasoning and
+	// clearing it.
 	appendAssistantMsg := func(content string, calls []ToolCall) {
 		msg := Message{
 			Role:    RoleAssistant,
@@ -71,7 +77,7 @@ func turnToMessages(turn *Turn) []Message {
 		out = append(out, msg)
 	}
 
-	// flushCalls 把累积的 tool_calls 收成一条 assistant message。
+	// flushCalls folds the accumulated tool calls into one assistant message.
 	flushCalls := func() {
 		if len(pendingCalls) > 0 {
 			appendAssistantMsg("", pendingCalls)
@@ -83,7 +89,8 @@ func turnToMessages(turn *Turn) []Message {
 		switch it.Kind {
 		case ItemKindUserMessage:
 			flushCalls()
-			// user 前若有孤儿 reasoning(罕见,逻辑异常),作 assistant message 输出避免丢失
+			// Orphaned reasoning before a user message is rare and means a logic error;
+			// emit it as an assistant message rather than lose it
 			if pendingReasoning.Len() > 0 {
 				appendAssistantMsg("", nil)
 			}
@@ -103,7 +110,7 @@ func turnToMessages(turn *Turn) []Message {
 			})
 
 		case ItemKindToolResult:
-			flushCalls() // 先把累积 tool_calls 收成 assistant message(带 reasoning)
+			flushCalls() // fold the accumulated tool calls into an assistant message first
 			out = append(out, Message{
 				Role:       RoleTool,
 				ToolCallID: it.ToolCallID,
@@ -114,21 +121,23 @@ func turnToMessages(turn *Turn) []Message {
 			flushCalls()
 			appendAssistantMsg(it.Text, nil)
 		case ItemKindStep:
-			// step 是容器,walkItems 会继续遍历它的 children。
+			// A step is a container; walkItems descends into its children.
 		default:
-			// 未知 kind 不进入 LLM 历史,避免把不可解释的过程数据喂给模型。
+			// An unknown kind stays out of the LLM history, so process data the model
+			// cannot interpret is never fed to it.
 		}
 	})
 
 	flushCalls()
-	// 末尾兜底:孤儿 reasoning(turn 没 final_answer 也没 tool_call)
+	// The final catch: reasoning with nothing after it, no final answer and no tool
+	// call
 	if pendingReasoning.Len() > 0 {
 		appendAssistantMsg("", nil)
 	}
 	return out
 }
 
-// walkItems 深度优先遍历 Items 树。
+// walkItems walks the Items tree depth first.
 func walkItems(items []Item, fn func(*Item)) {
 	for i := range items {
 		fn(&items[i])
@@ -138,16 +147,20 @@ func walkItems(items []Item, fn func(*Item)) {
 	}
 }
 
-// AppendAssistantTurn 把一轮 LLM 响应 + 工具执行结果按 LLM 协议拼到 messages 末尾。
+// AppendAssistantTurn appends one round of LLM response plus its tool results to the
+// end of messages, following the LLM protocol.
 //
-// 拼出来的结构(供下一轮 LLM 调用):
-//   - 1 条 assistant message(含 Content / ReasoningContent / ToolCalls)
-//   - N 条 tool message(每个 tool_call 一条,Content = Output 或错误描述)
+// The shape it builds, ready for the next call:
+//   - one assistant message carrying Content, ReasoningContent, and ToolCalls
+//   - one tool message per tool call, with Content set to the output or to the error
+//     description
 //
-// 业务方在 ReAct 类循环内调用,代替手动 append 那段样板。
+// Product code calls it inside a ReAct-style loop instead of hand-writing that
+// boilerplate.
 //
-// 工具失败处理:r.Err 非 nil 时,tool message 的 Content 写
-// "tool execution error: <err>",让 LLM 看到失败原因自己决定换工具/重试。
+// A failed tool: when r.Err is non-nil the tool message's Content becomes
+// "tool execution error: <err>", so the model sees why it failed and decides whether
+// to switch tools or to retry.
 func AppendAssistantTurn(msgs []Message, resp *ChatResponse, results []ToolExecResult) []Message {
 	msgs = append(msgs, Message{
 		Role:             RoleAssistant,

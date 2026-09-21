@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// mockStream 模拟 Stream 接口,按预设 chunks 序列返回。
+// mockStream stands in for the Stream interface, returning a preset chunk sequence.
 type mockStream struct {
 	chunks []*Chunk
 	idx    int
@@ -23,7 +23,7 @@ func (s *mockStream) Recv() (*Chunk, error) {
 
 func (s *mockStream) Close() error { return nil }
 
-// mockChatModel 实现 ChatModel,Stream 返预设 mockStream。
+// mockChatModel implements ChatModel; Stream returns a preset mockStream.
 type mockChatModel struct {
 	chunks []*Chunk
 }
@@ -108,8 +108,8 @@ func TestStreamLLMToStep_ToolCallOnly(t *testing.T) {
 	if turn == nil {
 		t.Fatalf("Run returned nil turn")
 	}
-	// 无 reasoning(模型没返)→ 不落 reasoning item。
-	// 无 tool_call item:StreamLLMToStep 不写 tool_call,留给后续 ExecuteToolCalls。
+	// No reasoning, because the model returned none, so no reasoning item.
+	// No tool_call item: StreamLLMToStep leaves it to a later ExecuteToolCalls.
 	// items: final_answer
 	if len(turn.Items) != 1 {
 		t.Fatalf("items: %d, want 1 (only final_answer); items=%+v", len(turn.Items), turn.Items)
@@ -140,7 +140,7 @@ func TestStreamLLMToStep_ReasoningPlusToolCall(t *testing.T) {
 	if turn == nil {
 		t.Fatalf("Run returned nil turn")
 	}
-	// 无 tool_call item:StreamLLMToStep 不写 tool_call,留给后续 ExecuteToolCalls。
+	// No tool_call item: StreamLLMToStep leaves it to a later ExecuteToolCalls.
 	// items: reasoning / final_answer
 	if len(turn.Items) != 2 {
 		t.Fatalf("items: %d, want 2 (reasoning + final_answer); items=%+v", len(turn.Items), turn.Items)
@@ -153,10 +153,9 @@ func TestStreamLLMToStep_ReasoningPlusToolCall(t *testing.T) {
 	}
 }
 
-// TestStreamLLMToStep_UsageAccumulation 校验 token 累计:
-//   - turn.Usage 等于所有 LLM 调用 usage 之和
-//   - 嵌套 step 自身 Item.Usage 等于其子树所有 LLM 调用之和
-//   - 同级多个 step 各自独立累加,不互相污染
+// TestStreamLLMToStep_UsageAccumulation checks token accumulation: turn.Usage is the
+// sum over every LLM call, a nested step's own Item.Usage is the sum over its subtree,
+// and sibling steps accumulate independently without contaminating each other.
 func TestStreamLLMToStep_UsageAccumulation(t *testing.T) {
 	makeModel := func(prompt, completion uint64) *mockChatModel {
 		return &mockChatModel{chunks: []*Chunk{
@@ -166,11 +165,11 @@ func TestStreamLLMToStep_UsageAccumulation(t *testing.T) {
 	}
 
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
-		// LLM 调用 #1:挂 turn 根
+		// LLM call #1, hanging off the turn root
 		if _, err := StreamLLMToStep(ctx, w, "root", makeModel(10, 5), ChatRequest{}); err != nil {
 			return err
 		}
-		// step A:内部两次 LLM 调用,嵌套一个 step C
+		// step A: two LLM calls, with step C nested inside
 		if err := w.Step(ctx, "A", func(ctx context.Context, stepA Step) error {
 			if _, err := StreamLLMToStep(ctx, stepA, "step_a", makeModel(20, 10), ChatRequest{}); err != nil {
 				return err
@@ -182,7 +181,7 @@ func TestStreamLLMToStep_UsageAccumulation(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		// step B:1 次 LLM 调用,跟 A 平级
+		// step B: one LLM call, a sibling of A
 		if err := w.Step(ctx, "B", func(ctx context.Context, stepB Step) error {
 			_, err := StreamLLMToStep(ctx, stepB, "step_b", makeModel(40, 20), ChatRequest{})
 			return err
@@ -195,19 +194,20 @@ func TestStreamLLMToStep_UsageAccumulation(t *testing.T) {
 	if turn == nil {
 		t.Fatalf("Run returned nil turn")
 	}
-	// 各级期望:
+	// What each level should accumulate:
 	//   turn  = 10 + 20 + 30 + 40 = 100 prompt / 5+10+15+20 = 50 completion
-	//   stepA = 20 + 30 = 50 prompt / 10+15 = 25 completion(含子 step C)
+	//   stepA = 20 + 30 = 50 prompt, 10 + 15 = 25 completion, including child step C
 	//   stepC = 30 prompt / 15 completion
 	//   stepB = 40 prompt / 20 completion
 	if got := turn.Usage; got.PromptTokens != 100 || got.CompletionTokens != 50 {
 		t.Errorf("turn.Usage = %+v, want prompt=100 completion=50", got)
 	}
 
-	// items: reasoning?(no — 都没 reasoning) + 3 顶层:step A / step B / final_answer
-	// 注:LLM #1 挂 turn 根,但因为只 content 无 reasoning + final_answer,
-	//     第一次 LLM 调用本身不直接落 item(content 留 ChatResponse 给业务方),
-	//     所以顶层 items = [step A, step B, final_answer] = 3
+	// top-level items: no reasoning, since none of the calls reasoned, plus step A, step B, final_answer
+	// LLM #1 hangs off the turn root, but it produced only content, no reasoning, and
+	// the answer came through a final_answer, so that call leaves no item of its own:
+	// the content stays in the ChatResponse for product code. The top-level items are
+	// therefore step A, step B, and final_answer.
 	if len(turn.Items) != 3 {
 		t.Fatalf("items: %d, want 3 (stepA + stepB + final_answer); items=%+v", len(turn.Items), turn.Items)
 	}
@@ -225,7 +225,7 @@ func TestStreamLLMToStep_UsageAccumulation(t *testing.T) {
 	if got := stepB.Usage; got.PromptTokens != 40 || got.CompletionTokens != 20 {
 		t.Errorf("stepB.Usage = %+v, want prompt=40 completion=20", got)
 	}
-	// stepA.Children: stepC(嵌套)— 应有 prompt=30 / completion=15
+	// stepA.Children holds the nested stepC, which should show prompt=30, completion=15
 	if len(stepA.Children) != 1 {
 		t.Fatalf("stepA.Children: %d, want 1 (nested step C)", len(stepA.Children))
 	}

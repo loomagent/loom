@@ -11,38 +11,42 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// loom 内核内嵌 OTel 的设计思路:
+// How OTel is embedded in the loom core:
 //
-// span 层级(由 ctx 自然嵌套):
+// The span hierarchy, nested naturally through ctx:
 //
-//	loom.turn                       Run 起的根 span
-//	├── loom.step                   Step 闭包起的子 span(可嵌套)
-//	│   ├── gen_ai.chat             StreamLLMToStep 起,GenAI semconv
-//	│   └── execute_tool            runOneTool 起(ExecuteToolCalls / RunToolByName)
+//	loom.turn                       the root span Run starts
+//	├── loom.step                   a child span a Step closure starts, itself nestable
+//	│   ├── gen_ai.chat             started by StreamLLMToStep, GenAI semconv
+//	│   └── execute_tool            started by runOneTool, for ExecuteToolCalls or RunToolByName
 //	└── ...
 //
-// 全局 tracer = otel.Tracer(tracerName);未 Setup TracerProvider 时返回 noop tracer,
-// 业务零开销。也无需在 RunOptions 暴露 Tracer 字段 — 配置走 OTel SDK 全局单例。
+// The global tracer is otel.Tracer(tracerName). Without a configured TracerProvider it
+// is the noop tracer, so product code pays nothing. There is deliberately no Tracer
+// field on RunOptions; configuration goes through the OTel SDK's global singleton.
 //
-// captureContent 是 per-Run 决策(可能涉及 PII):
-//   - true:prompt / completion / tool args / tool output 落 span attribute
-//   - false:只留元数据(model / token / finish_reason / latency)
+// captureContent is a per-Run decision, and may involve PII:
+//   - true writes the prompt, the completion, tool args, and tool output to span
+//     attributes
+//   - false keeps only metadata: model, tokens, finish reason, latency
 //
-// 不 import semconv 包:gen_ai.* 还在演进,绑死单版 semconv 包反而脆。
+// The semconv package is deliberately not imported: gen_ai.* is still moving, and
+// binding to one version of semconv would be brittle.
 
-// tracerName 进程级唯一标识,用于 instrumentation 库名展示。
+// tracerName identifies this instrumentation library process-wide.
 const tracerName = "github.com/loomagent/loom"
 
-// OTel attribute keys。GenAI semconv 字面量,OTLP 兼容后端共用此约定。
+// OTel attribute keys. These are GenAI semconv literals, a convention OTLP-compatible
+// backends share.
 const (
-	// ===== GenAI 通用 =====
+	// ===== GenAI general =====
 	attrGenAISystem        = "gen_ai.system"
 	attrGenAIOperationName = "gen_ai.operation.name"
 
-	// ===== LLM 请求 =====
+	// ===== LLM request =====
 	attrGenAIRequestModel = "gen_ai.request.model"
 
-	// ===== LLM 响应 =====
+	// ===== LLM response =====
 	attrGenAIResponseModel  = "gen_ai.response.model"
 	attrGenAIResponseFinish = "gen_ai.response.finish_reasons"
 
@@ -52,7 +56,7 @@ const (
 	attrGenAIUsageCachedTok = "gen_ai.usage.cached_tokens"
 	attrGenAIUsageReasonTok = "gen_ai.usage.reasoning_tokens"
 
-	// ===== Prompt / Completion(captureContent=true 才写) =====
+	// ===== Prompt and completion, written only with captureContent=true =====
 	attrGenAIPrompt     = "gen_ai.prompt"
 	attrGenAICompletion = "gen_ai.completion"
 
@@ -63,7 +67,7 @@ const (
 	attrGenAIToolResult   = "gen_ai.tool.call.result"
 	attrGenAIToolFinished = "gen_ai.tool.call.status" // "ok" / "failed"
 
-	// ===== loom 自有 =====
+	// ===== loom's own =====
 	attrLoomTurnIndex      = "loom.turn.index"
 	attrLoomTurnPath       = "loom.turn.path"
 	attrLoomConversationID = "loom.conversation.id"
@@ -72,15 +76,16 @@ const (
 	attrLoomLLMPurpose     = "loom.llm.purpose"
 )
 
-// GenAI operation.name 枚举(取自 OTel semconv 建议值)。
+// The GenAI operation.name values, taken from the OTel semconv recommendations.
 const (
 	genAIOpChat        = "chat"
 	genAIOpExecuteTool = "execute_tool"
 )
 
-// genAISystem 把 ChatModel.Name() 翻成 gen_ai.system 值。
-// Name() 形如 "deepseek/deepseek-v4-flash" → 取斜杠前作 system,后作 model;
-// 不含斜杠时整个串当 system,model 字段留空(provider 实现选择)。
+// genAISystem turns ChatModel.Name() into a gen_ai.system value. A name such as
+// "deepseek/deepseek-v4-flash" gives the part before the slash as system and the part
+// after as model. Without a slash the whole string is the system and the model field
+// stays empty; individual providers may decide otherwise.
 func genAISystem(modelName string) (system, model string) {
 	for i := 0; i < len(modelName); i++ {
 		if modelName[i] == '/' {
@@ -90,17 +95,17 @@ func genAISystem(modelName string) (system, model string) {
 	return modelName, ""
 }
 
-// loomTracer 返回 loom 内核使用的全局 tracer。
-// 未 Setup TracerProvider 时返回 noop tracer,所有 Start/End 调用零开销。
+// loomTracer returns the global tracer the loom core uses. Without a configured
+// TracerProvider it is the noop tracer, so every Start and End costs nothing.
 func loomTracer() trace.Tracer {
 	return otel.Tracer(tracerName)
 }
 
-// startLLMSpan 起一个 GenAI chat span(StreamLLMToStep 用)。
-// 返回带 span 的 ctx,以及 span 句柄(调用方必须 End)。
+// startLLMSpan starts a GenAI chat span for StreamLLMToStep. It returns a ctx carrying
+// the span and the span itself, which the caller must End.
 func startLLMSpan(ctx context.Context, model ChatModel, req ChatRequest, purpose string, captureContent bool) (context.Context, trace.Span) {
 	system, modelName := genAISystem(model.Name())
-	// span name 用 "{operation} {model}" 形态(GenAI semconv 建议)
+	// The span name follows the "{operation} {model}" shape the GenAI semconv suggests
 	name := genAIOpChat
 	if modelName != "" {
 		name = genAIOpChat + " " + modelName
@@ -122,8 +127,9 @@ func startLLMSpan(ctx context.Context, model ChatModel, req ChatRequest, purpose
 	return ctx, span
 }
 
-// finalizeLLMSpan 在 LLM 调用收尾时填响应 attribute + 结束 span。
-// err != nil 时 RecordError + Status=Error;否则 Status=Ok。
+// finalizeLLMSpan fills the response attributes and ends the span when the call
+// returns. A non-nil err records the error and sets Status=Error; otherwise Status is
+// Ok.
 func finalizeLLMSpan(span trace.Span, resp *ChatResponse, captureContent bool, err error) {
 	if err != nil {
 		span.RecordError(err)
@@ -152,8 +158,8 @@ func finalizeLLMSpan(span trace.Span, resp *ChatResponse, captureContent bool, e
 	span.End()
 }
 
-// startToolSpan 起一个 execute_tool span(runOneTool 用)。
-// 返回带 span 的 ctx,以及 span 句柄。
+// startToolSpan starts an execute_tool span for runOneTool, returning a ctx carrying
+// the span and the span itself.
 func startToolSpan(ctx context.Context, call ToolCall, captureContent bool) (context.Context, trace.Span) {
 	name := genAIOpExecuteTool + " " + call.Name
 	ctx, span := loomTracer().Start(ctx, name, trace.WithSpanKind(trace.SpanKindInternal))
@@ -168,9 +174,9 @@ func startToolSpan(ctx context.Context, call ToolCall, captureContent bool) (con
 	return ctx, span
 }
 
-// finalizeToolSpan 工具收尾。
-//   - invokeErr 非 nil:Status=Error + RecordError + tool.call.status="failed"
-//   - 否则:Status=Ok + tool.call.status="ok",可选写 output 到 attribute
+// finalizeToolSpan closes a tool. A non-nil invokeErr sets Status=Error, records the
+// error, and marks tool.call.status="failed"; otherwise Status is Ok with
+// tool.call.status="ok", and the output may be written to an attribute.
 func finalizeToolSpan(span trace.Span, output string, captureContent bool, invokeErr error) {
 	if invokeErr != nil {
 		span.SetAttributes(attribute.String(attrGenAIToolFinished, "failed"))
@@ -187,8 +193,8 @@ func finalizeToolSpan(span trace.Span, output string, captureContent bool, invok
 	span.End()
 }
 
-// startTurnSpan 起 Turn 根 span(Run 用)。
-// conversation_id 写到 loom.conversation.id,方便后端按对话聚合多轮 trace。
+// startTurnSpan starts the Turn root span for Run. The conversation id goes to
+// loom.conversation.id, which lets a backend aggregate the traces of one conversation.
 func startTurnSpan(ctx context.Context, st *turnState) (context.Context, trace.Span) {
 	ctx, span := loomTracer().Start(ctx, "loom.turn", trace.WithSpanKind(trace.SpanKindInternal))
 	span.SetAttributes(
@@ -196,16 +202,18 @@ func startTurnSpan(ctx context.Context, st *turnState) (context.Context, trace.S
 		attribute.String(attrLoomTurnPath, st.turnPath),
 		attribute.String(attrLoomConversationID, st.conversationID),
 	)
-	// 其它 metadata 透传(user_id / chat_mode_id 等业务自定 K/V)
+	// Other metadata passes through: user_id, chat_mode_id, and whatever else product
+	// code defines
 	for k, v := range st.metadata {
 		span.SetAttributes(attribute.String("loom.metadata."+k, v))
 	}
 	return ctx, span
 }
 
-// finalizeTurnSpan Turn 收尾:CloseReason 翻成 span Status。
+// finalizeTurnSpan closes a Turn, turning CloseReason into the span Status.
 func finalizeTurnSpan(span trace.Span, st *turnState) {
-	// 收尾时 totalUsage 也是 turn 总 token,打到 root span 方便聚合
+	// At close time totalUsage is the turn's total tokens; putting it on the root span
+	// makes aggregation easy
 	span.SetAttributes(
 		attribute.Int64(attrGenAIUsageInputTok, int64(st.totalUsage.PromptTokens)),
 		attribute.Int64(attrGenAIUsageOutputTok, int64(st.totalUsage.CompletionTokens)),
@@ -220,11 +228,11 @@ func finalizeTurnSpan(span trace.Span, st *turnState) {
 		)
 		switch status {
 		case TurnStatusQueued:
-			span.RecordError(fmt.Errorf("queued turn 不应有 close_reason"))
-			span.SetStatus(codes.Error, "queued turn 不应有 close_reason")
+			span.RecordError(fmt.Errorf("a queued turn must not carry a close_reason"))
+			span.SetStatus(codes.Error, "a queued turn must not carry a close_reason")
 		case TurnStatusInProgress:
-			span.RecordError(fmt.Errorf("in_progress turn 不应有 close_reason"))
-			span.SetStatus(codes.Error, "in_progress turn 不应有 close_reason")
+			span.RecordError(fmt.Errorf("an in_progress turn must not carry a close_reason"))
+			span.SetStatus(codes.Error, "an in_progress turn must not carry a close_reason")
 		case TurnStatusCompleted:
 			span.SetStatus(codes.Ok, "")
 		case TurnStatusFailed:
@@ -233,9 +241,10 @@ func finalizeTurnSpan(span trace.Span, st *turnState) {
 			}
 			span.SetStatus(codes.Error, st.closeReason.Message)
 		case TurnStatusCancelled:
-			// Cancelled 不算 error(用户主动 / 超时),保持 Unset
+			// Cancelled is not an error, whether the user asked or it timed out, so it
+			// stays Unset
 		default:
-			err := fmt.Errorf("未知 turn close status: %s", status)
+			err := fmt.Errorf("unknown turn close status: %s", status)
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 		}
@@ -243,7 +252,7 @@ func finalizeTurnSpan(span trace.Span, st *turnState) {
 	span.End()
 }
 
-// startStepSpan 起一个 step 子 span(Step 闭包用)。
+// startStepSpan starts a child step span for a Step closure.
 func startStepSpan(ctx context.Context, path, label string) (context.Context, trace.Span) {
 	name := "loom.step"
 	if label != "" {
@@ -257,7 +266,7 @@ func startStepSpan(ctx context.Context, path, label string) (context.Context, tr
 	return ctx, span
 }
 
-// finalizeStepSpan step 闭包返回时调。
+// finalizeStepSpan is called when a Step closure returns.
 func finalizeStepSpan(span trace.Span, fnErr error) {
 	if fnErr != nil {
 		span.RecordError(fnErr)
@@ -268,8 +277,9 @@ func finalizeStepSpan(span trace.Span, fnErr error) {
 	span.End()
 }
 
-// marshalForSpan 把 prompt / completion / messages 序列化成 JSON 字符串,
-// 失败时返 fallback 字符串(不让序列化错误污染整 span)。
+// marshalForSpan serializes a prompt, completion, or message list into a JSON string,
+// falling back to a placeholder on failure so a serialization error cannot spoil the
+// span.
 func marshalForSpan(v any) string {
 	b, err := jsonv2.Marshal(v)
 	if err != nil {
@@ -278,8 +288,9 @@ func marshalForSpan(v any) string {
 	return string(b)
 }
 
-// assistantMessageForSpan 把 ChatResponse 翻成 assistant message 形态供 completion attribute 用。
-// 跟 prompt(role + content)对称,方便追踪后端展示对话。
+// assistantMessageForSpan turns a ChatResponse into an assistant message for the
+// completion attribute. It mirrors the prompt, role plus content, which makes a
+// conversation easy to read in a tracing backend.
 func assistantMessageForSpan(resp *ChatResponse) Message {
 	return Message{
 		Role:             RoleAssistant,
