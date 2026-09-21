@@ -624,6 +624,7 @@ github.com/loomagent/loom/
 - **多模态 UserMessage**:当前只有 Text + Source/Purpose。
 - **跨 Turn 引用**:若真有 sub agent 跨主 turn 引用工具结果的需求,需重新设计;当前
   由业务方走 Tool 包装。
+- **结构化推理的完整回传**:OpenRouter 的 `reasoning_details`(加密 / 摘要型推理)必须按原样、按原顺序回传,而 `loom.Message` 只有一个 `ReasoningContent string`。当前只回传纯文本形式;要完整回传需要给 Message 增加一个 provider 不透明的原始 JSON 载体。
 - **规则型约束的可见性**:`NotBlank` 之类整调用/字段级校验不出现在
   expected-arguments 摘要里,模型只有失败后才知道;要让它们可见需要 builder 携带
   面向模型的说明文字。
