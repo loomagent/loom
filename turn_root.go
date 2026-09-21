@@ -77,7 +77,7 @@ func (t *turnRoot) writeFinalAnswer(
 	}
 
 	// 流式:跑闭包 → finalize → 成功才封口
-	stream := &finalAnswerStream{state: t.state, itemPath: path}
+	stream := &itemTextStream{state: t.state, itemPath: path}
 	fnErr := fn(stream)
 	snapshot := t.finalizeStreamItem(selfIdx, stream.core.finalize(), fnErr)
 	if fnErr == nil {

@@ -371,16 +371,18 @@ func TestFormatMustBeEnforced(t *testing.T) {
 	}
 }
 
-func TestArgsHasPanicsOnUndeclared(t *testing.T) {
+// Reading an argument no contract declared is a programming error, so RawJSON
+// panics instead of returning the nil a model could also have sent.
+func TestArgsRawJSONPanicsOnUndeclared(t *testing.T) {
 	contract := MustArgsContract("t", String("q").Desc("Q."))
 	args, err := contract.Decode(`{"q":"x"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !args.Has("q") {
-		t.Fatal("q should be present")
+	if got := string(args.RawJSON("q")); got != `"x"` {
+		t.Fatalf("RawJSON(q) = %s", got)
 	}
-	assertPanics(t, func() { args.Has("missing") })
+	assertPanics(t, func() { args.RawJSON("missing") })
 }
 
 func TestNewArgsToolEndToEnd(t *testing.T) {

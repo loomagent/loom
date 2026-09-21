@@ -53,7 +53,7 @@ func Probe(ctx context.Context, builder Builder, options Options) (Report, error
 		return Report{}, fmt.Errorf("modelprobe: Builder returned different models %q and %q", omitModel.Name(), rawModel.Name())
 	}
 
-	coverage := effortCoverage(rawModel.Name(), options)
+	coverage := effortCoverage(options)
 	efforts := coverage.Candidates
 	if err := validateEfforts(efforts); err != nil {
 		return Report{}, err
@@ -389,7 +389,7 @@ func outcomeForCheckError(name string, err error, classify ErrorClassifier) Outc
 	return outcomeForError(err, classify)
 }
 
-func effortCoverage(name string, options Options) *EffortCoverage {
+func effortCoverage(options Options) *EffortCoverage {
 	c := &EffortCoverage{Source: "unknown", Limitations: []string{"Request acceptance and returned reasoning do not prove independent native efforts."}}
 	if options.DeclaredCapabilities != nil {
 		c.UniverseKnown = options.DeclaredCapabilities.Reasoning != "" || options.DeclaredCapabilities.ReasoningEfforts != nil

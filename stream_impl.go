@@ -7,7 +7,6 @@ import (
 )
 
 // streamCore 流式 Item 共用的累积态。
-// 被 reasoningStream / finalAnswerStream 嵌入。
 type streamCore struct {
 	mu        sync.Mutex
 	accumText strings.Builder
@@ -30,14 +29,15 @@ func (c *streamCore) finalize() string {
 	return c.accumText.String()
 }
 
-// reasoningStream 实现 ReasoningStream 接口。
-type reasoningStream struct {
+// itemTextStream 同时实现 ReasoningStream 和 FinalAnswerStream:两个接口的方法集
+// 相同,所以一个类型满足两者,不必各留一份一模一样的实现。
+type itemTextStream struct {
 	core     streamCore
 	state    *turnState
 	itemPath string
 }
 
-func (s *reasoningStream) AppendText(ctx context.Context, chunk string) error {
+func (s *itemTextStream) AppendText(ctx context.Context, chunk string) error {
 	if chunk == "" {
 		return nil
 	}
@@ -48,31 +48,7 @@ func (s *reasoningStream) AppendText(ctx context.Context, chunk string) error {
 	return nil
 }
 
-func (s *reasoningStream) SetFinalText(text string) {
-	s.core.mu.Lock()
-	s.core.finalText = &text
-	s.core.mu.Unlock()
-}
-
-// finalAnswerStream 实现 FinalAnswerStream 接口,跟 reasoningStream 结构一致。
-type finalAnswerStream struct {
-	core     streamCore
-	state    *turnState
-	itemPath string
-}
-
-func (s *finalAnswerStream) AppendText(ctx context.Context, chunk string) error {
-	if chunk == "" {
-		return nil
-	}
-	s.core.mu.Lock()
-	s.core.appendLocked(chunk)
-	s.core.mu.Unlock()
-	s.state.emitItemDelta(ctx, s.itemPath, DeltaChannelText, chunk)
-	return nil
-}
-
-func (s *finalAnswerStream) SetFinalText(text string) {
+func (s *itemTextStream) SetFinalText(text string) {
 	s.core.mu.Lock()
 	s.core.finalText = &text
 	s.core.mu.Unlock()
