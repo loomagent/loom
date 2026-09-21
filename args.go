@@ -2,7 +2,6 @@ package loom
 
 import (
 	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
 	"fmt"
 )
 
@@ -41,27 +40,12 @@ func (a Args) Has(name string) bool {
 // declare.
 func (a Args) JSON() jsontext.Value { return a.raw }
 
-// RawJSON returns one argument exactly as the model sent it. Raw decodes that
-// value into a generic Go value; RawJSON keeps the original bytes, so a large
-// integer or a nested shape survives intact.
+// RawJSON returns one argument exactly as the model sent it, so a large integer
+// or a nested shape survives intact; a handle decodes it with the type fixed at
+// declaration, and RawJSON keeps the original bytes.
 func (a Args) RawJSON(name string) jsontext.Value {
 	a.declare(name)
 	return a.values[name]
-}
-
-// Raw returns the argument decoded as a generic JSON value, or nil when it was
-// omitted. Numbers are float64; use a typed handle when precision matters.
-func (a Args) Raw(name string) any {
-	a.declare(name)
-	raw, ok := a.values[name]
-	if !ok {
-		return nil
-	}
-	var value any
-	if err := jsonv2.Unmarshal(raw, &value); err != nil {
-		return nil
-	}
-	return value
 }
 
 // anyPresent reports whether at least one of names was sent.
