@@ -179,7 +179,7 @@ func (s *turnState) emitItemStarted(ctx context.Context, item Item) {
 		Item:      item,
 		Time:      time.Now(),
 	}
-	s.fanOut(ctx, func(sink Sink) error { return sink.ItemStarted(ctx, ev) })
+	s.fanOut(func(sink Sink) error { return sink.ItemStarted(ctx, ev) })
 }
 
 // emitItemDelta 广播 ItemDeltaEvent 给所有 sink。
@@ -192,7 +192,7 @@ func (s *turnState) emitItemDelta(ctx context.Context, itemPath string, ch Delta
 		Chunk:     chunk,
 		Time:      time.Now(),
 	}
-	s.fanOut(ctx, func(sink Sink) error { return sink.ItemDelta(ctx, ev) })
+	s.fanOut(func(sink Sink) error { return sink.ItemDelta(ctx, ev) })
 }
 
 // emitItemFinished 广播 ItemFinishedEvent 给所有 sink。
@@ -204,7 +204,7 @@ func (s *turnState) emitItemFinished(ctx context.Context, item Item) {
 		Time:      time.Now(),
 	}
 	finishCtx := context.WithoutCancel(ctx)
-	s.fanOut(finishCtx, func(sink Sink) error { return sink.ItemFinished(finishCtx, ev) })
+	s.fanOut(func(sink Sink) error { return sink.ItemFinished(finishCtx, ev) })
 }
 
 // emitLLMCalled 把一次 LLM 调用的 usage 沿 indices 链向上累加到祖先 step Item.Usage,
@@ -244,7 +244,7 @@ func (s *turnState) emitLLMCalled(ctx context.Context, scope *writerScope, model
 		Usage:     usage,
 		Time:      time.Now(),
 	}
-	s.fanOut(ctx, func(sink Sink) error { return sink.LLMCalled(ctx, ev) })
+	s.fanOut(func(sink Sink) error { return sink.LLMCalled(ctx, ev) })
 }
 
 // addUsage 把 b 累加到 a(各字段独立 +)。
@@ -259,7 +259,7 @@ func addUsage(a *Usage, b Usage) {
 // fanOut 同步串行调所有 sink。任一失败:
 //   - 调用 onSinkErr 回调(若设置)
 //   - strict 模式下记录第一次失败到 state.sinkErr(Run 收尾据此让 Turn fail)
-func (s *turnState) fanOut(ctx context.Context, fn func(Sink) error) {
+func (s *turnState) fanOut(fn func(Sink) error) {
 	for _, sink := range s.sinks {
 		if err := fn(sink); err != nil {
 			if s.onSinkErr != nil {
@@ -331,7 +331,7 @@ func (w *writerScope) StreamReasoning(ctx context.Context, label string, fn func
 	}
 	w.state.emitItemStarted(ctx, item)
 
-	stream := &reasoningStream{state: w.state, itemPath: item.Path}
+	stream := &itemTextStream{state: w.state, itemPath: item.Path}
 	fnErr := fn(stream)
 
 	snapshot := w.finalizeStreamItem(selfIdx, stream.core.finalize(), fnErr)

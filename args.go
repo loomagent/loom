@@ -26,14 +26,6 @@ type Args struct {
 	raw jsontext.Value
 }
 
-// Has reports whether the model sent a value for name. Prefer the typed
-// handle's Present, which cannot misspell the name and needs no type lookup.
-func (a Args) Has(name string) bool {
-	a.declare(name)
-	_, ok := a.values[name]
-	return ok
-}
-
 // JSON returns the whole argument object exactly as the model sent it, before
 // any decoding, or nil when there is nothing to return. Use it when the exact
 // bytes matter — number formatting, key order, or a value the contract does not

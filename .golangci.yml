@@ -2,7 +2,9 @@
 #
 # The rule set encodes the project's testing principles: tests must use
 # encoding/json/v2, must advance time with synctest rather than sleeping, and
-# must use the testing package's own helpers.
+# must use the testing package's own helpers. It also keeps the codebase from
+# growing unread code: unused declarations, parameters nothing reads, and
+# conversions that do nothing.
 version: "2"
 
 linters:
@@ -13,6 +15,9 @@ linters:
     - modernize
     - thelper
     - tparallel
+    - unconvert
+    - unparam
+    - unused
     - usetesting
 
   settings:
