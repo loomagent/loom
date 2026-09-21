@@ -72,9 +72,8 @@ type Writer interface {
 	// stepCtx, not an outer captured ctx, to anything that takes a context (an LLM
 	// call, a tool, a database query), or its child span hangs off the wrong parent.
 	//
-	// A nil return marks the Step Completed. ErrStepIncomplete marks it Incomplete,
-	// and the error is absorbed rather than propagated. Any other non-nil error
-	// marks it Failed and propagates.
+	// A nil return marks the Step Completed. A cancellation error marks it Cancelled and
+	// still propagates. Any other non-nil error marks it Failed and propagates.
 	//
 	// label is the title a UI shows, and may be empty for an anonymous scope.
 	Step(ctx context.Context, label string, fn func(stepCtx context.Context, s Step) error) error

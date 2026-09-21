@@ -67,7 +67,7 @@ const (
 //
 // Both angles share this type:
 //   - the snapshot loom.Run returns once execution finishes
-//   - a historical Turn loaded by Repository.LoadHistory, used to build the next
+//   - a historical Turn the caller passes in RunOptions.History, used to build the next
 //     round of context
 //
 // It serializes to JSON in full, ready for a frontend to render.
@@ -86,7 +86,7 @@ type Turn struct {
 	Items []Item
 
 	Status      TurnStatus
-	CloseReason *CloseReason // nil = still running, which only a Repository loading an unfinished Turn sees
+	CloseReason *CloseReason // nil = still running
 	Usage       Usage        // the Turn's accumulated token usage, summed over its LLM calls
 
 	// Metadata is a K/V passthrough for product code; loom does not interpret it.
