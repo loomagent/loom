@@ -28,6 +28,15 @@ Loom 目前要求 Go 1.27 或更高版本。
 
 ## 快速开始
 
+两个可直接运行的示例不需要 API key、也不需要联网:
+
+```bash
+go run ./examples/quickstart   # 一个 Turn,以及 Sink 从它收到了什么
+go run ./examples/react        # ReAct 循环调用一个工具(模型用脚本扮演)
+```
+
+下面的代码与第一个示例是同一个形状。
+
 ```go
 package main
 

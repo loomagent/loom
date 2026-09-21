@@ -30,6 +30,15 @@ Loom currently requires Go 1.27 or newer.
 
 ## Quick start
 
+Two runnable examples need no API key and no network:
+
+```bash
+go run ./examples/quickstart   # one turn, and what a Sink received from it
+go run ./examples/react        # the ReAct loop calling a tool, against a scripted model
+```
+
+The tour below is the same shape as the first one.
+
 ```go
 package main
 
