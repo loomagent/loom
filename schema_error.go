@@ -179,75 +179,37 @@ func newSchemaToolArgumentError(tool string, guidance argumentGuidance, err *too
 }
 
 func explainValidationResult(err *toolcontract.ValidationError) []ToolArgumentIssue {
-	if err == nil {
-		return []ToolArgumentIssue{{Rule: "schema", Message: "input does not match the expected schema"}}
-	}
 	issues := make([]ToolArgumentIssue, 0, len(err.Violations))
 	collectValidationIssues(err.Violations, &issues)
-	if len(issues) == 0 {
-		issues = append(issues, ToolArgumentIssue{Rule: "schema", Message: "input does not match the expected schema"})
-	}
 	sortIssues(issues)
 	return issues
 }
 
+// collectValidationIssues renders each violation the validator emitted. The
+// validator's codes are a closed set tied to the modelled keywords, so every
+// violation becomes exactly one issue.
 func collectValidationIssues(violations []toolcontract.Violation, issues *[]ToolArgumentIssue) {
-	for index, violation := range violations {
-		field := violation.Field()
-		if violation.Code == "any_of_item_mismatch" {
-			if allowed := validationAlternatives(violations[index+1:], field); len(allowed) > 0 {
-				*issues = append(*issues, ToolArgumentIssue{
-					Field:   field,
-					Rule:    "oneof",
-					Code:    violation.Code,
-					Message: quoteField(field) + " must be one of " + compactJSON(allowed),
-				})
-				continue
-			}
-		}
-		if issue, ok := validationIssue(field, violation); ok {
-			*issues = append(*issues, issue)
-		}
-	}
-}
-
-func validationAlternatives(violations []toolcontract.Violation, field string) []any {
-	var alternatives []any
 	for _, violation := range violations {
-		if violation.Field() != field {
-			break
-		}
-		if violation.Code == "const_mismatch" || violation.Code == "const_mismatch_null" {
-			alternatives = append(alternatives, violation.Params["expected"])
-		}
+		*issues = append(*issues, validationIssue(violation.Field(), violation))
 	}
-	return alternatives
 }
 
-func validationIssue(field string, violation toolcontract.Violation) (ToolArgumentIssue, bool) {
+func validationIssue(field string, violation toolcontract.Violation) ToolArgumentIssue {
 	label := quoteField(field)
 	rule := violation.Keyword
 	code := violation.Code
 	params := violation.Params
 	message := ""
 	switch code {
-	case "property_mismatch", "properties_mismatch", "all_of_item_mismatch",
-		"any_of_item_mismatch", "one_of_item_mismatch", "false_schema_mismatch":
-		return ToolArgumentIssue{}, false
 	case "missing_required_property":
 		property := strings.Trim(fmt.Sprint(params["property"]), "'")
 		field = joinField(field, property)
 		message = quoteField(field) + " is required"
-	case "missing_required_properties":
-		message = label + " is missing required fields: " + fmt.Sprint(params["properties"])
-	case "additional_property_mismatch", "additional_property_false":
+	case "additional_property_mismatch":
 		property := strings.Trim(fmt.Sprint(params["property"]), "'")
 		field = joinField(field, property)
 		rule = "unknown"
 		message = quoteField(field) + " is not an accepted field"
-	case "additional_properties_mismatch":
-		rule = "unknown"
-		message = "these fields are not accepted: " + fmt.Sprint(params["properties"])
 	case "value_above_maximum":
 		message = label + " must be at most " + fmt.Sprint(params["maximum"])
 	case "value_below_minimum":
@@ -259,18 +221,12 @@ func validationIssue(field string, violation toolcontract.Violation) (ToolArgume
 	case "value_not_in_enum":
 		rule = "oneof"
 		message = label + " must be one of " + compactJSON(params["allowed"])
-	case "const_mismatch", "const_mismatch_null":
+	case "const_mismatch":
 		message = label + " must equal " + compactJSON(params["expected"])
 	case "unique_items_mismatch":
 		message = label + " must contain unique items"
 	case "pattern_mismatch":
 		message = patternValidationMessage(label, fmt.Sprint(params["pattern"]))
-	case "property_name_mismatch":
-		property := strings.Trim(fmt.Sprint(params["property"]), "'")
-		field = property
-		message = "field name " + strconv.Quote(property) + " is not accepted"
-	case "property_names_mismatch":
-		message = "field names are not accepted: " + fmt.Sprint(params["properties"])
 	case "string_too_short":
 		message = label + " must contain at least " + fmt.Sprint(params["min_length"]) + " characters"
 	case "string_too_long":
@@ -282,18 +238,15 @@ func validationIssue(field string, violation toolcontract.Violation) (ToolArgume
 	case "type_mismatch":
 		message = label + " must be " + fmt.Sprint(params["expected"]) + ", but got " + fmt.Sprint(params["received"])
 	default:
+		// The validator does not emit this code today. It still has to render: a
+		// model that receives a blank line cannot fix its call.
 		message = label + " does not satisfy " + strconv.Quote(rule)
 	}
-	if message == "" {
-		return ToolArgumentIssue{}, false
-	}
-	return ToolArgumentIssue{Field: field, Rule: rule, Code: code, Message: message}, true
+	return ToolArgumentIssue{Field: field, Rule: rule, Code: code, Message: message}
 }
 
 func patternValidationMessage(label, pattern string) string {
 	switch {
-	case pattern == `\S`:
-		return label + " must not be blank"
 	case strings.HasPrefix(pattern, "^") && isLiteralPattern(strings.TrimPrefix(pattern, "^")):
 		return label + " must start with " + strconv.Quote(strings.TrimPrefix(pattern, "^"))
 	case strings.HasSuffix(pattern, "$") && isLiteralPattern(strings.TrimSuffix(pattern, "$")):
@@ -432,10 +385,8 @@ func appendSchemaConstraintParts(parts []string, schema *Schema) []string {
 		parts = append(parts, "max length "+strconv.Itoa(*schema.MaxLength))
 	}
 	if schema.Pattern != "" {
-		if schema.Pattern == `\S` {
-			parts = append(parts, "non-blank")
-		} else if literal, kind, ok := literalPatternConstraint(schema.Pattern); ok {
-			parts = append(parts, strings.ReplaceAll(kind, "with", " with ")+" "+strconv.Quote(literal))
+		if literal, kind, ok := literalPatternConstraint(schema.Pattern); ok {
+			parts = append(parts, kind+" "+strconv.Quote(literal))
 		} else {
 			parts = append(parts, "pattern "+strconv.Quote(schema.Pattern))
 		}
@@ -471,17 +422,20 @@ func compactJSON(value any) string {
 	return string(data)
 }
 
+// literalPatternConstraint reports whether pattern is a plain literal in one of
+// the three shapes a model reads well, so the summary can say "starts with"
+// rather than show a regular expression.
 func literalPatternConstraint(pattern string) (literal, kind string, ok bool) {
 	kind = "contains"
 	if strings.HasPrefix(pattern, "^") {
-		kind = "startswith"
+		kind = "starts with"
 		pattern = strings.TrimPrefix(pattern, "^")
 	}
 	if strings.HasSuffix(pattern, "$") {
 		if kind != "contains" {
 			return "", "", false
 		}
-		kind = "endswith"
+		kind = "ends with"
 		pattern = strings.TrimSuffix(pattern, "$")
 	}
 	literal = unquoteRegexpLiteral(pattern)
