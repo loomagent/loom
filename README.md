@@ -1,4 +1,6 @@
 <!-- Overview, usage, and integration guidance for the Loom runtime. -->
+**English** | [简体中文](README.zh-CN.md)
+
 # Loom
 
 Loom is a lightweight, event-driven agent runtime for Go. It turns an agent's
@@ -463,7 +465,15 @@ golangci-lint run ./...
 CI runs all of the above. `golangci-lint` carries the lint rules the project's
 testing principles call for: `depguard` (tests use `encoding/json/v2`),
 `forbidigo` (tests advance time with `synctest`, never `time.Sleep`),
-`usetesting`, `thelper`, `tparallel`, and `modernize`.
+`usetesting`, `thelper`, `tparallel`, `modernize`, and `unused`/`unparam`/
+`unconvert` so unread declarations, parameters, and conversions cannot accumulate.
+
+### Documentation languages
+
+The README is kept in both languages: this file is English and
+[README.zh-CN.md](README.zh-CN.md) is the Chinese edition. Each starts with a
+link to the other, and both are updated in the same change, so a reader never
+lands on a stale translation. `DESIGN.md` is currently Chinese only.
 
 The test step also writes a coverage profile that `scripts/check-coverage.sh`
 checks against a floor. The floor is a ratchet against regressions, not the
