@@ -1,3 +1,5 @@
+**简体中文** | [English](DESIGN.en.md)
+
 # Loom — Agent 框架设计文档
 
 > 本文档记录 loom 的核心设计决策与实施路线。Loom 是 agent 框架,目标是把

@@ -243,7 +243,7 @@ a `const` holds.
 - `github.com/loomagent/loom/tools/gettime`: fixed Beijing-time tool
 
 The architecture and original design decisions are documented in
-[DESIGN.md](DESIGN.md).
+[DESIGN.en.md](DESIGN.en.md), also available in [Chinese](DESIGN.md).
 
 ## Model factory
 
@@ -471,9 +471,11 @@ testing principles call for: `depguard` (tests use `encoding/json/v2`),
 ### Documentation languages
 
 The README is kept in both languages: this file is English and
-[README.zh-CN.md](README.zh-CN.md) is the Chinese edition. Each starts with a
-link to the other, and both are updated in the same change, so a reader never
-lands on a stale translation. `DESIGN.md` is currently Chinese only.
+[README.zh-CN.md](README.zh-CN.md) is the Chinese edition. The same applies to
+the design document: [DESIGN.en.md](DESIGN.en.md) is English and
+[DESIGN.md](DESIGN.md) is the Chinese original. Each file starts with a link to
+its other language, and both editions are updated in the same change, so a
+reader never lands on a stale translation.
 
 The test step also writes a coverage profile that `scripts/check-coverage.sh`
 checks against a floor. The floor is a ratchet against regressions, not the
