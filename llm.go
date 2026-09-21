@@ -2,6 +2,7 @@ package loom
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"fmt"
 	"slices"
 )
@@ -42,6 +43,13 @@ type Message struct {
 	// requested. It replays the previous round's calls back into the history so the
 	// model can see which tools it already used.
 	ToolCalls []ToolCall
+
+	// ReasoningDetails is a provider's own structured reasoning, kept as the raw JSON it
+	// arrived as. One provider returns its reasoning as a sequence of typed blocks and
+	// requires the exact blocks back, in order, to continue a reasoning chain; Loom never
+	// interprets them, it only carries them. ReasoningContent holds the same reasoning as
+	// text, for providers and callers that work in text.
+	ReasoningDetails jsontext.Value
 
 	// Name is optional: the sender's name. Some providers use it to tell several
 	// users apart within one context.
@@ -429,6 +437,9 @@ type ChatRequest struct {
 type ChatResponse struct {
 	Content          string
 	ReasoningContent string
+	// ReasoningDetails is the provider's structured reasoning, as it arrived, ready to be
+	// carried back on the assistant message that continues the chain.
+	ReasoningDetails jsontext.Value
 
 	// ToolCalls holds the calls this round requested, possibly none. The agent runs
 	// them with Tool.Invoke and appends the results to the history as role=tool
@@ -450,6 +461,10 @@ type ChatResponse struct {
 type Chunk struct {
 	ContentDelta          string
 	ReasoningContentDelta string
+	// ReasoningDetails is this frame's portion of the provider's structured reasoning, which
+	// is a part of a sequence rather than a whole one: a caller accumulates the frames in
+	// order, and StreamLLMToStep does that for the response it returns.
+	ReasoningDetails jsontext.Value
 
 	// ToolCallDeltas are the streaming increments of tool calls, accumulated by Index
 	// into complete ToolCalls. The caller keeps that accumulation.

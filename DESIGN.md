@@ -601,6 +601,7 @@ github.com/loomagent/loom/
 | 25 | 工具契约按声明式参数 + 类型化句柄,不用 struct tag | 已落实 |
 | 26 | `ValidateSchema` 每次调用重新编译 schema;不缓存,因为 schema 是调用方可能修改的普通值 | 已落实 |
 | 27 | 框架不内置节流策略(并发窗口 / AIMD / 熔断阈值都是部署策略),只提供每次物理尝试的准入缝 | 已落实 |
+| 28 | provider 自己的结构化推理以原始 JSON 按序往返;Message / ChatResponse / Chunk 各带一个不透明载体,loom 不解释,流式按官方规则逐帧拼接 | 已落实 |
 
 已放弃:Note 系列(reasoning 与 label 足以表达过程信息)、CloseDetector(外部终结
 由调用方取消带 cause 的 ctx 表达)、`Writer.RunTool`(由 `RunToolByName` 与
@@ -625,7 +626,6 @@ github.com/loomagent/loom/
 - **多模态 UserMessage**:当前只有 Text + Source/Purpose。
 - **跨 Turn 引用**:若真有 sub agent 跨主 turn 引用工具结果的需求,需重新设计;当前
   由业务方走 Tool 包装。
-- **结构化推理的完整回传**:OpenRouter 的 `reasoning_details`(加密 / 摘要型推理)必须按原样、按原顺序回传,而 `loom.Message` 只有一个 `ReasoningContent string`。当前只回传纯文本形式;要完整回传需要给 Message 增加一个 provider 不透明的原始 JSON 载体。
 - **规则型约束的可见性**:`NotBlank` 之类整调用/字段级校验不出现在
   expected-arguments 摘要里,模型只有失败后才知道;要让它们可见需要 builder 携带
   面向模型的说明文字。

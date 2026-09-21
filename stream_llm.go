@@ -1,7 +1,10 @@
 package loom
 
 import (
+	"bytes"
 	"context"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
 	"strings"
@@ -68,7 +71,8 @@ func StreamLLMToStep(
 	var (
 		contentBuf        strings.Builder
 		bufferedReasoning strings.Builder
-		totalReasoning    strings.Builder // the whole reasoning, for the protocol handoff in resp.ReasoningContent
+		totalReasoning    strings.Builder  // the whole reasoning, for the protocol handoff in resp.ReasoningContent
+		reasoningDetails  []jsontext.Value // the provider's structured blocks, in arrival order
 		toolCallsAcc      = map[int]*ToolCall{}
 		toolCallsOrder    []int
 		usage             *Usage
@@ -80,6 +84,16 @@ func StreamLLMToStep(
 	// it accumulates in the buffer. totalReasoning always accumulates, for the protocol
 	// handoff, independently of the rs and buffer branches.
 	consume := func(chunk *Chunk, rs ReasoningStream) error {
+		// The provider builds its structured sequence by concatenating the frames in order, so
+		// the elements are spliced as they arrive and never re-encoded: the endpoint asks for
+		// the blocks back unchanged and in that order. A frame may carry blocks without any
+		// reasoning text, which is why this is not inside the branch below.
+		if len(chunk.ReasoningDetails) > 0 {
+			var elements []jsontext.Value
+			if err := jsonv2.Unmarshal(chunk.ReasoningDetails, &elements); err == nil {
+				reasoningDetails = append(reasoningDetails, elements...)
+			}
+		}
 		if chunk.ReasoningContentDelta != "" {
 			totalReasoning.WriteString(chunk.ReasoningContentDelta)
 			if rs != nil {
@@ -188,6 +202,7 @@ func StreamLLMToStep(
 	resp := &ChatResponse{
 		Content:          contentBuf.String(),
 		ReasoningContent: totalReasoning.String(),
+		ReasoningDetails: joinJSONElements(reasoningDetails),
 		ToolCalls:        calls,
 		FinishReason:     finishReason,
 		Model:            modelID,
@@ -211,4 +226,23 @@ func StreamLLMToStep(
 	// completion) and end the span.
 	finalizeLLMSpan(llmSpan, resp, captureContent, nil)
 	return resp, nil
+}
+
+// joinJSONElements writes raw JSON values back out as one array, keeping their bytes and their
+// order. A provider that returns structured reasoning wants exactly the blocks it sent, so
+// re-encoding them through a Go value would be a change it did not ask for.
+func joinJSONElements(elements []jsontext.Value) jsontext.Value {
+	if len(elements) == 0 {
+		return nil
+	}
+	var out bytes.Buffer
+	out.WriteByte('[')
+	for index, element := range elements {
+		if index > 0 {
+			out.WriteByte(',')
+		}
+		out.Write(element)
+	}
+	out.WriteByte(']')
+	return out.Bytes()
 }

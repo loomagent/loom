@@ -1,6 +1,7 @@
 package openaicompat
 
 import (
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"strings"
 	"testing"
@@ -188,7 +189,8 @@ func TestUsage(t *testing.T) {
 // travels back in the field the endpoint asks for, because a multi-turn thinking tool loop is
 // rejected without it.
 func TestMessages(t *testing.T) {
-	messages, err := Messages([]loom.Message{
+	provider := Provider{FinishReason: finishReason, ReasoningField: ReasoningContentField}
+	messages, err := provider.Messages([]loom.Message{
 		{Role: loom.RoleSystem, Content: "rules"},
 		{Role: loom.RoleUser, Content: "hi"},
 		{
@@ -199,7 +201,7 @@ func TestMessages(t *testing.T) {
 			ToolCalls:        []loom.ToolCall{{ID: "c1", Name: "search", Arguments: `{"q":"x"}`}},
 		},
 		{Role: loom.RoleTool, Content: "result", ToolCallID: "c1"},
-	}, ReasoningContentField)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +236,8 @@ func TestMessages(t *testing.T) {
 // The parameter means what it says: no field name, no reasoning on the wire, for a caller
 // whose messages carry none.
 func TestMessagesWithoutAReasoningField(t *testing.T) {
-	messages, err := Messages([]loom.Message{{Role: loom.RoleAssistant, Content: "answer", ReasoningContent: "why"}}, "")
+	provider := Provider{FinishReason: finishReason}
+	messages, err := provider.Messages([]loom.Message{{Role: loom.RoleAssistant, Content: "answer", ReasoningContent: "why"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,8 +251,61 @@ func TestMessagesWithoutAReasoningField(t *testing.T) {
 }
 
 func TestMessagesRejectsAnUnknownRole(t *testing.T) {
-	_, err := Messages([]loom.Message{{Role: loom.Role("assistent"), Content: "typo"}}, ReasoningContentField)
+	provider := Provider{FinishReason: finishReason, ReasoningField: ReasoningContentField}
+	_, err := provider.Messages([]loom.Message{{Role: loom.Role("assistent"), Content: "typo"}})
 	if err == nil || !strings.Contains(err.Error(), `unknown role "assistent"`) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// A provider's structured reasoning is its own sequence of blocks, and it asks for them back
+// unchanged and in order, so they travel verbatim — and only to a provider that carries such a
+// field at all.
+func TestMessagesCarryStructuredReasoningVerbatim(t *testing.T) {
+	details := jsontext.Value(`[{"type":"reasoning.encrypted","data":"AAAA","id":"r1","format":"anthropic-claude-v1","index":0}]`)
+	message := loom.Message{Role: loom.RoleAssistant, Content: "answer", ReasoningContent: "summary", ReasoningDetails: details}
+
+	provider := Provider{
+		FinishReason:          finishReason,
+		ReasoningField:        ReasoningField,
+		ReasoningDetailsField: ReasoningDetailsField,
+	}
+	messages, err := provider.Messages([]loom.Message{message})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := jsonv2.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire []map[string]any
+	if err := jsonv2.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire[0]["reasoning"] != "summary" {
+		t.Fatalf("text reasoning = %#v", wire[0]["reasoning"])
+	}
+	blocks, ok := wire[0]["reasoning_details"].([]any)
+	if !ok || len(blocks) != 1 {
+		t.Fatalf("blocks = %#v", wire[0]["reasoning_details"])
+	}
+	block, _ := blocks[0].(map[string]any)
+	if block["type"] != "reasoning.encrypted" || block["data"] != "AAAA" || block["index"] != float64(0) {
+		t.Fatalf("block = %#v", block)
+	}
+
+	// A provider without a structured form never sees the field, even when a message carries
+	// one from another endpoint.
+	plain := Provider{FinishReason: finishReason, ReasoningField: ReasoningContentField}
+	messages, err = plain.Messages([]loom.Message{message})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = jsonv2.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "reasoning_details") {
+		t.Fatalf("a field the provider has no place for was sent: %s", data)
 	}
 }

@@ -17,6 +17,8 @@ interfaces.
 - Streaming model and writer APIs
 - Fan-out to multiple pluggable `Sink` implementations
 - Provider-neutral `ChatModel` abstraction
+- A reasoning turn's reasoning is carried back on the next call, text and, where a provider
+  returns structured blocks, the blocks themselves unchanged and in order
 - OpenTelemetry tracing with content capture disabled by default
 - Built-in providers for Ark, DeepSeek, OpenRouter, and Zhipu AI
 
