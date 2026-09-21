@@ -51,13 +51,13 @@ func TestBuildRequestRejectsUnknownMessageRole(t *testing.T) {
 		Messages:  []loom.Message{{Role: loom.Role("invalid"), Content: "hi"}},
 		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 	})
-	if err == nil || !strings.Contains(err.Error(), `未知角色 "invalid"`) {
-		t.Fatalf("期望未知角色报错,实际: %v", err)
+	if err == nil || !strings.Contains(err.Error(), `unknown role "invalid"`) {
+		t.Fatalf("expected an unknown-role error, got %v", err)
 	}
 }
 
-// TestBuildRequestReasoningModeExplicit 显式传 enabled/disabled 映射到
-// OpenRouter 统一 reasoning 对象(经请求 ExtraFields 注入)。
+// TestBuildRequestReasoningModeExplicit checks that an explicit enabled or disabled maps
+// onto OpenRouter's single reasoning object, injected through the request ExtraFields.
 func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 	m, err := New(Config{APIKey: "test-key", ModelName: "x-ai/grok-4.3"})
 	if err != nil {
@@ -92,7 +92,7 @@ func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 		}
 		reasoning, ok := body["reasoning"].(map[string]any)
 		if !ok {
-			t.Fatalf("mode=%s 期望请求带 reasoning 对象,实际 %s", tt.mode, encoded)
+			t.Fatalf("mode=%s expected a reasoning object in the request, got %s", tt.mode, encoded)
 		}
 		if reasoning["enabled"] != tt.wantEnabled {
 			t.Fatalf("mode=%s reasoning.enabled = %v, want %v", tt.mode, reasoning["enabled"], tt.wantEnabled)

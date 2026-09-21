@@ -8,8 +8,8 @@
 // divergence stays visible in the provider that has it instead of hiding behind
 // a shared hook.
 //
-// The error text in Tools is kept exactly as it was in the providers it came
-// from, so moving the code changed no message a caller can see.
+// The error text in Tools names the tool whose schema failed, so a caller can find
+// which one it was.
 package openaicompat
 
 import (
@@ -38,10 +38,10 @@ func Tools(tools []*loom.ToolInfo) ([]openai.ChatCompletionToolUnionParam, error
 		if t.Parameters != nil {
 			b, err := jsonv2.Marshal(t.Parameters)
 			if err != nil {
-				return nil, fmt.Errorf("工具 %q 参数 schema marshal 失败: %w", t.Name, err)
+				return nil, fmt.Errorf("tool %q argument schema could not be marshaled: %w", t.Name, err)
 			}
 			if err := jsonv2.Unmarshal(b, &params); err != nil {
-				return nil, fmt.Errorf("工具 %q 参数 schema unmarshal 失败: %w", t.Name, err)
+				return nil, fmt.Errorf("tool %q argument schema could not be unmarshaled: %w", t.Name, err)
 			}
 		}
 		out = append(out, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{

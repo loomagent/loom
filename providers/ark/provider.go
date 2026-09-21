@@ -1,18 +1,19 @@
-// Package ark 实现 loom.ChatModel,底层走火山方舟 arkruntime SDK。
+// Package ark implements loom.ChatModel on top of the Volcengine Ark arkruntime SDK.
 //
-// 用法:
+// Usage:
 //
 //	model, err := ark.New(ark.Config{
 //	    APIKey:    os.Getenv("ARK_API_KEY"),
-//	    ModelName: "ep-xxx",  // 火山方舟 endpoint id
+//	    ModelName: "ep-xxx",  // the Ark endpoint ID
 //	})
 //	if err != nil { ... }
 //
 //	resp, err := model.Chat(ctx, loom.ChatRequest{
-//	    Messages: []loom.Message{{Role: loom.RoleUser, Content: "你好"}},
+//	    Messages: []loom.Message{{Role: loom.RoleUser, Content: "hello"}},
 //	})
 //
-// Retry 内置(429 backoff + per-call timeout),通过 Config.Retry 调整或关闭。
+// Retries are built in: 429 backoff and a per-call timeout, adjusted or disabled through
+// Config.Retry.
 package ark
 
 import (
@@ -34,18 +35,19 @@ import (
 // does not provide an override.
 const DefaultBaseURL = "https://ark.cn-beijing.volces.com/api/v3"
 
-// Config ark provider 构造参数。
+// Config holds the Ark provider's construction parameters.
 type Config struct {
-	// APIKey 必填(走 BearerToken 鉴权)。
+	// APIKey is required, and is sent as a bearer token.
 	APIKey string
-	// ModelName 必填,火山方舟 endpoint id(如 "ep-20260301165020-2bltp")。
+	// ModelName is required: the Ark endpoint ID, such as "ep-20260301165020-2bltp".
 	ModelName string
-	// BaseURL 可空 — 不设时用 arkruntime 默认 (https://ark.cn-beijing.volces.com/api/v3)。
+	// BaseURL may be empty, in which case the arkruntime default
+	// (https://ark.cn-beijing.volces.com/api/v3) is used.
 	BaseURL string
-	// Retry 控制 retry 策略;nil 走 loom.DefaultRetryConfig()。
+	// Retry controls the retry policy; nil means loom.DefaultRetryConfig().
 	Retry *loom.RetryConfig
-	// Capabilities 模型能力,由调用方或 modelfactory 按实际模型配置填充。
-	// nil = 零值"未声明"(能力校验跳过、纯透传)。
+	// Capabilities is what the caller or modelfactory fills in from the model's real
+	// configuration. nil leaves it undeclared, so capability checks pass requests through.
 	Capabilities *loom.ModelCapabilities
 	// RequestHeaders adds provider-specific headers to every chat and stream
 	// request. The map is snapshotted by New. Callers should use this only for
@@ -53,7 +55,7 @@ type Config struct {
 	RequestHeaders map[string]string
 }
 
-// Model 一个 ark 模型实例,实现 loom.ChatModel。
+// Model is one Ark model instance, implementing loom.ChatModel.
 type Model struct {
 	client       *arkruntime.Client
 	name         string
@@ -64,13 +66,13 @@ type Model struct {
 
 var _ loom.ChatModel = (*Model)(nil)
 
-// New 构造 Model。
+// New builds a Model.
 func New(cfg Config) (*Model, error) {
 	if strings.TrimSpace(cfg.APIKey) == "" {
-		return nil, fmt.Errorf("loom/ark: APIKey 不能为空")
+		return nil, fmt.Errorf("loom/ark: APIKey must not be empty")
 	}
 	if strings.TrimSpace(cfg.ModelName) == "" {
-		return nil, fmt.Errorf("loom/ark: ModelName(endpoint id)不能为空")
+		return nil, fmt.Errorf("loom/ark: ModelName (the endpoint ID) must not be empty")
 	}
 	baseURL := strings.TrimSpace(cfg.BaseURL)
 	if baseURL == "" {
@@ -83,8 +85,9 @@ func New(cfg Config) (*Model, error) {
 	if retryCfg == nil {
 		retryCfg = loom.DefaultRetryConfig()
 	}
-	// 能力由调用方或 modelfactory 传入,这里不写死模型默认值。
-	// 裸构造(nil)= 零值"未声明",各能力校验跳过、纯透传。
+	// Capabilities come from the caller or modelfactory; no model default is hardcoded
+	// here. Building the model without them leaves every capability undeclared, so each
+	// check passes requests through.
 	capabilities := loom.ModelCapabilities{}
 	if cfg.Capabilities != nil {
 		capabilities = *cfg.Capabilities
@@ -102,17 +105,17 @@ func New(cfg Config) (*Model, error) {
 	}, nil
 }
 
-// Name 返回 "ark/<endpoint>" 形式标识。
+// Name returns an identifier of the form "ark/<endpoint>".
 func (m *Model) Name() string {
 	return "ark/" + m.name
 }
 
-// Capabilities 返回初始化时声明的模型能力。
+// Capabilities returns the model capabilities declared at initialization.
 func (m *Model) Capabilities() loom.ModelCapabilities {
 	return m.capabilities
 }
 
-// Chat 实现 loom.ChatModel.Chat,自动 retry。
+// Chat implements loom.ChatModel.Chat with automatic retries.
 func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatResponse, error) {
 	arkReq, err := m.buildRequest(req)
 	if err != nil {
@@ -130,7 +133,7 @@ func (m *Model) chatRaw(ctx context.Context, req arkmodel.CreateChatCompletionRe
 		return nil, fmt.Errorf("loom/ark: chat: %w", err)
 	}
 	if len(out.Choices) == 0 {
-		return nil, fmt.Errorf("loom/ark: chat 返回 0 个 choice")
+		return nil, fmt.Errorf("loom/ark: chat returned 0 choices")
 	}
 	choice := out.Choices[0]
 	return &loom.ChatResponse{
@@ -143,8 +146,9 @@ func (m *Model) chatRaw(ctx context.Context, req arkmodel.CreateChatCompletionRe
 	}, nil
 }
 
-// Stream 实现 loom.ChatModel.Stream,自动 retry(只 retry 到首帧探活前)。
-// 强制开启 stream_options.include_usage,这样末尾帧能拿到 Usage。
+// Stream implements loom.ChatModel.Stream with automatic retries, up to the first-frame
+// liveness probe. stream_options.include_usage is forced on, so the last frame carries
+// Usage.
 func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, error) {
 	arkReq, err := m.buildRequest(req)
 	if err != nil {
@@ -171,7 +175,7 @@ func (m *Model) streamRaw(ctx context.Context, req arkmodel.CreateChatCompletion
 	return &streamAdapter{inner: stream, usageDecoder: decoder}, nil
 }
 
-// streamAdapter 把 arkruntime.ChatCompletionStreamReader 包装成 loom.Stream。
+// streamAdapter wraps an arkruntime.ChatCompletionStreamReader as a loom.Stream.
 type streamAdapter struct {
 	inner        *arkutils.ChatCompletionStreamReader
 	usageDecoder *usageUnmarshaler
@@ -180,7 +184,7 @@ type streamAdapter struct {
 func (s *streamAdapter) Recv() (*loom.Chunk, error) {
 	raw, err := s.inner.Recv()
 	if err != nil {
-		return nil, err // io.EOF 透传
+		return nil, err // io.EOF passes through
 	}
 	chunk := &loom.Chunk{Model: raw.Model}
 	if raw.Usage != nil {
@@ -203,12 +207,13 @@ func (s *streamAdapter) Close() error {
 	return s.inner.Close()
 }
 
-// buildRequest 把 loom.ChatRequest 翻译成 arkmodel.ChatCompletionRequest。
+// buildRequest translates a loom.ChatRequest into an arkmodel.ChatCompletionRequest.
 //
-// Reasoning.Mode 必传并映射到请求级 Thinking 字段(enabled/disabled);
-// thinking 绑死在 endpoint 配置、请求参数不生效的旧 endpoint,应在模型
-// capabilities 中声明为 always_on/none,ResolveReasoning 会兜住(报错或 omit),
-// 不会发出无效参数。
+// Reasoning.Mode is required and maps onto the request-level Thinking field, enabled or
+// disabled. An older endpoint where thinking is fixed in the endpoint's own configuration,
+// so request parameters have no effect, should declare always_on or none in the model's
+// capabilities: ResolveReasoning then either fails the call or omits the parameter, so no
+// ineffective parameter is ever sent.
 // Reasoning.Effort is sent unchanged after provider/model contract validation.
 func (m *Model) buildRequest(req loom.ChatRequest) (_ arkmodel.CreateChatCompletionRequest, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
@@ -229,9 +234,9 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ arkmodel.CreateChatComplet
 	case loom.ReasoningSendDisabled:
 		out.Thinking = &arkmodel.Thinking{Type: arkmodel.ThinkingTypeDisabled}
 	case loom.ReasoningSendOmit:
-		// 不发 Thinking 字段
+		// send no Thinking field
 	default:
-		return arkmodel.CreateChatCompletionRequest{}, fmt.Errorf("loom/ark: 未知 reasoning send %q", resolved.Send)
+		return arkmodel.CreateChatCompletionRequest{}, fmt.Errorf("loom/ark: unknown reasoning send %q", resolved.Send)
 	}
 	// Raw effort is administrator-declared; service_tier is a separate parameter.
 	// Reference: https://console.volcengine.com/ark/region:cn-beijing/docs/82379/2662855?lang=zh
@@ -268,7 +273,7 @@ func applyResponseFormat(out *arkmodel.CreateChatCompletionRequest, req loom.Cha
 		switch req.StructuredOutput.Mode {
 		case loom.StructuredOutputJSONSchema:
 			if req.StructuredOutput.Schema == nil {
-				return fmt.Errorf("loom/ark: json_schema structured output 缺少 schema")
+				return fmt.Errorf("loom/ark: json_schema structured output has no schema")
 			}
 			schemaObj, err := loom.StructuredSchemaObject(req.StructuredOutput.Schema)
 			if err != nil {
@@ -280,19 +285,21 @@ func applyResponseFormat(out *arkmodel.CreateChatCompletionRequest, req loom.Cha
 					Name:        loom.NormalizeStructuredOutputName(req.StructuredOutput.Name),
 					Description: req.StructuredOutput.Description,
 					Schema:      schemaObj,
-					// strict 固定 true:供应商硬保证输出合规永远是调用方想要的,见 loom.StructuredOutput 注释
+					// strict is always true: a provider's hard guarantee that the output conforms
+					// is always what the caller wants; see the loom.StructuredOutput comment
 					Strict: true,
 				},
 			}
 		case loom.StructuredOutputJSONObject:
 			out.ResponseFormat = &arkmodel.ResponseFormat{Type: arkmodel.ResponseFormatJsonObject}
 		case loom.StructuredOutputUnsupported:
-			// 不传
+			// send nothing
 		case loom.StructuredOutputNone:
-			// 请求侧不允许 none(能力声明专用),CheckRequestAgainstCapabilities 已前置拦截
-			return fmt.Errorf("loom/ark: StructuredOutput.Mode 不允许取 %q", req.StructuredOutput.Mode)
+			// The request side forbids none, which is reserved for capability declarations;
+			// CheckRequestAgainstCapabilities already rejects it earlier
+			return fmt.Errorf("loom/ark: StructuredOutput.Mode may not be %q", req.StructuredOutput.Mode)
 		default:
-			return fmt.Errorf("loom/ark: 未知 structured output mode %q", req.StructuredOutput.Mode)
+			return fmt.Errorf("loom/ark: unknown structured output mode %q", req.StructuredOutput.Mode)
 		}
 		return nil
 	}
@@ -303,9 +310,9 @@ func applyResponseFormat(out *arkmodel.CreateChatCompletionRequest, req loom.Cha
 	case loom.ResponseFormatText:
 		out.ResponseFormat = &arkmodel.ResponseFormat{Type: arkmodel.ResponseFormatText}
 	case loom.ResponseFormatDefault:
-		// 不传
+		// send nothing
 	default:
-		// 未知格式不传
+		// An unknown format sends nothing
 	}
 	return nil
 }
@@ -314,7 +321,7 @@ func translateMessages(msgs []loom.Message) []*arkmodel.ChatCompletionMessage {
 	out := make([]*arkmodel.ChatCompletionMessage, 0, len(msgs))
 	for _, m := range msgs {
 		gm := &arkmodel.ChatCompletionMessage{Role: translateRole(m.Role)}
-		// content:assistant 携带 tool_calls 时 content 可空
+		// content may be empty when an assistant message carries tool calls
 		if m.Role != loom.RoleAssistant || m.Content != "" || len(m.ToolCalls) <= 0 {
 			content := m.Content
 			gm.Content = &arkmodel.ChatCompletionMessageContent{StringValue: &content}
@@ -485,9 +492,9 @@ func translateUsage(u *arkmodel.Usage, reasoningKnown bool) loom.Usage {
 	}
 }
 
-// contentString 把 ark 的 ChatCompletionMessageContent(string 或 part list)
-// 翻译成 loom 用的纯字符串。Part list 形态把 text 部分拼起来,非 text part(image/audio/video)
-// 在 loom 第一版纯文本场景下忽略。
+// contentString turns Ark's ChatCompletionMessageContent, a string or a part list, into
+// the plain string loom uses. A part list joins its text parts and ignores the rest, such
+// as image, audio, or video parts, since loom's first version is text only.
 func contentString(c *arkmodel.ChatCompletionMessageContent) string {
 	if c == nil {
 		return ""
@@ -511,8 +518,8 @@ func derefString(p *string) string {
 	return *p
 }
 
-// 防止 io.EOF 被 unused import:provider 不直接用,但 streamAdapter.Recv 透传时
-// 上层 StreamWithRetry 用 errors.Is 检查。
+// Keeps io.EOF from becoming an unused import: the provider does not use it directly, but
+// StreamWithRetry inspects it with errors.Is when streamAdapter.Recv passes it up.
 var _ = io.EOF
 
 var _ = errors.As

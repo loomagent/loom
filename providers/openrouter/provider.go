@@ -1,13 +1,15 @@
-// Package openrouter 实现 loom.ChatModel,底层走 OpenRouter 的 OpenAI 兼容
-// chat completions API(github.com/openai/openai-go/v3)。
+// Package openrouter implements loom.ChatModel on top of OpenRouter's
+// OpenAI-compatible chat completions API, through github.com/openai/openai-go/v3.
 //
-// 与原生 OpenAI 协议的差异点(也是单独成包而非复用 deepseek/goseek 的原因):
-//   - 推理参数:OpenRouter 统一用请求级 "reasoning" 对象
-//     ({"enabled": bool, "effort": "low|medium|high"}),经 SetExtraFields 注入;
-//   - 推理输出:响应/流式 delta 的 message 用 "reasoning" 字段(非 deepseek 的
-//     "reasoning_content"),从 ExtraFields 提取。
+// Where it differs from the native OpenAI protocol, which is why it is a package of its
+// own rather than a reuse of deepseek:
+//   - reasoning parameters: OpenRouter takes one request-level "reasoning" object,
+//     {"enabled": bool, "effort": "low|medium|high"}, injected through SetExtraFields
+//   - reasoning output: the message in a response or streaming delta carries a
+//     "reasoning" field rather than deepseek's "reasoning_content", read from
+//     ExtraFields
 //
-// 用法:
+// Usage:
 //
 //	model, err := openrouter.New(openrouter.Config{
 //	    APIKey:    os.Getenv("OPENROUTER_API_KEY"),
@@ -32,27 +34,27 @@ import (
 	"github.com/loomagent/loom/providers/internal/openaicompat"
 )
 
-// DefaultBaseURL OpenRouter API 入口。
+// DefaultBaseURL is the OpenRouter API endpoint.
 const DefaultBaseURL = "https://openrouter.ai/api/v1"
 
-// Config OpenRouter provider 构造参数。
+// Config holds the OpenRouter provider's construction parameters.
 type Config struct {
-	// APIKey 必填。
+	// APIKey is required.
 	APIKey string
-	// ModelName 必填,OpenRouter 模型标识,如 "x-ai/grok-4.3"。
+	// ModelName is required: the OpenRouter model identifier, such as "x-ai/grok-4.3".
 	ModelName string
-	// BaseURL 可空 — 不设时用 DefaultBaseURL。
+	// BaseURL may be empty, in which case DefaultBaseURL is used.
 	BaseURL string
 
-	// Retry 控制 retry 策略;nil 走 loom.DefaultRetryConfig()。
+	// Retry controls the retry policy; nil means loom.DefaultRetryConfig().
 	Retry *loom.RetryConfig
 
-	// Capabilities 模型能力,由调用方或 modelfactory 按实际模型配置填充。
-	// nil = 零值"未声明"(能力校验跳过、纯透传)。
+	// Capabilities is what the caller or modelfactory fills in from the model's real
+	// configuration. nil leaves it undeclared, so capability checks pass requests through.
 	Capabilities *loom.ModelCapabilities
 }
 
-// Model 一个 OpenRouter 模型实例,实现 loom.ChatModel。
+// Model is one OpenRouter model instance, implementing loom.ChatModel.
 type Model struct {
 	client       openai.Client
 	name         string
@@ -62,13 +64,13 @@ type Model struct {
 
 var _ loom.ChatModel = (*Model)(nil)
 
-// New 构造 Model。
+// New builds a Model.
 func New(cfg Config) (*Model, error) {
 	if strings.TrimSpace(cfg.APIKey) == "" {
-		return nil, fmt.Errorf("loom/openrouter: APIKey 不能为空")
+		return nil, fmt.Errorf("loom/openrouter: APIKey must not be empty")
 	}
 	if strings.TrimSpace(cfg.ModelName) == "" {
-		return nil, fmt.Errorf("loom/openrouter: ModelName 不能为空")
+		return nil, fmt.Errorf("loom/openrouter: ModelName must not be empty")
 	}
 
 	baseURL := DefaultBaseURL
@@ -80,8 +82,9 @@ func New(cfg Config) (*Model, error) {
 	if retryCfg == nil {
 		retryCfg = loom.DefaultRetryConfig()
 	}
-	// 能力由调用方或 modelfactory 传入,这里不写死模型默认值。
-	// 裸构造(nil)= 零值"未声明",各能力校验跳过、纯透传。
+	// Capabilities come from the caller or modelfactory; no model default is hardcoded
+	// here. Building the model without them leaves every capability undeclared, so each
+	// check passes requests through.
 	capabilities := loom.ModelCapabilities{}
 	if cfg.Capabilities != nil {
 		capabilities = *cfg.Capabilities
@@ -97,17 +100,17 @@ func New(cfg Config) (*Model, error) {
 	}, nil
 }
 
-// Name 返回 "openrouter/<model>" 形式标识。
+// Name returns an identifier of the form "openrouter/<model>".
 func (m *Model) Name() string {
 	return "openrouter/" + m.name
 }
 
-// Capabilities 返回初始化时声明的模型能力。
+// Capabilities returns the model capabilities declared at initialization.
 func (m *Model) Capabilities() loom.ModelCapabilities {
 	return m.capabilities
 }
 
-// Chat 实现 loom.ChatModel.Chat,自动 retry。
+// Chat implements loom.ChatModel.Chat with automatic retries.
 func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatResponse, error) {
 	orReq, err := m.buildRequest(req)
 	if err != nil {
@@ -118,14 +121,14 @@ func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatRespo
 	})
 }
 
-// chatRaw 单次同步调用(无 retry)。
+// chatRaw is one synchronous call with no retry.
 func (m *Model) chatRaw(ctx context.Context, orReq openai.ChatCompletionNewParams) (*loom.ChatResponse, error) {
 	out, err := m.client.Chat.Completions.New(ctx, orReq)
 	if err != nil {
 		return nil, fmt.Errorf("loom/openrouter: chat: %w", err)
 	}
 	if len(out.Choices) == 0 {
-		return nil, fmt.Errorf("loom/openrouter: chat 返回 0 个 choice")
+		return nil, fmt.Errorf("loom/openrouter: chat returned 0 choices")
 	}
 	choice := out.Choices[0]
 	return &loom.ChatResponse{
@@ -138,8 +141,9 @@ func (m *Model) chatRaw(ctx context.Context, orReq openai.ChatCompletionNewParam
 	}, nil
 }
 
-// Stream 实现 loom.ChatModel.Stream,自动 retry(只 retry 到首帧探活前)。
-// 强制开启 stream_options.include_usage,末尾帧拿 Usage。
+// Stream implements loom.ChatModel.Stream with automatic retries, up to the first-frame
+// liveness probe. stream_options.include_usage is forced on, so the last frame carries
+// Usage.
 func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, error) {
 	orReq, err := m.buildRequest(req)
 	if err != nil {
@@ -152,7 +156,7 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 	})
 }
 
-// streamAdapter 把 go-openai ChatCompletionStream 包装成 loom.Stream。
+// streamAdapter wraps a go-openai ChatCompletionStream as a loom.Stream.
 type streamAdapter struct {
 	inner interface {
 		Next() bool
@@ -176,7 +180,8 @@ func (s *streamAdapter) Recv() (*loom.Chunk, error) {
 		u := openaicompat.Usage(&raw.Usage)
 		chunk.Usage = &u
 	}
-	// include_usage 的末尾帧 choices=[];普通帧取首项 delta。
+	// The trailing include_usage frame has choices=[]; an ordinary frame's first delta is
+	// taken.
 	if len(raw.Choices) > 0 {
 		choice := raw.Choices[0]
 		chunk.ContentDelta = choice.Delta.Content
@@ -193,12 +198,12 @@ func (s *streamAdapter) Close() error {
 	return s.inner.Close()
 }
 
-// buildRequest 把 loom.ChatRequest 翻译成 go-openai 请求结构。
+// buildRequest translates a loom.ChatRequest into the go-openai request structure.
 func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewParams, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
 	messages, err := translateMessages(req.Messages)
 	if err != nil {
-		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: 翻译 messages: %w", err)
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: translate messages: %w", err)
 	}
 	out := openai.ChatCompletionNewParams{
 		Model:    m.name,
@@ -242,19 +247,21 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 					Name:        req.StructuredOutput.Name,
 					Description: param.NewOpt(req.StructuredOutput.Description),
 					Schema:      req.StructuredOutput.Schema,
-					// strict 固定 true:供应商硬保证输出合规永远是调用方想要的,见 loom.StructuredOutput 注释
+					// strict is always true: a provider's hard guarantee that the output conforms
+					// is always what the caller wants; see the loom.StructuredOutput comment
 					Strict: param.NewOpt(true),
 				},
 			}
 		case loom.StructuredOutputJSONObject:
 			out.ResponseFormat.OfJSONObject = &shared.ResponseFormatJSONObjectParam{}
 		case loom.StructuredOutputUnsupported:
-			// 不传
+			// send nothing
 		case loom.StructuredOutputNone:
-			// 请求侧不允许 none(能力声明专用),CheckRequestAgainstCapabilities 已前置拦截
-			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: StructuredOutput.Mode 不允许取 %q", req.StructuredOutput.Mode)
+			// The request side forbids none, which is reserved for capability declarations;
+			// CheckRequestAgainstCapabilities already rejects it earlier
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: StructuredOutput.Mode may not be %q", req.StructuredOutput.Mode)
 		default:
-			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: 未知 structured output mode %q", req.StructuredOutput.Mode)
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: unknown structured output mode %q", req.StructuredOutput.Mode)
 		}
 	} else {
 		switch req.ResponseFormat {
@@ -263,15 +270,15 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 		case loom.ResponseFormatText:
 			out.ResponseFormat.OfText = &shared.ResponseFormatTextParam{}
 		case loom.ResponseFormatDefault:
-			// 不传
+			// send nothing
 		default:
-			// 未知格式不传(对齐 deepseek provider 行为)
+			// An unknown format sends nothing, matching the deepseek provider
 		}
 	}
 
 	tools, err := openaicompat.Tools(req.Tools)
 	if err != nil {
-		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: 翻译 tools: %w", err)
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: translate tools: %w", err)
 	}
 	out.Tools = tools
 	if req.ToolChoice != nil {
@@ -280,8 +287,8 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 	return out, nil
 }
 
-// translateReasoning 把解析结果翻译成 OpenRouter 统一 reasoning 对象。
-// 返回 nil 表示不发该字段(omit)。
+// translateReasoning turns a resolved decision into OpenRouter's single reasoning object.
+// A nil return sends nothing, the omit case.
 func translateReasoning(resolved loom.ResolvedReasoning) (map[string]any, error) {
 	switch resolved.Send {
 	case loom.ReasoningSendOmit:
@@ -295,13 +302,14 @@ func translateReasoning(resolved loom.ResolvedReasoning) (map[string]any, error)
 		}
 		return reasoning, nil
 	default:
-		return nil, fmt.Errorf("loom/openrouter: 未知 reasoning send %q", resolved.Send)
+		return nil, fmt.Errorf("loom/openrouter: unknown reasoning send %q", resolved.Send)
 	}
 }
 
-// extractReasoning 提取推理输出。OpenRouter 统一用 "reasoning" 字段(ExtraFields),
-// 个别上游可能透传 deepseek 风格的 reasoning_content — 优先取后者(已结构化),
-// 否则从 ExtraFields 解 "reasoning"。
+// extractReasoning reads the reasoning output. OpenRouter uses a "reasoning" field in
+// ExtraFields, but an upstream provider may pass through deepseek's structured
+// reasoning_content instead, which takes precedence; otherwise "reasoning" is decoded
+// from ExtraFields.
 func extractReasoning(extra map[string]respjson.Field) string {
 	if field, ok := extra["reasoning_content"]; ok {
 		var s string
@@ -315,7 +323,7 @@ func extractReasoning(extra map[string]respjson.Field) string {
 	}
 	var s string
 	if err := jsonv2.Unmarshal([]byte(raw.Raw()), &s); err != nil {
-		// "reasoning" 不是 string(如 null 或对象),忽略
+		// "reasoning" is not a string, a null or an object for instance; ignore it
 		return ""
 	}
 	return s
@@ -343,7 +351,7 @@ func translateMessages(msgs []loom.Message) ([]openai.ChatCompletionMessageParam
 		case loom.RoleUser:
 			gm = openai.UserMessage(m.Content)
 		default:
-			return nil, fmt.Errorf("消息 %d 使用未知角色 %q", len(out), m.Role)
+			return nil, fmt.Errorf("message %d uses unknown role %q", len(out), m.Role)
 		}
 		out = append(out, gm)
 	}
@@ -362,7 +370,8 @@ func translateFinishReason(fr string) loom.FinishReason {
 	case "":
 		return ""
 	default:
-		// OpenRouter 偶有自定义值(如上游 provider 透传),按自然停止处理
+		// OpenRouter sometimes reports a value of its own, passed through from an upstream
+		// provider; treat it as a natural stop
 		return loom.FinishReasonStop
 	}
 }

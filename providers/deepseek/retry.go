@@ -13,24 +13,24 @@ import (
 	"github.com/loomagent/loom"
 )
 
-// classifier 把官方 SDK 暴露的错误翻成 loom.ErrorClass。
-// 任何上层 wrap 过的 error 都通过 errors.As 解出 *openai.Error。
+// classifier turns the errors the official SDK exposes into a loom.ErrorClass. An error
+// wrapped by a caller higher up is unwrapped to an *openai.Error through errors.As.
 type classifier struct{}
 
-// 编译期断言 — 框架引入新的 ErrorClassifier 字段时编译错暴露。
+// Compile-time check, so a new ErrorClassifier field in the framework fails the build.
 var _ loom.ErrorClassifier = classifier{}
 
-// ClassifyError 实现 loom.ErrorClassifier。
+// ClassifyError implements loom.ErrorClassifier.
 //
-// 错误来源 + 映射:
-//   - *openai.Error(HTTP 非 2xx):
-//   - 429                   → RateLimit(受共享 cooldown 和 elapsed budget 约束)
-//   - 503 / 其它 5xx         → Transient(有限 retry)
-//   - 401 / 402 / 403 / 400 → Permanent(auth / 余额不足 / bad request)
-//   - 4xx (其它)             → Permanent(参数错 / 模型不存在等)
-//   - ctx.Canceled / DeadlineExceeded → Permanent(框架已在 classifyForBackoff
-//     兜底,这里 redundant 保险)
-//   - 其它(net / DNS / TLS handshake 失败等)→ Transient
+// The source of each error and how it maps:
+//   - *openai.Error for a non-2xx HTTP status:
+//   - 429                   → RateLimit, bounded by the shared cooldown and elapsed budget
+//   - 503 and other 5xx     → Transient, retried a bounded number of times
+//   - 401, 402, 403, 400    → Permanent: authentication, insufficient balance, bad request
+//   - any other 4xx         → Permanent: a bad argument, a missing model
+//   - ctx.Canceled or DeadlineExceeded → Permanent, which classifyForBackoff already
+//     covers; this is belt-and-braces
+//   - anything else, such as a net, DNS, or TLS handshake failure → Transient
 func (classifier) ClassifyError(err error) loom.ErrorClass {
 	if err == nil {
 		return loom.ErrorClassUnknown
@@ -51,12 +51,12 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 		if apiErr.StatusCode >= 500 {
 			return loom.ErrorClassTransient
 		}
-		// 其它 4xx → permanent(client 错误,retry 无用)
+		// Any other 4xx is permanent: a client error that retrying cannot fix
 		if apiErr.StatusCode >= 400 {
 			return loom.ErrorClassPermanent
 		}
 	}
-	// 默认网络层错误归为 Transient(connection reset / DNS / TLS 握手 等)
+	// Network-layer errors default to Transient: connection reset, DNS, a TLS handshake
 	return loom.ErrorClassTransient
 }
 

@@ -9,22 +9,23 @@ import (
 	"github.com/loomagent/loom"
 )
 
-// classifier 把 arkruntime 错误翻成 loom.ErrorClass。
+// classifier turns arkruntime errors into a loom.ErrorClass.
 type classifier struct{}
 
 var _ loom.ErrorClassifier = classifier{}
 
-// ClassifyError 实现 loom.ErrorClassifier。
+// ClassifyError implements loom.ErrorClassifier.
 //
-// 错误来源 + 映射(跟 deepseek classifier 同语义,覆盖 ark 的
-// *model.APIError / *model.RequestError):
-//   - HTTP 429                   → RateLimit(共享额度退避)
-//   - HTTP 503 / 其它 5xx         → Transient(有限 retry)
+// The source of each error and how it maps, matching the deepseek classifier's meaning and
+// covering Ark's *model.APIError and *model.RequestError:
+//   - HTTP 429                   → RateLimit, backed off against a shared quota
+//   - HTTP 503 / other 5xx       → Transient, retried a bounded number of times
 //   - HTTP 401 / 402 / 403 / 400 / 404 → Permanent
-//   - HTTP 5xx (其它)              → Transient
-//   - HTTP 4xx (其它)              → Permanent
-//   - ctx.Canceled / DeadlineExceeded → Permanent(框架已 兜底,redundant 保险)
-//   - 其它(net / DNS / TLS / 连接重置等)→ Transient
+//   - other 5xx                  → Transient
+//   - other 4xx                  → Permanent
+//   - ctx.Canceled / DeadlineExceeded → Permanent, which the framework already covers;
+//     this is belt-and-braces
+//   - anything else, such as a net, DNS, TLS, or connection-reset failure → Transient
 func (classifier) ClassifyError(err error) loom.ErrorClass {
 	if err == nil {
 		return loom.ErrorClassUnknown

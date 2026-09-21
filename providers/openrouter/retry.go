@@ -9,21 +9,22 @@ import (
 	"github.com/loomagent/loom"
 )
 
-// classifier 把 go-openai 暴露的错误翻成 loom.ErrorClass。
-// 任何上层 wrap 过的 error 都通过 errors.As 解出 *openai.Error。
+// classifier turns the errors go-openai exposes into a loom.ErrorClass. An error wrapped
+// by a caller higher up is unwrapped to an *openai.Error through errors.As.
 type classifier struct{}
 
-// 编译期断言 — 框架引入新的 ErrorClassifier 字段时编译错暴露。
+// Compile-time check, so a new ErrorClassifier field in the framework fails the build.
 var _ loom.ErrorClassifier = classifier{}
 
-// ClassifyError 实现 loom.ErrorClassifier。映射与 deepseek classifier 对齐:
-//   - 429                   → RateLimit(共享额度退避)
-//   - 503 / 其它 5xx         → Transient(有限 retry)
-//   - 400 / 401 / 402 / 403 / 404 → Permanent(auth / 余额不足 / bad request)
-//   - 其它 5xx               → Transient(有限 retry)
-//   - 其它 4xx               → Permanent
+// ClassifyError implements loom.ErrorClassifier. The mapping matches the deepseek
+// classifier:
+//   - 429                   → RateLimit, backed off against a shared quota
+//   - 503 / other 5xx       → Transient, retried a bounded number of times
+//   - 400 / 401 / 402 / 403 / 404 → Permanent: authentication, insufficient balance, bad request
+//   - other 5xx             → Transient, retried a bounded number of times
+//   - other 4xx             → Permanent
 //   - ctx.Canceled / DeadlineExceeded → Permanent
-//   - 其它(net / DNS / TLS) → Transient
+//   - anything else, such as a net, DNS, or TLS failure → Transient
 func (classifier) ClassifyError(err error) loom.ErrorClass {
 	if err == nil {
 		return loom.ErrorClassUnknown
@@ -48,7 +49,7 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 	return loom.ErrorClassTransient
 }
 
-// httpStatusOf 从官方 SDK 的错误类型里解出 HTTP 状态码。
+// httpStatusOf extracts the HTTP status code from the official SDK's error types.
 func httpStatusOf(err error) (int, bool) {
 	if apiErr, ok := errors.AsType[*openai.Error](err); ok {
 		return apiErr.StatusCode, true
