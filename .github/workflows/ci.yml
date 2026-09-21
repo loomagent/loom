@@ -26,4 +26,6 @@ jobs:
         with:
           version: v2.13.2
       - name: Test
-        run: go test -race ./...
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Coverage floor
+        run: bash scripts/check-coverage.sh coverage.out
