@@ -1,5 +1,10 @@
 // Package sourceregistrytest provides a reusable conformance suite for
 // sourceregistry.Store implementations.
+//
+// The suite reports a contract violation by failing the test it runs in, and its own
+// failure paths — a Factory returning nothing, a Store returning the wrong number of
+// results — are therefore reached by running it against a Store that is already broken,
+// not by a test of its own. They are deliberately left uncovered.
 package sourceregistrytest
 
 import (
