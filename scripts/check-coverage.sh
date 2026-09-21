@@ -9,7 +9,7 @@
 set -euo pipefail
 
 profile="${1:-coverage.out}"
-floor="${COVERAGE_FLOOR:-86}"
+floor="${COVERAGE_FLOOR:-87}"
 
 total="$(go tool cover -func="${profile}" | awk '/^total:/ {sub(/%/, "", $3); print $3}')"
 if [[ -z "${total}" ]]; then
