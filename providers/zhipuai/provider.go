@@ -4,17 +4,14 @@ package zhipuai
 
 import (
 	"context"
-	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
-	"github.com/openai/openai-go/v3/packages/respjson"
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/loomagent/loom"
@@ -114,21 +111,11 @@ func (m *Model) chatRaw(ctx context.Context, orReq openai.ChatCompletionNewParam
 	if err != nil {
 		return nil, fmt.Errorf("loom/zhipuai: chat: %w", normalizeError(err))
 	}
-	if len(out.Choices) == 0 {
-		return nil, fmt.Errorf("loom/zhipuai: chat returned 0 choices")
+	response, err := wire.Response(out)
+	if err != nil {
+		return nil, fmt.Errorf("loom/zhipuai: chat: %w", err)
 	}
-	choice := out.Choices[0]
-	if err := finishError(choice.FinishReason); err != nil {
-		return nil, err
-	}
-	return &loom.ChatResponse{
-		Content:          choice.Message.Content,
-		ReasoningContent: extractReasoning(choice.Message.JSON.ExtraFields),
-		ToolCalls:        openaicompat.ToolCalls(choice.Message.ToolCalls),
-		FinishReason:     translateFinishReason(choice.FinishReason),
-		Usage:            openaicompat.Usage(&out.Usage),
-		Model:            out.Model,
-	}, nil
+	return response, nil
 }
 
 // Stream implements loom.ChatModel.Stream with automatic retries, up to the first-frame
@@ -148,69 +135,17 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 		orReq.SetExtraFields(extra)
 	}
 	return loom.StreamWithRetry(ctx, classifier{}, m.retryCfg, func(streamCtx context.Context) (loom.Stream, error) {
-		stream := m.client.Chat.Completions.NewStreaming(streamCtx, orReq)
-		return &streamAdapter{inner: stream}, nil
+		return wire.Stream(m.client.Chat.Completions.NewStreaming(streamCtx, orReq)), nil
 	})
 }
 
-// streamAdapter wraps the OpenAI SDK's ChatCompletion stream as a loom.Stream.
-type streamAdapter struct {
-	finished bool
-	closed   bool
-	inner    interface {
-		Next() bool
-		Current() openai.ChatCompletionChunk
-		Err() error
-		Close() error
-	}
-}
-
-func (s *streamAdapter) Recv() (*loom.Chunk, error) {
-	if s.closed {
-		return nil, io.EOF
-	}
-	if !s.inner.Next() {
-		defer func() { _ = s.Close() }() // Preserve the stream terminal error; closing is cleanup.
-		if err := s.inner.Err(); err != nil {
-			return nil, normalizeError(err)
-		}
-		if !s.finished {
-			return nil, io.ErrUnexpectedEOF
-		}
-		return nil, io.EOF
-	}
-	raw := s.inner.Current()
-
-	chunk := &loom.Chunk{Model: raw.Model}
-	if raw.JSON.Usage.Valid() {
-		u := openaicompat.Usage(&raw.Usage)
-		chunk.Usage = &u
-	}
-	// The trailing usage-only frame has choices=[]; an ordinary frame's first delta is
-	// taken.
-	if len(raw.Choices) > 0 {
-		choice := raw.Choices[0]
-		chunk.ContentDelta = choice.Delta.Content
-		chunk.ReasoningContentDelta = extractReasoning(choice.Delta.JSON.ExtraFields)
-		chunk.ToolCallDeltas = openaicompat.ToolCallDeltas(choice.Delta.ToolCalls)
-		if choice.FinishReason != "" {
-			if err := finishError(choice.FinishReason); err != nil {
-				_ = s.Close()
-				return nil, err
-			}
-			s.finished = true
-			chunk.FinishReason = translateFinishReason(choice.FinishReason)
-		}
-	}
-	return chunk, nil
-}
-
-func (s *streamAdapter) Close() error {
-	if s.closed {
-		return nil
-	}
-	s.closed = true
-	return s.inner.Close()
+// wire is what this provider does differently when a response is read back: this endpoint
+// uses its own finish reasons, refuses some of them outright, and reports its own error type,
+// which the classifier reads.
+var wire = openaicompat.Provider{
+	FinishReason:   translateFinishReason,
+	CheckFinish:    finishError,
+	NormalizeError: normalizeError,
 }
 
 // buildRequest translates a loom.ChatRequest into the go-openai request structure.
@@ -332,14 +267,6 @@ func translateReasoningFromRequest(caps loom.ModelCapabilities, r loom.Reasoning
 		return nil, err
 	}
 	return translateReasoning(resolved)
-}
-
-func extractReasoning(extra map[string]respjson.Field) string {
-	var value string
-	if field, ok := extra["reasoning_content"]; ok {
-		_ = jsonv2.Unmarshal([]byte(field.Raw()), &value)
-	}
-	return value
 }
 
 func translateMessages(msgs []loom.Message) ([]openai.ChatCompletionMessageParamUnion, error) {

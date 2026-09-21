@@ -27,18 +27,14 @@ package deepseek
 
 import (
 	"context"
-	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
-	"github.com/openai/openai-go/v3/packages/respjson"
-	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/loomagent/loom"
@@ -158,19 +154,17 @@ func (m *Model) chatRaw(ctx context.Context, dsReq openai.ChatCompletionNewParam
 	if err != nil {
 		return nil, fmt.Errorf("loom/deepseek: chat: %w", normalizeDeepSeekError(err))
 	}
-	if len(out.Choices) == 0 {
-		return nil, fmt.Errorf("loom/deepseek: chat returned 0 choices")
+	response, err := wire.Response(out)
+	if err != nil {
+		return nil, fmt.Errorf("loom/deepseek: chat: %w", err)
 	}
-	choice := out.Choices[0]
-	return &loom.ChatResponse{
-		Content:          choice.Message.Content,
-		ReasoningContent: extractReasoning(choice.Message.JSON.ExtraFields),
-		ToolCalls:        openaicompat.ToolCalls(choice.Message.ToolCalls),
-		FinishReason:     translateFinishReason(choice.FinishReason),
-		Usage:            translateUsage(&out.Usage),
-		Model:            out.Model,
-	}, nil
+	return response, nil
 }
+
+// wire is what this provider does differently when a response is read back. The request
+// shape stays here; reading a completion and reading a stream are the same work for every
+// provider on this wire format.
+var wire = openaicompat.Provider{FinishReason: translateFinishReason}
 
 // Stream implements loom.ChatModel.Stream with automatic retries, up to the first-frame
 // liveness probe. Once the consumer has the second frame or later, there are no more
@@ -183,45 +177,8 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 	}
 	dsReq.StreamOptions.IncludeUsage = param.NewOpt(true)
 	return loom.StreamWithRetry(ctx, classifier{}, m.retryCfg, func(streamCtx context.Context) (loom.Stream, error) {
-		return &streamAdapter{inner: m.client.Chat.Completions.NewStreaming(streamCtx, dsReq)}, nil
+		return wire.Stream(m.client.Chat.Completions.NewStreaming(streamCtx, dsReq)), nil
 	})
-}
-
-// streamAdapter maps the upstream SSE stream to loom.Stream.
-type streamAdapter struct {
-	inner *ssestream.Stream[openai.ChatCompletionChunk]
-}
-
-func (s *streamAdapter) Recv() (*loom.Chunk, error) {
-	if !s.inner.Next() {
-		if err := s.inner.Err(); err != nil {
-			return nil, err
-		}
-		return nil, io.EOF
-	}
-	raw := s.inner.Current()
-
-	chunk := &loom.Chunk{Model: raw.Model}
-	if raw.JSON.Usage.Valid() {
-		u := translateUsage(&raw.Usage)
-		chunk.Usage = &u
-	}
-	// DeepSeek sends a trailing usage frame with choices=[]; an ordinary frame has at
-	// least one choice, whose delta is taken.
-	if len(raw.Choices) > 0 {
-		choice := raw.Choices[0]
-		chunk.ContentDelta = choice.Delta.Content
-		chunk.ReasoningContentDelta = extractReasoning(choice.Delta.JSON.ExtraFields)
-		chunk.ToolCallDeltas = openaicompat.ToolCallDeltas(choice.Delta.ToolCalls)
-		if choice.FinishReason != "" {
-			chunk.FinishReason = translateFinishReason(choice.FinishReason)
-		}
-	}
-	return chunk, nil
-}
-
-func (s *streamAdapter) Close() error {
-	return s.inner.Close()
 }
 
 // buildRequest validates explicit configuration and serializes the requested
@@ -347,22 +304,6 @@ func isDeepSeekContentExistsRisk(err error) bool {
 	return strings.EqualFold(strings.TrimSpace(apiErr.Message), "Content Exists Risk")
 }
 
-// extractReasoning reads DeepSeek's reasoning output. DeepSeek uses a message-level
-// "reasoning_content" field with no typed place in the SDK, so it arrives in
-// ExtraFields.
-func extractReasoning(extra map[string]respjson.Field) string {
-	field, ok := extra["reasoning_content"]
-	if !ok {
-		return ""
-	}
-	var s string
-	if err := jsonv2.Unmarshal([]byte(field.Raw()), &s); err != nil {
-		// Not a string, a null or an object for instance; ignore it
-		return ""
-	}
-	return s
-}
-
 // translateMessages maps loom messages onto the SDK's union. An unknown role is an error
 // rather than a user message: quietly changing who said something rewrites the
 // conversation, and nothing downstream would notice.
@@ -411,35 +352,6 @@ func translateFinishReason(r string) loom.FinishReason {
 	default:
 		return loom.FinishReason(r)
 	}
-}
-
-func translateUsage(u *openai.CompletionUsage) loom.Usage {
-	if u == nil {
-		return loom.Usage{}
-	}
-	out := loom.Usage{
-		PromptTokens:     uint64(max(u.PromptTokens, 0)),
-		CompletionTokens: uint64(max(u.CompletionTokens, 0)),
-		TotalTokens:      uint64(max(u.TotalTokens, 0)),
-	}
-	if u.JSON.PromptTokensDetails.Valid() {
-		out.CachedTokens = uint64(max(u.PromptTokensDetails.CachedTokens, 0))
-	}
-	// DeepSeek reports the cache-hit count under its own key rather than
-	// prompt_tokens_details.cached_tokens, so read the raw field as a fallback.
-	if out.CachedTokens == 0 {
-		if field, ok := u.JSON.ExtraFields["prompt_cache_hit_tokens"]; ok {
-			var cached int64
-			if err := jsonv2.Unmarshal([]byte(field.Raw()), &cached); err == nil && cached > 0 {
-				out.CachedTokens = uint64(cached)
-			}
-		}
-	}
-	if u.JSON.CompletionTokensDetails.Valid() {
-		out.ReasoningTokens = uint64(max(u.CompletionTokensDetails.ReasoningTokens, 0))
-		out.ReasoningTokensKnown = u.CompletionTokensDetails.JSON.ReasoningTokens.Valid()
-	}
-	return out
 }
 
 // newClient builds the SDK client. Retries belong to loom, so the SDK must not retry

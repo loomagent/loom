@@ -147,4 +147,38 @@ func TestUsage(t *testing.T) {
 	if got := Usage(&negative); got.PromptTokens != 0 || got.CompletionTokens != 0 || got.TotalTokens != 0 {
 		t.Fatalf("negative counts became %+v", got)
 	}
+
+	// A reasoning count that is present and zero is not the same as one that never arrived.
+	var explicitZero openai.CompletionUsage
+	if err := jsonv2.Unmarshal([]byte(`{"completion_tokens_details":{"reasoning_tokens":0}}`), &explicitZero); err != nil {
+		t.Fatal(err)
+	}
+	if got := Usage(&explicitZero); !got.ReasoningTokensKnown || got.ReasoningTokens != 0 {
+		t.Fatalf("explicit zero = %+v", got)
+	}
+	var explicitNull openai.CompletionUsage
+	if err := jsonv2.Unmarshal([]byte(`{"completion_tokens_details":{"reasoning_tokens":null}}`), &explicitNull); err != nil {
+		t.Fatal(err)
+	}
+	if got := Usage(&explicitNull); got.ReasoningTokensKnown {
+		t.Fatalf("a null count reported as known = %+v", got)
+	}
+
+	// One vendor reports its cache-hit count under its own key, which is read only when the
+	// standard field said nothing.
+	var vendorCache openai.CompletionUsage
+	if err := jsonv2.Unmarshal([]byte(`{"prompt_tokens":9,"prompt_cache_hit_tokens":4}`), &vendorCache); err != nil {
+		t.Fatal(err)
+	}
+	if got := Usage(&vendorCache); got.CachedTokens != 4 {
+		t.Fatalf("vendor cache key = %+v", got)
+	}
+	// A standard count wins over the vendor key.
+	var both openai.CompletionUsage
+	if err := jsonv2.Unmarshal([]byte(`{"prompt_tokens_details":{"cached_tokens":7},"prompt_cache_hit_tokens":4}`), &both); err != nil {
+		t.Fatal(err)
+	}
+	if got := Usage(&both); got.CachedTokens != 7 {
+		t.Fatalf("standard cache count = %+v", got)
+	}
 }

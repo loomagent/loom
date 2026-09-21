@@ -19,16 +19,13 @@ package openrouter
 
 import (
 	"context"
-	jsonv2 "encoding/json/v2"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
-	"github.com/openai/openai-go/v3/packages/respjson"
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/loomagent/loom"
@@ -131,18 +128,11 @@ func (m *Model) chatRaw(ctx context.Context, orReq openai.ChatCompletionNewParam
 	if err != nil {
 		return nil, fmt.Errorf("loom/openrouter: chat: %w", err)
 	}
-	if len(out.Choices) == 0 {
-		return nil, fmt.Errorf("loom/openrouter: chat returned 0 choices")
+	response, err := wire.Response(out)
+	if err != nil {
+		return nil, fmt.Errorf("loom/openrouter: chat: %w", err)
 	}
-	choice := out.Choices[0]
-	return &loom.ChatResponse{
-		Content:          choice.Message.Content,
-		ReasoningContent: extractReasoning(choice.Message.JSON.ExtraFields),
-		ToolCalls:        openaicompat.ToolCalls(choice.Message.ToolCalls),
-		FinishReason:     translateFinishReason(choice.FinishReason),
-		Usage:            openaicompat.Usage(&out.Usage),
-		Model:            out.Model,
-	}, nil
+	return response, nil
 }
 
 // Stream implements loom.ChatModel.Stream with automatic retries, up to the first-frame
@@ -155,51 +145,16 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 	}
 	orReq.StreamOptions.IncludeUsage = param.NewOpt(true)
 	return loom.StreamWithRetry(ctx, classifier{}, m.retryCfg, func(streamCtx context.Context) (loom.Stream, error) {
-		stream := m.client.Chat.Completions.NewStreaming(streamCtx, orReq)
-		return &streamAdapter{inner: stream}, nil
+		return wire.Stream(m.client.Chat.Completions.NewStreaming(streamCtx, orReq)), nil
 	})
 }
 
-// streamAdapter wraps a go-openai ChatCompletionStream as a loom.Stream.
-type streamAdapter struct {
-	inner interface {
-		Next() bool
-		Current() openai.ChatCompletionChunk
-		Err() error
-		Close() error
-	}
-}
-
-func (s *streamAdapter) Recv() (*loom.Chunk, error) {
-	if !s.inner.Next() {
-		if err := s.inner.Err(); err != nil {
-			return nil, err
-		}
-		return nil, io.EOF
-	}
-	raw := s.inner.Current()
-
-	chunk := &loom.Chunk{Model: raw.Model}
-	if raw.JSON.Usage.Valid() {
-		u := openaicompat.Usage(&raw.Usage)
-		chunk.Usage = &u
-	}
-	// The trailing include_usage frame has choices=[]; an ordinary frame's first delta is
-	// taken.
-	if len(raw.Choices) > 0 {
-		choice := raw.Choices[0]
-		chunk.ContentDelta = choice.Delta.Content
-		chunk.ReasoningContentDelta = extractReasoning(choice.Delta.JSON.ExtraFields)
-		chunk.ToolCallDeltas = openaicompat.ToolCallDeltas(choice.Delta.ToolCalls)
-		if choice.FinishReason != "" {
-			chunk.FinishReason = translateFinishReason(choice.FinishReason)
-		}
-	}
-	return chunk, nil
-}
-
-func (s *streamAdapter) Close() error {
-	return s.inner.Close()
+// wire is what this provider does differently when a response is read back. OpenRouter
+// accepts either reasoning field, because an upstream provider may pass the structured one
+// through in its place.
+var wire = openaicompat.Provider{
+	FinishReason: translateFinishReason,
+	Reasoning:    openaicompat.ReasoningContentOrReasoning,
 }
 
 // buildRequest translates a loom.ChatRequest into the go-openai request structure.
@@ -308,29 +263,6 @@ func translateReasoning(resolved loom.ResolvedReasoning) (map[string]any, error)
 	default:
 		return nil, fmt.Errorf("loom/openrouter: unknown reasoning send %q", resolved.Send)
 	}
-}
-
-// extractReasoning reads the reasoning output. OpenRouter uses a "reasoning" field in
-// ExtraFields, but an upstream provider may pass through deepseek's structured
-// reasoning_content instead, which takes precedence; otherwise "reasoning" is decoded
-// from ExtraFields.
-func extractReasoning(extra map[string]respjson.Field) string {
-	if field, ok := extra["reasoning_content"]; ok {
-		var s string
-		if err := jsonv2.Unmarshal([]byte(field.Raw()), &s); err == nil && s != "" {
-			return s
-		}
-	}
-	raw, ok := extra["reasoning"]
-	if !ok {
-		return ""
-	}
-	var s string
-	if err := jsonv2.Unmarshal([]byte(raw.Raw()), &s); err != nil {
-		// "reasoning" is not a string, a null or an object for instance; ignore it
-		return ""
-	}
-	return s
 }
 
 func translateMessages(msgs []loom.Message) ([]openai.ChatCompletionMessageParamUnion, error) {
