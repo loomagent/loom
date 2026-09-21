@@ -1,17 +1,13 @@
 package openrouter
 
 import (
-	json "encoding/json/v2"
 	"errors"
 	"fmt"
+	"github.com/loomagent/loom"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/openai/openai-go/v3"
-
-	"github.com/loomagent/loom"
 )
 
 func testModel(t *testing.T, handler http.HandlerFunc) *Model {
@@ -172,50 +168,6 @@ func TestTranslateFinishReason(t *testing.T) {
 		if got := translateFinishReason(raw); got != want {
 			t.Errorf("translateFinishReason(%q) = %q, want %q", raw, got, want)
 		}
-	}
-}
-
-func TestTranslateUsagePresence(t *testing.T) {
-	if got := translateUsage(nil); got != (loom.Usage{}) {
-		t.Fatalf("nil usage = %+v", got)
-	}
-	var usage openai.CompletionUsage
-	if err := json.Unmarshal([]byte(`{
-		"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3,
-		"prompt_tokens_details": {"cached_tokens": 4},
-		"completion_tokens_details": {"reasoning_tokens": 5}
-	}`), &usage); err != nil {
-		t.Fatal(err)
-	}
-	got := translateUsage(&usage)
-	if got.PromptTokens != 1 || got.CompletionTokens != 2 || got.TotalTokens != 3 || got.CachedTokens != 4 {
-		t.Fatalf("usage = %+v", got)
-	}
-	if got.ReasoningTokens != 5 || !got.ReasoningTokensKnown {
-		t.Fatalf("reasoning presence = %+v", got)
-	}
-}
-
-func TestTranslateToolChoice(t *testing.T) {
-	if got := translateToolChoice(nil); got.OfAuto.Valid() {
-		t.Fatalf("nil tool choice = %+v", got)
-	}
-	for mode, want := range map[loom.ToolChoiceMode]string{
-		loom.ToolChoiceAuto:     "auto",
-		loom.ToolChoiceNone:     "none",
-		loom.ToolChoiceRequired: "required",
-	} {
-		choice := translateToolChoice(&loom.ToolChoice{Mode: mode})
-		if choice.OfAuto.Value != want {
-			t.Errorf("mode %q mapped to %q, want %q", mode, choice.OfAuto.Value, want)
-		}
-	}
-	if got := translateToolChoice(&loom.ToolChoice{Mode: loom.ToolChoiceSpecific, Name: "lookup"}); got.OfFunctionToolChoice == nil || got.OfFunctionToolChoice.Function.Name != "lookup" {
-		t.Errorf("specific choice = %+v", got)
-	}
-	// An unknown mode is not sent at all, leaving the provider default.
-	if got := translateToolChoice(&loom.ToolChoice{Mode: loom.ToolChoiceMode("unknown")}); got.OfAuto.Valid() || got.OfFunctionToolChoice != nil {
-		t.Errorf("unknown mode sent %+v", got)
 	}
 }
 

@@ -29,6 +29,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/loomagent/loom"
+	"github.com/loomagent/loom/providers/internal/openaicompat"
 )
 
 // DefaultBaseURL OpenRouter API 入口。
@@ -130,9 +131,9 @@ func (m *Model) chatRaw(ctx context.Context, orReq openai.ChatCompletionNewParam
 	return &loom.ChatResponse{
 		Content:          choice.Message.Content,
 		ReasoningContent: extractReasoning(choice.Message.JSON.ExtraFields),
-		ToolCalls:        translateToolCalls(choice.Message.ToolCalls),
+		ToolCalls:        openaicompat.ToolCalls(choice.Message.ToolCalls),
 		FinishReason:     translateFinishReason(choice.FinishReason),
-		Usage:            translateUsage(&out.Usage),
+		Usage:            openaicompat.Usage(&out.Usage),
 		Model:            out.Model,
 	}, nil
 }
@@ -172,7 +173,7 @@ func (s *streamAdapter) Recv() (*loom.Chunk, error) {
 
 	chunk := &loom.Chunk{Model: raw.Model}
 	if raw.JSON.Usage.Valid() {
-		u := translateUsage(&raw.Usage)
+		u := openaicompat.Usage(&raw.Usage)
 		chunk.Usage = &u
 	}
 	// include_usage 的末尾帧 choices=[];普通帧取首项 delta。
@@ -180,7 +181,7 @@ func (s *streamAdapter) Recv() (*loom.Chunk, error) {
 		choice := raw.Choices[0]
 		chunk.ContentDelta = choice.Delta.Content
 		chunk.ReasoningContentDelta = extractReasoning(choice.Delta.JSON.ExtraFields)
-		chunk.ToolCallDeltas = translateToolCallDeltas(choice.Delta.ToolCalls)
+		chunk.ToolCallDeltas = openaicompat.ToolCallDeltas(choice.Delta.ToolCalls)
 		if choice.FinishReason != "" {
 			chunk.FinishReason = translateFinishReason(choice.FinishReason)
 		}
@@ -268,13 +269,13 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 		}
 	}
 
-	tools, err := translateTools(req.Tools)
+	tools, err := openaicompat.Tools(req.Tools)
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: 翻译 tools: %w", err)
 	}
 	out.Tools = tools
 	if req.ToolChoice != nil {
-		out.ToolChoice = translateToolChoice(req.ToolChoice)
+		out.ToolChoice = openaicompat.ToolChoice(req.ToolChoice)
 	}
 	return out, nil
 }
@@ -348,89 +349,6 @@ func translateMessages(msgs []loom.Message) ([]openai.ChatCompletionMessageParam
 	}
 	return out, nil
 }
-
-func translateTools(tools []*loom.ToolInfo) ([]openai.ChatCompletionToolUnionParam, error) {
-	if len(tools) == 0 {
-		return nil, nil
-	}
-	out := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
-	for _, t := range tools {
-		if t == nil {
-			continue
-		}
-		params := shared.FunctionParameters{"type": "object", "properties": map[string]any{}}
-		if t.Parameters != nil {
-			b, err := jsonv2.Marshal(t.Parameters)
-			if err != nil {
-				return nil, fmt.Errorf("工具 %q 参数 schema marshal 失败: %w", t.Name, err)
-			}
-			if err := jsonv2.Unmarshal(b, &params); err != nil {
-				return nil, fmt.Errorf("工具 %q 参数 schema unmarshal 失败: %w", t.Name, err)
-			}
-		}
-		out = append(out, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-			Name:        t.Name,
-			Description: param.NewOpt(t.Description),
-			Parameters:  params,
-		}))
-	}
-	return out, nil
-}
-
-func translateToolChoice(tc *loom.ToolChoice) openai.ChatCompletionToolChoiceOptionUnionParam {
-	if tc == nil {
-		return openai.ChatCompletionToolChoiceOptionUnionParam{}
-	}
-	switch tc.Mode {
-	case loom.ToolChoiceAuto:
-		return openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: param.NewOpt("auto")}
-	case loom.ToolChoiceNone:
-		return openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: param.NewOpt("none")}
-	case loom.ToolChoiceRequired:
-		return openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: param.NewOpt("required")}
-	case loom.ToolChoiceSpecific:
-		return openai.ToolChoiceOptionFunctionToolChoice(openai.ChatCompletionNamedToolChoiceFunctionParam{Name: tc.Name})
-	default:
-		// 未知 Mode 不传(走服务端默认,对齐 deepseek provider 行为)
-		return openai.ChatCompletionToolChoiceOptionUnionParam{}
-	}
-}
-
-func translateToolCalls(calls []openai.ChatCompletionMessageToolCallUnion) []loom.ToolCall {
-	if len(calls) == 0 {
-		return nil
-	}
-	out := make([]loom.ToolCall, 0, len(calls))
-	for _, c := range calls {
-		if c.Type != "function" {
-			continue
-		}
-		out = append(out, loom.ToolCall{
-			ID:        c.ID,
-			Name:      c.Function.Name,
-			Arguments: c.Function.Arguments,
-		})
-	}
-	return out
-}
-
-func translateToolCallDeltas(deltas []openai.ChatCompletionChunkChoiceDeltaToolCall) []loom.ToolCallDelta {
-	if len(deltas) == 0 {
-		return nil
-	}
-	out := make([]loom.ToolCallDelta, 0, len(deltas))
-	for _, d := range deltas {
-		idx := int(d.Index)
-		out = append(out, loom.ToolCallDelta{
-			Index:     idx,
-			ID:        d.ID,
-			Name:      d.Function.Name,
-			Arguments: d.Function.Arguments,
-		})
-	}
-	return out
-}
-
 func translateFinishReason(fr string) loom.FinishReason {
 	switch fr {
 	case "stop":
@@ -447,23 +365,4 @@ func translateFinishReason(fr string) loom.FinishReason {
 		// OpenRouter 偶有自定义值(如上游 provider 透传),按自然停止处理
 		return loom.FinishReasonStop
 	}
-}
-
-func translateUsage(u *openai.CompletionUsage) loom.Usage {
-	if u == nil {
-		return loom.Usage{}
-	}
-	out := loom.Usage{
-		PromptTokens:     uint64(max(u.PromptTokens, 0)),
-		CompletionTokens: uint64(max(u.CompletionTokens, 0)),
-		TotalTokens:      uint64(max(u.TotalTokens, 0)),
-	}
-	if u.JSON.PromptTokensDetails.Valid() {
-		out.CachedTokens = uint64(max(u.PromptTokensDetails.CachedTokens, 0))
-	}
-	if u.JSON.CompletionTokensDetails.Valid() {
-		out.ReasoningTokens = uint64(max(u.CompletionTokensDetails.ReasoningTokens, 0))
-		out.ReasoningTokensKnown = u.CompletionTokensDetails.JSON.ReasoningTokens.Valid()
-	}
-	return out
 }

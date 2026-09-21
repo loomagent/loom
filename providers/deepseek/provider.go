@@ -41,6 +41,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/loomagent/loom"
+	"github.com/loomagent/loom/providers/internal/openaicompat"
 )
 
 // DefaultBaseURL DeepSeek API 入口。
@@ -155,7 +156,7 @@ func (m *Model) chatRaw(ctx context.Context, dsReq openai.ChatCompletionNewParam
 	return &loom.ChatResponse{
 		Content:          choice.Message.Content,
 		ReasoningContent: extractReasoning(choice.Message.JSON.ExtraFields),
-		ToolCalls:        translateToolCalls(choice.Message.ToolCalls),
+		ToolCalls:        openaicompat.ToolCalls(choice.Message.ToolCalls),
 		FinishReason:     translateFinishReason(choice.FinishReason),
 		Usage:            translateUsage(&out.Usage),
 		Model:            out.Model,
@@ -201,7 +202,7 @@ func (s *streamAdapter) Recv() (*loom.Chunk, error) {
 		choice := raw.Choices[0]
 		chunk.ContentDelta = choice.Delta.Content
 		chunk.ReasoningContentDelta = extractReasoning(choice.Delta.JSON.ExtraFields)
-		chunk.ToolCallDeltas = translateToolCallDeltas(choice.Delta.ToolCalls)
+		chunk.ToolCallDeltas = openaicompat.ToolCallDeltas(choice.Delta.ToolCalls)
 		if choice.FinishReason != "" {
 			chunk.FinishReason = translateFinishReason(choice.FinishReason)
 		}
@@ -296,13 +297,13 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 			// 未知格式不传
 		}
 	}
-	tools, err := translateTools(req.Tools)
+	tools, err := openaicompat.Tools(req.Tools)
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: 翻译 tools: %w", err)
 	}
 	out.Tools = tools
 	if req.ToolChoice != nil {
-		out.ToolChoice = translateToolChoice(req.ToolChoice)
+		out.ToolChoice = openaicompat.ToolChoice(req.ToolChoice)
 	}
 	return out, nil
 }
@@ -372,92 +373,6 @@ func translateMessages(msgs []loom.Message) []openai.ChatCompletionMessageParamU
 	}
 	return out
 }
-
-// translateTools 把 loom ToolInfo 翻译成 SDK 的 function tool。
-// nil/空 输入返回 nil,SDK 视作"不带工具"。
-func translateTools(tools []*loom.ToolInfo) ([]openai.ChatCompletionToolUnionParam, error) {
-	if len(tools) == 0 {
-		return nil, nil
-	}
-	out := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
-	for _, t := range tools {
-		if t == nil {
-			continue
-		}
-		params := shared.FunctionParameters{"type": "object", "properties": map[string]any{}}
-		if t.Parameters != nil {
-			b, err := jsonv2.Marshal(t.Parameters)
-			if err != nil {
-				return nil, fmt.Errorf("工具 %q 参数 schema marshal 失败: %w", t.Name, err)
-			}
-			if err := jsonv2.Unmarshal(b, &params); err != nil {
-				return nil, fmt.Errorf("工具 %q 参数 schema unmarshal 失败: %w", t.Name, err)
-			}
-		}
-		out = append(out, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-			Name:        t.Name,
-			Description: param.NewOpt(t.Description),
-			Parameters:  params,
-		}))
-	}
-	return out, nil
-}
-
-func translateToolChoice(tc *loom.ToolChoice) openai.ChatCompletionToolChoiceOptionUnionParam {
-	if tc == nil {
-		return openai.ChatCompletionToolChoiceOptionUnionParam{}
-	}
-	switch tc.Mode {
-	case loom.ToolChoiceAuto:
-		return openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: param.NewOpt("auto")}
-	case loom.ToolChoiceNone:
-		return openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: param.NewOpt("none")}
-	case loom.ToolChoiceRequired:
-		return openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: param.NewOpt("required")}
-	case loom.ToolChoiceSpecific:
-		return openai.ToolChoiceOptionFunctionToolChoice(openai.ChatCompletionNamedToolChoiceFunctionParam{Name: tc.Name})
-	default:
-		// 未知 Mode 不传(走服务端默认)
-		return openai.ChatCompletionToolChoiceOptionUnionParam{}
-	}
-}
-
-// translateToolCalls 把同步响应的 ToolCalls 翻译成 loom 形式。
-func translateToolCalls(calls []openai.ChatCompletionMessageToolCallUnion) []loom.ToolCall {
-	if len(calls) == 0 {
-		return nil
-	}
-	out := make([]loom.ToolCall, 0, len(calls))
-	for _, c := range calls {
-		if c.Type != "function" {
-			continue
-		}
-		out = append(out, loom.ToolCall{
-			ID:        c.ID,
-			Name:      c.Function.Name,
-			Arguments: c.Function.Arguments,
-		})
-	}
-	return out
-}
-
-// translateToolCallDeltas 流式 ToolCall 增量翻译(字段重映射)。
-func translateToolCallDeltas(deltas []openai.ChatCompletionChunkChoiceDeltaToolCall) []loom.ToolCallDelta {
-	if len(deltas) == 0 {
-		return nil
-	}
-	out := make([]loom.ToolCallDelta, 0, len(deltas))
-	for _, d := range deltas {
-		out = append(out, loom.ToolCallDelta{
-			Index:     int(d.Index),
-			ID:        d.ID,
-			Name:      d.Function.Name,
-			Arguments: d.Function.Arguments,
-		})
-	}
-	return out
-}
-
 func translateFinishReason(r string) loom.FinishReason {
 	switch r {
 	case "stop":
