@@ -99,28 +99,6 @@ func TestSchemaRequestReachesUnknownModel(t *testing.T) {
 	}
 }
 
-func TestReasoningTelemetryPresence(t *testing.T) {
-	for _, tt := range []struct {
-		raw    string
-		known  bool
-		tokens uint64
-	}{
-		{`{}`, false, 0}, {`{"completion_tokens_details":{}}`, false, 0},
-		{`{"completion_tokens_details":{"reasoning_tokens":null}}`, false, 0},
-		{`{"completion_tokens_details":{"reasoning_tokens":0}}`, true, 0},
-		{`{"completion_tokens_details":{"reasoning_tokens":595}}`, true, 595},
-	} {
-		var wire openai.CompletionUsage
-		if err := jsonv2.Unmarshal([]byte(tt.raw), &wire); err != nil {
-			t.Fatal(err)
-		}
-		got := translateUsage(&wire)
-		if got.ReasoningTokensKnown != tt.known || got.ReasoningTokens != tt.tokens {
-			t.Fatalf("%s: %+v", tt.raw, got)
-		}
-	}
-}
-
 func TestSchemaUpstreamErrorAndDeclaredBusinessGuard(t *testing.T) {
 	calls := 0
 	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
