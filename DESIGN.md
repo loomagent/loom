@@ -599,6 +599,7 @@ github.com/loomagent/loom/
 | 23 | 显式推理:每个调用点必须声明开关,启用时必须显式选强度 | 已落实 |
 | 24 | schema 关键字集合是封闭的,解码拒绝集合外的关键字 | 已落实 |
 | 25 | 工具契约按声明式参数 + 类型化句柄,不用 struct tag | 已落实 |
+| 26 | `ValidateSchema` 每次调用重新编译 schema;不缓存,因为 schema 是调用方可能修改的普通值 | 已落实 |
 
 已放弃:Note 系列(reasoning 与 label 足以表达过程信息)、CloseDetector(外部终结
 由调用方取消带 cause 的 ctx 表达)、`Writer.RunTool`(由 `RunToolByName` 与
