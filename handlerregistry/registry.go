@@ -7,9 +7,9 @@ import (
 	"github.com/loomagent/loom"
 )
 
-// Registry 是并发安全的 loom.Handler 注册表。
+// Registry is a registry of loom.Handlers, safe for concurrent use.
 //
-// 调用方显式 Register,不依赖 import 副作用或 init 顺序:
+// Callers register explicitly, with no reliance on import side effects or init order:
 //
 //	registry := handlerregistry.NewRegistry()
 //	registry.Register("assistant", assistantHandler)
@@ -18,12 +18,13 @@ type Registry struct {
 	handlers map[string]loom.Handler
 }
 
-// NewRegistry 构造空注册表。
+// NewRegistry builds an empty registry.
 func NewRegistry() *Registry {
 	return &Registry{handlers: map[string]loom.Handler{}}
 }
 
-// Register 注册一个 handler。重名或 nil handler 会 panic,用于在启动期暴露配置错误。
+// Register adds one handler. A duplicate key or a nil handler panics, which surfaces a
+// configuration mistake at startup.
 func (r *Registry) Register(key string, h loom.Handler) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -36,7 +37,7 @@ func (r *Registry) Register(key string, h loom.Handler) {
 	r.handlers[key] = h
 }
 
-// Lookup 按 key 查 handler;未注册返回 nil + false。
+// Lookup finds a handler by key; an unregistered key returns nil and false.
 func (r *Registry) Lookup(key string) (loom.Handler, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -44,7 +45,7 @@ func (r *Registry) Lookup(key string) (loom.Handler, bool) {
 	return h, ok
 }
 
-// Keys 返回所有已注册的 key。返回顺序未定义。
+// Keys returns every registered key, in no particular order.
 func (r *Registry) Keys() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
