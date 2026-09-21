@@ -28,7 +28,7 @@ func TestRun_Completed(t *testing.T) {
 	if turn.CloseReason == nil || turn.CloseReason.Code != CloseCodeFinalAnswer {
 		t.Errorf("close reason = %+v", turn.CloseReason)
 	}
-	// loom.Run 不再自动写 user_message → 只有 final_answer
+	// Run no longer writes a user_message, so only final_answer appears
 	if len(turn.Items) != 1 {
 		t.Fatalf("items count = %d, want 1", len(turn.Items))
 	}
@@ -38,7 +38,7 @@ func TestRun_Completed(t *testing.T) {
 	if turn.Items[0].Path != "turn[0].final_answer" {
 		t.Errorf("final_answer path: %q", turn.Items[0].Path)
 	}
-	// Sink:final_answer 一对 Started/Finished = 2 帧
+	// Sink: one Started and one Finished for final_answer, two frames
 	if got := len(sink.StartedEvents()); got != 1 {
 		t.Errorf("started events = %d, want 1", got)
 	}
@@ -75,7 +75,7 @@ func TestRun_AgentError(t *testing.T) {
 func TestRun_NoFinalAnswer(t *testing.T) {
 	sink := NewMemorySink()
 	turn, err := Run(context.Background(), func(ctx context.Context, w TurnWriter, history []Turn, input UserMessage) error {
-		return nil // 没调 FinalAnswer
+		return nil // no FinalAnswer
 	}, RunOptions{
 		ConversationID: "conv_test",
 		Sinks:          []Sink{sink},
@@ -186,9 +186,9 @@ func TestRun_ContextCancelCauseExternalCancel(t *testing.T) {
 func TestRun_StepNesting(t *testing.T) {
 	sink := NewMemorySink()
 	turn, err := Run(context.Background(), func(ctx context.Context, w TurnWriter, history []Turn, input UserMessage) error {
-		err := w.Step(ctx, "调研", func(ctx context.Context, s Step) error {
-			return s.Step(ctx, "第 1 轮", func(ctx context.Context, round Step) error {
-				return round.WriteReasoning(ctx, "规划", "...")
+		err := w.Step(ctx, "research", func(ctx context.Context, s Step) error {
+			return s.Step(ctx, "round 1", func(ctx context.Context, round Step) error {
+				return round.WriteReasoning(ctx, "plan", "...")
 			})
 		})
 		if err != nil {
@@ -210,18 +210,18 @@ func TestRun_StepNesting(t *testing.T) {
 	if turn.Status != TurnStatusCompleted {
 		t.Errorf("status = %v", turn.Status)
 	}
-	// 根 items:step[0]("调研") / final_answer
+	// Root items: step[0] ("research"), final_answer
 	if len(turn.Items) != 2 {
 		t.Fatalf("root items = %d, want 2", len(turn.Items))
 	}
 	stage := turn.Items[0]
-	if stage.Kind != ItemKindStep || stage.Label != "调研" {
+	if stage.Kind != ItemKindStep || stage.Label != "research" {
 		t.Errorf("stage: %+v", stage)
 	}
 	if stage.Path != "turn[0].step[0]" {
 		t.Errorf("stage path: %q", stage.Path)
 	}
-	if len(stage.Children) != 1 || stage.Children[0].Label != "第 1 轮" {
+	if len(stage.Children) != 1 || stage.Children[0].Label != "round 1" {
 		t.Errorf("round: %+v", stage.Children)
 	}
 	round := stage.Children[0]

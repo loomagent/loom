@@ -7,65 +7,68 @@ import (
 	"time"
 )
 
-// turnState 一次 Turn 执行的全局共享状态。
+// turnState is the state shared across one Turn execution.
 //
-// 由 turn 根和所有 step 共享同一份指针,保证:
-//   - closeReason 全局可见(任一来源翻成非 nil 后,所有 scope 拒绝写入)
-//   - items 树是单一权威数据(各 scope 通过 childrenPtr 指向不同子树)
-//   - Sink 调用串行化(共享 mu)
+// The turn root and every step share one pointer to it, which guarantees that:
+//   - closeReason is globally visible: once any source sets it, every scope refuses to
+//     write
+//   - the items tree has a single authority, with each scope pointing at its own subtree
+//   - sink calls are serialised through the shared mu
 //
-// 所有可变字段访问必须持有 mu。
+// Every access to a mutable field must hold mu.
 type turnState struct {
 	mu sync.Mutex
 
-	// ===== 不变字段(构造时设定) =====
+	// ===== Immutable fields, set at construction =====
 	turnIdx        uint64
 	turnPath       string // "turn[0]"
-	conversationID string // 一等公民,Run 入口校验非空
+	conversationID string // first-class; Run checks it is non-empty
 
 	sinks      []Sink
 	onSinkErr  func(Sink, error)
 	strictSink bool
 	metadata   map[string]string
 
-	// captureContent 控制 OTel span 是否落 prompt / completion / tool args/output。
-	// false 时只保留元数据(model / token / finish_reason / latency),适合生产含 PII / 合规敏感数据时。
-	// 从 RunOptions.CaptureContent 透传。
+	// captureContent controls whether OTel spans record the prompt, the completion, tool
+	// args, and tool output. False keeps only metadata — model, tokens, finish reason,
+	// latency — which suits production data with PII or compliance sensitivity. It comes
+	// from RunOptions.CaptureContent.
 	captureContent bool
 
-	// ===== 可变字段(mu 保护) =====
+	// ===== Mutable fields, guarded by mu =====
 
-	// closeReason nil = 仍在运行;非 nil = 已封口。
-	// 非 nil 时 Status 可由 CloseReason.Code 派生为 Completed / Cancelled / Failed。
-	// 翻成非 nil 的来源:
-	//   - FinalAnswer / StreamFinalAnswer 成功 → {Completed, "final_answer"}
-	//   - 外部 cancel(ctx.Cancel)              → {Cancelled, "user_cancel"}
-	//   - 超时(ctx.DeadlineExceeded)            → {Cancelled, "timeout"}
-	//   - handler return error                 → {Failed, "agent_error" / "content_filter" / ...}
-	//   - Sink strict 模式失败                  → {Failed, "agent_error"} + Cause=sinkErr
+	// closeReason: nil means still running, non-nil means sealed. Once set, Status derives
+	// from CloseReason.Code as Completed, Cancelled, or Failed. The sources that set it:
+	//   - a successful FinalAnswer or StreamFinalAnswer → {Completed, "final_answer"}
+	//   - an external cancel, ctx.Cancel                → {Cancelled, "user_cancel"}
+	//   - a timeout, ctx.DeadlineExceeded               → {Cancelled, "timeout"}
+	//   - the handler returning an error                → {Failed, "agent_error" / "content_filter" / ...}
+	//   - a strict-mode sink failure                    → {Failed, "agent_error"} with Cause=sinkErr
 	closeReason *CloseReason
 
-	// items Turn.Items 根列表(嵌套树通过 Item.Children)。
+	// items is the root of Turn.Items; the nesting goes through Item.Children.
 	items []Item
 
-	// sinkErr strict 模式下记录第一次 Sink 失败,Run 收尾时检测让 Turn fail。
+	// sinkErr records the first sink failure in strict mode, which Run checks at the end to
+	// fail the Turn.
 	sinkErr error
 
-	// callIDCounter loom 自动生成 tool callID 时的 0-based 计数器(turn 内递增)。
-	// LLM 触发场景(ExecuteToolCalls)用 LLM 给的 ToolCall.ID,不动此 counter;
-	// 代码编排场景(RunToolByName)用此 counter 生成 "call_0" / "call_1" / ...
+	// callIDCounter is the 0-based counter loom uses when it generates a tool call ID,
+	// incrementing within the turn. ExecuteToolCalls, the LLM-driven case, uses the
+	// ToolCall.ID the model supplied and leaves this alone; RunToolByName, the
+	// code-orchestration case, builds "call_0", "call_1", and so on from it.
 	callIDCounter uint64
 
-	// totalUsage 本 Turn 所有 LLM 调用的累计 token 用量。
-	// emitLLMCalled 锁内累加(turn 根的等价物 — 已经累加到每个祖先 step.Usage 后,
-	// 同时累加这个总和)。Run 收尾时由 buildTurnSnapshot 拷到 Turn.Usage。
+	// totalUsage accumulates token usage over every LLM call in this Turn. emitLLMCalled
+	// adds to it under the lock, alongside each ancestor step's Usage, so it is the turn
+	// root's counterpart. buildTurnSnapshot copies it to Turn.Usage at the end of Run.
 	totalUsage Usage
 
-	// createdAt Turn 开始时间(Run 收尾构造 Turn 快照用)。
+	// createdAt is when the Turn started, used when Run builds the snapshot.
 	createdAt time.Time
 }
 
-// newTurnState 构造 turnState(供 Run 调用,不导出)。
+// newTurnState builds a turnState for Run. It is unexported.
 func newTurnState(
 	turnIdx uint64,
 	conversationID string,
@@ -88,52 +91,57 @@ func newTurnState(
 	}
 }
 
-// isClosed mu 已持有时调用。
-// true 表示 Turn 已封口(任何写入应返 ErrTurnClosed)。
+// isClosed is called with mu already held. True means the Turn is sealed, so any write
+// should return ErrTurnClosed.
 func (s *turnState) isClosed() bool {
 	return s.closeReason != nil
 }
 
-// nextToolCallIDLocked mu 已持有时调,生成 "call_N" 形式的递增 callID。
-// 仅 helper(RunToolByName 等)代码编排场景使用;LLM 触发场景直接用 ToolCall.ID。
+// nextToolCallIDLocked is called with mu already held, and returns an incrementing
+// "call_N" ID. Only helpers such as RunToolByName use it, in the code-orchestration case;
+// an LLM-driven call uses its ToolCall.ID directly.
 func (s *turnState) nextToolCallIDLocked() string {
 	id := "call_" + strconv.FormatUint(s.callIDCounter, 10)
 	s.callIDCounter++
 	return id
 }
 
-// formatTurnPath 把 turn index 转成 "turn[N]"。
+// formatTurnPath turns a turn index into "turn[N]".
 func formatTurnPath(idx uint64) string {
 	return "turn[" + strconv.FormatUint(idx, 10) + "]"
 }
 
-// writerScope 一个 Writer/Step 所在的作用域。
-// Turn 根和任意 step 都用同一类型;区别在 indices 链(从 turn.items 根到本 scope 的路径)。
+// writerScope is the scope a Writer or Step lives in. The turn root and every step use
+// the same type; they differ in the index chain, the path from the turn items root to
+// this scope.
 //
-// 所有方法(写入 / 嵌套)通过 state.mu 串行化,scope 自身不带锁。
+// Every method, writing or nesting, is serialised through state.mu, so a scope carries no
+// lock of its own.
 //
-// 并发约定:同一 scope 不可跨 goroutine 并发使用;父子 scope 不可同时使用
-// (子 step 闭包内不操作 outer scope)。违反约定是 undefined behavior。
+// Concurrency: one scope may not be used from several goroutines, and a parent and child
+// scope may not be used at the same time, so a child step closure must not touch the
+// outer scope. Breaking this is undefined behaviour.
 type writerScope struct {
-	state *turnState // 指向 Turn 全局状态(共享引用)
+	state *turnState // the Turn's shared state
 
-	// path 完整路径,如 "turn[0].step[0].step[1]"。
-	// Turn 根时等于 state.turnPath。
+	// path is the full path, such as "turn[0].step[0].step[1]". At the turn root it equals
+	// state.turnPath.
 	path string
 
-	// indices 从 state.items 根开始定位本 scope 的索引链:
+	// indices locates this scope from the state items root:
 	//   - root scope:nil(children = &state.items)
-	//   - 子 scope:[a, b, c] → children = &state.items[a].Children[b].Children[c].Children
+	//   - a child scope: [a, b, c] → children = &state.items[a].Children[b].Children[c].Children
 	//
-	// 每次写入都重走索引(locateChildrenLocked),避免切片扩容导致缓存地址失效。
+	// Every write re-walks the indices through locateChildrenLocked, so a slice that grows
+	// does not leave a cached address dangling.
 	indices []int
 
-	// counters 同 scope 下各 ItemKind 的 0-based 计数器。
-	// 写入新 item 时根据 kind 取当前值作为 Item.Index,然后递增。
+	// counters holds a 0-based counter per ItemKind in this scope. Writing a new item takes
+	// the current value as its Item.Index and then increments it.
 	counters map[ItemKind]uint64
 }
 
-// newRootScope 构造 Turn 根 scope(由 turnRoot 持有)。
+// newRootScope builds the Turn root scope, which turnRoot holds.
 func newRootScope(state *turnState) *writerScope {
 	return &writerScope{
 		state:    state,
@@ -143,8 +151,9 @@ func newRootScope(state *turnState) *writerScope {
 	}
 }
 
-// locateChildrenLocked 沿 indices 链定位本 scope 的 children 切片。
-// state.mu 必须已持有。每次调都重走索引 — 切片扩容后地址仍正确。
+// locateChildrenLocked walks the index chain to this scope's children slice. state.mu must
+// already be held. It re-walks every time, so the address stays correct after a slice
+// grows.
 func (w *writerScope) locateChildrenLocked() *[]Item {
 	if len(w.indices) == 0 {
 		return &w.state.items
@@ -157,21 +166,23 @@ func (w *writerScope) locateChildrenLocked() *[]Item {
 	return &(*container)[last].Children
 }
 
-// Path 返回本 scope 的完整路径,如 "turn[0].step[0]"。
+// Path returns this scope's full path, such as "turn[0].step[0]".
 func (w *writerScope) Path() string {
 	return w.path
 }
 
-// underlyingScope 实现 scopeAccessor(包内 helper 用,如 RunToolByName 取 turnState)。
-// step / turnRoot 内嵌 *writerScope,自动继承此方法。
+// underlyingScope implements scopeAccessor for in-package helpers such as RunToolByName,
+// which need the turnState. step and turnRoot embed *writerScope and inherit this
+// method.
 func (w *writerScope) underlyingScope() *writerScope {
 	return w
 }
 
 // ===== Sink fan-out helpers =====
-// 这些方法不持 mu(调用方在 mu 释放后才调,避免 Sink 耗时阻塞同 Turn 其它写入)。
+// These methods hold no lock: the caller invokes them after releasing mu, so a slow Sink
+// cannot block other writes in the same Turn.
 
-// emitItemStarted 广播 ItemStartedEvent 给所有 sink。
+// emitItemStarted broadcasts ItemStartedEvent to every sink.
 func (s *turnState) emitItemStarted(ctx context.Context, item Item) {
 	ev := ItemStartedEvent{
 		TurnIndex: s.turnIdx,
@@ -182,7 +193,7 @@ func (s *turnState) emitItemStarted(ctx context.Context, item Item) {
 	s.fanOut(func(sink Sink) error { return sink.ItemStarted(ctx, ev) })
 }
 
-// emitItemDelta 广播 ItemDeltaEvent 给所有 sink。
+// emitItemDelta broadcasts ItemDeltaEvent to every sink.
 func (s *turnState) emitItemDelta(ctx context.Context, itemPath string, ch DeltaChannel, chunk string) {
 	ev := ItemDeltaEvent{
 		TurnIndex: s.turnIdx,
@@ -195,7 +206,7 @@ func (s *turnState) emitItemDelta(ctx context.Context, itemPath string, ch Delta
 	s.fanOut(func(sink Sink) error { return sink.ItemDelta(ctx, ev) })
 }
 
-// emitItemFinished 广播 ItemFinishedEvent 给所有 sink。
+// emitItemFinished broadcasts ItemFinishedEvent to every sink.
 func (s *turnState) emitItemFinished(ctx context.Context, item Item) {
 	ev := ItemFinishedEvent{
 		TurnIndex: s.turnIdx,
@@ -207,33 +218,36 @@ func (s *turnState) emitItemFinished(ctx context.Context, item Item) {
 	s.fanOut(func(sink Sink) error { return sink.ItemFinished(finishCtx, ev) })
 }
 
-// emitLLMCalled 把一次 LLM 调用的 usage 沿 indices 链向上累加到祖先 step Item.Usage,
-// 然后 fan-out LLMCalledEvent 给所有 sink。
+// emitLLMCalled accumulates one LLM call's usage up the index chain into every ancestor
+// step's Item.Usage, then fans LLMCalledEvent out to every sink.
 //
-// 累加路径:从 indices[0] 开始,逐级深入 items 树,沿途凡是 Kind=step 的祖先都加。
-// LLM 调用挂在 turn 根(indices=nil)时也调本方法,此时只 fan-out,没有 step 累加。
+// It accumulates from indices[0] down the items tree, adding to every ancestor whose Kind
+// is step. A call hanging off the turn root, with nil indices, also comes through here,
+// where it only fans out and accumulates into no step.
 //
-// stepPath 取 scope.path(turn 根时与 turnPath 相同,fan-out 给 sink 时翻成空串)。
-// model / purpose 透传到 sink,供观测用。
+// stepPath is the scope path, the same as turnPath at the turn root, and becomes an empty
+// string when fanned out to a sink. model and purpose pass through for observability.
 //
-// 串行约定:跟 emitItem* 一样,fan-out 在锁外进行,Sink.LLMCalled 不能依赖 mu 已持有。
+// Serialisation: as with emitItem*, the fan-out happens outside the lock, so
+// Sink.LLMCalled must not assume mu is held.
 func (s *turnState) emitLLMCalled(ctx context.Context, scope *writerScope, model, purpose string, usage Usage) {
 	s.mu.Lock()
 	if !s.isClosed() {
-		// 沿 indices 链向上累加各 step item.Usage(turn 根 indices 为空 → 跳过)
+		// Accumulate item.Usage up the index chain, skipping the turn root where indices is
+		// empty
 		container := &s.items
 		for _, idx := range scope.indices {
 			addUsage(&(*container)[idx].Usage, usage)
 			container = &(*container)[idx].Children
 		}
-		// turn 根累计
+		// Accumulate at the turn root
 		addUsage(&s.totalUsage, usage)
 	}
 	s.mu.Unlock()
 
 	stepPath := scope.path
 	if stepPath == s.turnPath {
-		stepPath = "" // turn 根
+		stepPath = "" // the turn root
 	}
 	ev := LLMCalledEvent{
 		TurnIndex: s.turnIdx,
@@ -247,7 +261,7 @@ func (s *turnState) emitLLMCalled(ctx context.Context, scope *writerScope, model
 	s.fanOut(func(sink Sink) error { return sink.LLMCalled(ctx, ev) })
 }
 
-// addUsage 把 b 累加到 a(各字段独立 +)。
+// addUsage adds b into a, field by field.
 func addUsage(a *Usage, b Usage) {
 	a.PromptTokens += b.PromptTokens
 	a.CompletionTokens += b.CompletionTokens
@@ -256,9 +270,9 @@ func addUsage(a *Usage, b Usage) {
 	a.TotalTokens += b.TotalTokens
 }
 
-// fanOut 同步串行调所有 sink。任一失败:
-//   - 调用 onSinkErr 回调(若设置)
-//   - strict 模式下记录第一次失败到 state.sinkErr(Run 收尾据此让 Turn fail)
+// fanOut calls every sink serially and synchronously. On a failure it calls onSinkErr when
+// set, and in strict mode records the first failure in state.sinkErr, which Run uses at
+// the end to fail the Turn.
 func (s *turnState) fanOut(fn func(Sink) error) {
 	for _, sink := range s.sinks {
 		if err := fn(sink); err != nil {
@@ -276,9 +290,9 @@ func (s *turnState) fanOut(fn func(Sink) error) {
 	}
 }
 
-// ===== 一次性写入方法 =====
+// ===== One-shot write methods =====
 
-// WriteReasoning 写一段 LLM 推理(立即 Completed)。
+// WriteReasoning writes one block of model reasoning, Completed at once.
 func (w *writerScope) WriteReasoning(ctx context.Context, label, text string) error {
 	return w.writeSimpleItem(ctx, ItemKindReasoning, func(it *Item) {
 		it.Label = label
@@ -286,8 +300,8 @@ func (w *writerScope) WriteReasoning(ctx context.Context, label, text string) er
 	})
 }
 
-// WriteToolCall 写一次工具调用记录(立即 Completed)。
-// 不实际执行工具 — 业务方自己调 tool,然后用 WriteToolResult 配对写结果。
+// WriteToolCall writes a record of one tool call, Completed at once. It does not run the
+// tool: product code runs it and pairs the outcome with WriteToolResult.
 func (w *writerScope) WriteToolCall(ctx context.Context, label string, call ToolCall) error {
 	return w.writeSimpleItem(ctx, ItemKindToolCall, func(it *Item) {
 		it.Label = label
@@ -297,11 +311,11 @@ func (w *writerScope) WriteToolCall(ctx context.Context, label string, call Tool
 	})
 }
 
-// WriteToolResult 写一次工具执行结果。
-// result.CallID 必须跟前面 WriteToolCall 的 ToolCall.CallID 配对。
-// result.ToolName 同对应 tool_call 的 Name(让 DB 上 tool_call/tool_result 对称,
-// 便于按工具维度查询历史输出,如 citation loader 扫 web_search)。
-// result.Err 非 nil 时 Status=Failed,否则 Completed。
+// WriteToolResult writes the result of running one tool. result.CallID must pair with
+// ToolCall.CallID from the earlier WriteToolCall, and result.ToolName must match that
+// call's Name, which keeps the tool_call and tool_result rows symmetrical and lets history
+// be queried by tool, as a citation loader scanning web_search output does. A non-nil
+// result.Err sets Status=Failed; otherwise it is Completed.
 func (w *writerScope) WriteToolResult(ctx context.Context, label string, result ToolResult) error {
 	return w.writeSimpleItem(ctx, ItemKindToolResult, func(it *Item) {
 		it.Label = label
@@ -315,13 +329,13 @@ func (w *writerScope) WriteToolResult(ctx context.Context, label string, result 
 	})
 }
 
-// ===== 流式写入(闭包) =====
+// ===== Streaming writes (closures) =====
 
-// StreamReasoning 流式写一段 LLM 推理。
+// StreamReasoning streams one block of model reasoning.
 //
-// 闭包语义:
-//   - 返 nil    → Status=Completed,Text=SetFinalText(若设)或 accumText 累积值
-//   - 返 非 nil → Status=Failed,Error 填,Text=累积值(半成品保留)
+// Closure semantics: a nil return sets Status=Completed and Text to the SetFinalText value
+// or the accumulated one, while a non-nil error sets Status=Failed, fills Error, and keeps
+// the accumulated Text as a partial result.
 func (w *writerScope) StreamReasoning(ctx context.Context, label string, fn func(ReasoningStream) error) error {
 	selfIdx, item, ok := w.openStreamItem(ItemKindReasoning, label, func(it *Item) {
 		it.Label = label
@@ -339,13 +353,13 @@ func (w *writerScope) StreamReasoning(ctx context.Context, label string, fn func
 	return fnErr
 }
 
-// openStreamItem 流式写入"开"阶段共用:
+// openStreamItem is shared by the opening stage of every streaming write:
 //   - check sealed
-//   - 分配 index/path
-//   - 构造 Item(Status=InProgress) + append 到 children
-//   - 返回 selfIdx(供 finalize 时 locate 用)+ item 快照
+//   - allocate the index and path
+//   - build the Item with Status=InProgress and append it to children
+//   - return selfIdx, which finalize uses to locate it, plus the item snapshot
 //
-// ok=false 表示 sealed,调用方应返 ErrTurnClosed。
+// ok=false means the Turn is sealed, and the caller should return ErrTurnClosed.
 func (w *writerScope) openStreamItem(kind ItemKind, label string, fill func(*Item)) (int, Item, bool) {
 	w.state.mu.Lock()
 	defer w.state.mu.Unlock()
@@ -370,8 +384,8 @@ func (w *writerScope) openStreamItem(kind ItemKind, label string, fill func(*Ite
 	return len(*children) - 1, item, true
 }
 
-// finalizeStreamItem 流式写入"关"阶段共用:
-// 根据 fnErr 决定 Status,更新 Text/Status/Error,返回最终快照。
+// finalizeStreamItem is shared by the closing stage of every streaming write. It decides
+// Status from fnErr, updates Text, Status, and Error, and returns the final snapshot.
 func (w *writerScope) finalizeStreamItem(selfIdx int, finalText string, fnErr error) Item {
 	w.state.mu.Lock()
 	defer w.state.mu.Unlock()
@@ -393,26 +407,26 @@ func (w *writerScope) finalizeStreamItem(selfIdx int, finalText string, fnErr er
 	return *final
 }
 
-// step 实现 Step 接口(is-a Writer)。Writer 方法全部继承 writerScope。
+// step implements the Step interface. Every Writer method comes from writerScope.
 type step struct {
 	*writerScope
 }
 
-// 编译期接口断言。
+// Compile-time interface assertions.
 var (
 	_ Writer = (*writerScope)(nil)
 	_ Step   = (*step)(nil)
 )
 
-// Step 在当前 scope 下开一个嵌套子 step。
+// Step opens a nested sub-step under the current scope.
 //
-// 闭包语义:
-//   - 返 nil      → step Close(Completed)
-//   - 返 非 nil   → step Close(Failed,Error 字段填),error 向上传递
+// Closure semantics: a nil return closes the step as Completed, while a non-nil error
+// closes it as Failed with Error filled in and propagates.
 //
-// 闭包执行期间不持 state.mu,业务方可以放心做长耗时操作(LLM 调用等)。
+// state.mu is not held while the closure runs, so product code can safely do something
+// slow such as an LLM call.
 func (w *writerScope) Step(ctx context.Context, label string, fn func(context.Context, Step) error) error {
-	// 1. 加锁,check sealed,分配 step item
+	// 1. lock, check the seal, allocate the step item
 	w.state.mu.Lock()
 	if w.state.isClosed() {
 		w.state.mu.Unlock()
@@ -435,7 +449,8 @@ func (w *writerScope) Step(ctx context.Context, label string, fn func(context.Co
 	*children = append(*children, item)
 	selfIdx := len(*children) - 1
 
-	// 子 scope 的 indices = 父 indices + selfIdx(复制,不共享底层数组)
+	// The child scope's indices are the parent's plus selfIdx, copied so the underlying
+	// array is not shared
 	childIndices := make([]int, len(w.indices)+1)
 	copy(childIndices, w.indices)
 	childIndices[len(w.indices)] = selfIdx
@@ -445,11 +460,11 @@ func (w *writerScope) Step(ctx context.Context, label string, fn func(context.Co
 	// 2. emit Started
 	w.state.emitItemStarted(ctx, item)
 
-	// 3. OTel:起 step 子 span,闭包内 ctx 已嵌入子 span。
-	// 嵌套 step 闭包内调 StreamLLMToStep / runOneTool 时自然成为子节点。
+	// 3. OTel: start the child step span. The ctx inside the closure carries it, so a
+	// nested StreamLLMToStep or runOneTool becomes a child automatically.
 	stepCtx, stepSpan := startStepSpan(ctx, path, label)
 
-	// 4. 构造 child scope 跑闭包
+	// 4. build the child scope and run the closure
 	childScope := &writerScope{
 		state:    w.state,
 		path:     path,
@@ -459,10 +474,12 @@ func (w *writerScope) Step(ctx context.Context, label string, fn func(context.Co
 	stepCtx = withUsageScope(stepCtx, childScope)
 	fnErr := fn(stepCtx, &step{writerScope: childScope})
 
-	// 5. OTel:闭包返回后收尾 span(放在 Item 状态更新之前 — span End 不阻塞同步路径)
+	// 5. OTel: finalize the span once the closure returns, before the Item status is
+	// updated, since ending a span does not block the synchronous path
 	finalizeStepSpan(stepSpan, fnErr)
 
-	// 4. 收尾:locate 父 children 重新拿地址,改 Status/Error
+	// 6. finalize: locate the parent's children again for the address, then set Status and
+	// Error
 	w.state.mu.Lock()
 	parentChildren := w.locateChildrenLocked()
 	final := &(*parentChildren)[selfIdx]
@@ -490,12 +507,13 @@ func (w *writerScope) Step(ctx context.Context, label string, fn func(context.Co
 	return fnErr
 }
 
-// writeSimpleItem 一次性写入的共用骨架(Reasoning/Note/ToolCall/ToolResult)。
+// writeSimpleItem is the shared skeleton for a one-shot write: reasoning, note, tool call,
+// or tool result.
 //
-// 流程:check sealed → 分配 index/path → 构造 Item(Status=Completed) →
-// append 到 childrenPtr → 释放 mu → emit Started + Finished。
+// The flow is: check the seal, allocate the index and path, build the Item with
+// Status=Completed, append it to childrenPtr, release mu, then emit Started and Finished.
 //
-// fillKind 在 mu 持有时调,填充 Kind-specific 字段。
+// fillKind runs with mu held and fills the Kind-specific fields.
 func (w *writerScope) writeSimpleItem(ctx context.Context, kind ItemKind, fillKind func(*Item)) error {
 	w.state.mu.Lock()
 	if w.state.isClosed() {
@@ -521,14 +539,15 @@ func (w *writerScope) writeSimpleItem(ctx context.Context, kind ItemKind, fillKi
 
 	w.state.mu.Unlock()
 
-	// 锁外 emit。一次性 Item 同一份 payload 发 Started + Finished 两帧。
+	// Emit outside the lock. A one-shot Item sends the same payload in both the Started and
+	// the Finished frame.
 	w.state.emitItemStarted(ctx, item)
 	w.state.emitItemFinished(ctx, item)
 	return nil
 }
 
-// formatChildPath 拼子 item 路径。
-// 单例 kind(user_message / final_answer)不带 index;其它带 "[N]"。
+// formatChildPath builds a child item's path. A singleton kind, user_message or
+// final_answer, carries no index; every other kind carries "[N]".
 func formatChildPath(parentPath string, kind ItemKind, idx uint64) string {
 	if isSingletonKind(kind) {
 		return parentPath + "." + string(kind)
@@ -536,8 +555,9 @@ func formatChildPath(parentPath string, kind ItemKind, idx uint64) string {
 	return parentPath + "." + string(kind) + "[" + strconv.FormatUint(idx, 10) + "]"
 }
 
-// isSingletonKind 返回此 kind 是否每个 turn 只能有一个。
-// 单例 kind 由状态机保证不会被写第二次(WriteFinalAnswer 等内部 check)。
+// isSingletonKind reports whether a turn may hold only one item of this kind. The state
+// machine keeps a singleton from being written twice; WriteFinalAnswer and the like check
+// internally.
 func isSingletonKind(kind ItemKind) bool {
 	return kind == ItemKindUserMessage || kind == ItemKindFinalAnswer
 }
