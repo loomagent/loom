@@ -37,6 +37,11 @@ func compileValidationSchema(s *Schema) (*toolcontract.Validator, error) {
 
 // ValidateSchema reports whether value satisfies schema. It is the check Loom
 // applies to tool arguments, structured output, and declared examples.
+//
+// It compiles schema on every call, which is about half of a check's cost: see
+// BenchmarkValidateSchema against BenchmarkValidatorValidate. That is deliberate. A schema
+// is a plain value its caller may edit, so caching a compiled form against it would validate
+// against a shape the caller has since changed.
 func ValidateSchema(schema *Schema, value any) error {
 	if schema == nil {
 		return nil

@@ -594,6 +594,7 @@ github.com/loomagent/loom/
 | 23 | Explicit reasoning: every call site declares the switch, and enabling it requires an explicit effort | done |
 | 24 | The schema keyword set is closed; decoding rejects anything outside it | done |
 | 25 | Tools are declared with typed handles rather than struct tags | done |
+| 26 | `ValidateSchema` compiles its schema on every call; nothing caches it, because a schema is a plain value its caller may edit | done |
 
 Dropped: the Note family (reasoning plus a label already carries process information);
 CloseDetector (external termination is a cancelled ctx with a cause); `Writer.RunTool`
