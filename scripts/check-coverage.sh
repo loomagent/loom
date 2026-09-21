@@ -11,7 +11,13 @@ set -euo pipefail
 profile="${1:-coverage.out}"
 floor="${COVERAGE_FLOOR:-87}"
 
-total="$(go tool cover -func="${profile}" | awk '/^total:/ {sub(/%/, "", $3); print $3}')"
+# Runnable examples are main packages with no tests of their own. CI runs them instead,
+# which checks more than coverage would, so they stay out of the total.
+filtered="$(mktemp)"
+trap 'rm -f "${filtered}"' EXIT
+grep -v '/examples/' "${profile}" > "${filtered}"
+
+total="$(go tool cover -func="${filtered}" | awk '/^total:/ {sub(/%/, "", $3); print $3}')"
 if [[ -z "${total}" ]]; then
 	echo "check-coverage: could not read a total from ${profile}" >&2
 	exit 1

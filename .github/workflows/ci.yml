@@ -29,3 +29,7 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./...
       - name: Coverage floor
         run: bash scripts/check-coverage.sh coverage.out
+      - name: Examples
+        run: |
+          go run ./examples/quickstart
+          go run ./examples/react
