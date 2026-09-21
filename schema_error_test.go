@@ -150,7 +150,7 @@ func TestExpectedArgumentsSummarizeEveryConstraint(t *testing.T) {
 		`tag=<string, optional, starts with "ab">`,
 		`id=<string, optional, starts with "a.b">`,
 		`code=<string, optional, pattern "^a.c$">`,
-		`day=<string, optional, format date,`,
+		`day=<string, optional, format date>`,
 		`tags=<array, optional, min items 1, max items 3, unique items>`,
 	} {
 		if !strings.Contains(argumentError.ExpectedArguments, want) {
@@ -253,5 +253,42 @@ func TestDeclaredExampleMustSatisfyItsOwnArgument(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "q.examples[0]") {
 		t.Fatalf("the error does not point at the example: %v", err)
+	}
+}
+
+// A format the contract projects a pattern for is described in prose. Handing the model
+// the regular expression the builder derived tells it less, and in a form it has to
+// decode first.
+func TestFormatViolationNamesTheFormatNotThePattern(t *testing.T) {
+	contract := MustArgsContract("t", Date("day").Desc("Day."))
+	_, err := contract.Decode(`{"day":"17/08/2026"}`)
+	if err == nil {
+		t.Fatal("a value that is not a date must fail")
+	}
+	if !strings.Contains(err.Error(), "must be a date (YYYY-MM-DD)") {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(err.Error(), `\d`) {
+		t.Fatalf("the model was handed the regular expression: %v", err)
+	}
+}
+
+// An explicit pattern is a constraint of its own, so it is still reported as one even
+// when the argument also carries a format.
+func TestExplicitPatternIsStillReported(t *testing.T) {
+	contract := MustArgsContract("t", Date("day").Pattern(`^\d{4}-01-01$`).Desc("New year's day."))
+	_, err := contract.Decode(`{"day":"2026-08-17"}`)
+	if err == nil {
+		t.Fatal("a value outside the explicit pattern must fail")
+	}
+	if !strings.Contains(err.Error(), "must match pattern") {
+		t.Fatalf("error = %v", err)
+	}
+	var argumentError *ToolArgumentError
+	if !errors.As(err, &argumentError) {
+		t.Fatalf("error type = %T", err)
+	}
+	if !strings.Contains(argumentError.ExpectedArguments, `pattern "^\\d{4}-01-01$"`) {
+		t.Fatalf("an explicit pattern must still appear in the summary: %s", argumentError.ExpectedArguments)
 	}
 }

@@ -226,7 +226,7 @@ func validationIssue(field string, violation toolcontract.Violation) ToolArgumen
 	case "unique_items_mismatch":
 		message = label + " must contain unique items"
 	case "pattern_mismatch":
-		message = patternValidationMessage(label, fmt.Sprint(params["pattern"]))
+		message = patternValidationMessage(label, fmt.Sprint(params["pattern"]), fmt.Sprint(params["format"]))
 	case "string_too_short":
 		message = label + " must contain at least " + fmt.Sprint(params["min_length"]) + " characters"
 	case "string_too_long":
@@ -245,7 +245,12 @@ func validationIssue(field string, violation toolcontract.Violation) ToolArgumen
 	return ToolArgumentIssue{Field: field, Rule: rule, Code: code, Message: message}
 }
 
-func patternValidationMessage(label, pattern string) string {
+func patternValidationMessage(label, pattern, format string) string {
+	if isFormatProjection(&Schema{Format: format, Pattern: pattern}) {
+		if prose, ok := formatProse[format]; ok {
+			return label + " must be " + prose
+		}
+	}
 	switch {
 	case strings.HasPrefix(pattern, "^") && isLiteralPattern(strings.TrimPrefix(pattern, "^")):
 		return label + " must start with " + strconv.Quote(strings.TrimPrefix(pattern, "^"))
@@ -256,6 +261,25 @@ func patternValidationMessage(label, pattern string) string {
 	default:
 		return label + " must match pattern " + strconv.Quote(pattern)
 	}
+}
+
+// isFormatProjection reports whether a pattern is only the shape check its format
+// projects. The declared-argument builder adds that pattern itself, so naming the format
+// says everything the pattern would, in terms a model can act on.
+func isFormatProjection(schema *Schema) bool {
+	if schema.Format == "" || schema.Pattern == "" {
+		return false
+	}
+	return formatPatterns[schema.Format] == schema.Pattern
+}
+
+// formatProse describes a format the way a model can act on it. It covers the formats
+// whose pattern the validator enforces; a format without prose still gets its pattern.
+var formatProse = map[string]string{
+	"date":      "a date (YYYY-MM-DD)",
+	"time":      "a time (HH:MM:SS, with an optional fractional part and timezone)",
+	"date-time": "an RFC 3339 timestamp",
+	"uuid":      "a UUID",
 }
 
 func isLiteralPattern(pattern string) bool {
@@ -384,7 +408,7 @@ func appendSchemaConstraintParts(parts []string, schema *Schema) []string {
 	if schema.MaxLength != nil {
 		parts = append(parts, "max length "+strconv.Itoa(*schema.MaxLength))
 	}
-	if schema.Pattern != "" {
+	if schema.Pattern != "" && !isFormatProjection(schema) {
 		if literal, kind, ok := literalPatternConstraint(schema.Pattern); ok {
 			parts = append(parts, kind+" "+strconv.Quote(literal))
 		} else {

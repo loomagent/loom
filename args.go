@@ -18,6 +18,9 @@ import (
 // Arguments are kept as raw JSON until a handle reads them, so numbers preserve
 // their full 64-bit range instead of being rounded through float64.
 type Args struct {
+	// values holds what the model sent, so its keys are a subset of declared. A read that
+	// misses values is therefore either an omitted optional argument or a handle from
+	// another contract, and only declared can tell those apart.
 	values   map[string]jsontext.Value
 	declared map[string]argKind
 	// raw keeps the object exactly as the model sent it, so a caller that needs
@@ -36,7 +39,7 @@ func (a Args) JSON() jsontext.Value { return a.raw }
 // or a nested shape survives intact; a handle decodes it with the type fixed at
 // declaration, and RawJSON keeps the original bytes.
 func (a Args) RawJSON(name string) jsontext.Value {
-	a.declare(name)
+	a.requireDeclared(name)
 	return a.values[name]
 }
 
@@ -50,12 +53,13 @@ func (a Args) anyPresent(names []string) bool {
 	return false
 }
 
-func (a Args) declare(name string) argKind {
-	kind, ok := a.declared[name]
-	if !ok {
+// requireDeclared panics when name is not one the contract declared. Reading through a
+// handle from another contract would otherwise return the zero value, which is
+// indistinguishable from an optional argument the model omitted.
+func (a Args) requireDeclared(name string) {
+	if _, ok := a.declared[name]; !ok {
 		panic(fmt.Sprintf("loom: tool argument %q is not declared", name))
 	}
-	return kind
 }
 
 // argKind is the closed set of argument shapes the declared-argument API
