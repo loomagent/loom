@@ -182,3 +182,74 @@ func TestUsage(t *testing.T) {
 		t.Fatalf("standard cache count = %+v", got)
 	}
 }
+
+// The wire shape of a conversation. Two things here are load-bearing: an unknown role is
+// refused rather than quietly sent as the user's words, and an assistant turn's reasoning
+// travels back in the field the endpoint asks for, because a multi-turn thinking tool loop is
+// rejected without it.
+func TestMessages(t *testing.T) {
+	messages, err := Messages([]loom.Message{
+		{Role: loom.RoleSystem, Content: "rules"},
+		{Role: loom.RoleUser, Content: "hi"},
+		{
+			Role:             loom.RoleAssistant,
+			Content:          "calling",
+			ReasoningContent: "why",
+			Name:             "assistant",
+			ToolCalls:        []loom.ToolCall{{ID: "c1", Name: "search", Arguments: `{"q":"x"}`}},
+		},
+		{Role: loom.RoleTool, Content: "result", ToolCallID: "c1"},
+	}, ReasoningContentField)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := jsonv2.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire []map[string]any
+	if err := jsonv2.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire) != 4 {
+		t.Fatalf("messages = %d", len(wire))
+	}
+	for index, want := range []string{"system", "user", "assistant", "tool"} {
+		if wire[index]["role"] != want {
+			t.Errorf("message %d role = %v, want %q", index, wire[index]["role"], want)
+		}
+	}
+	assistant := wire[2]
+	if assistant["reasoning_content"] != "why" || assistant["name"] != "assistant" {
+		t.Errorf("assistant = %#v", assistant)
+	}
+	if calls, ok := assistant["tool_calls"].([]any); !ok || len(calls) != 1 {
+		t.Errorf("assistant tool calls = %#v", assistant["tool_calls"])
+	}
+	if tool := wire[3]; tool["tool_call_id"] != "c1" || tool["content"] != "result" {
+		t.Errorf("tool = %#v", tool)
+	}
+}
+
+// A provider that carries its reasoning request-level sends none back, and says so by passing
+// no field name.
+func TestMessagesWithoutAReasoningField(t *testing.T) {
+	messages, err := Messages([]loom.Message{{Role: loom.RoleAssistant, Content: "answer", ReasoningContent: "why"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := jsonv2.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "why") {
+		t.Fatalf("reasoning was sent anyway: %s", encoded)
+	}
+}
+
+func TestMessagesRejectsAnUnknownRole(t *testing.T) {
+	_, err := Messages([]loom.Message{{Role: loom.Role("assistent"), Content: "typo"}}, ReasoningContentField)
+	if err == nil || !strings.Contains(err.Error(), `unknown role "assistent"`) {
+		t.Fatalf("error = %v", err)
+	}
+}

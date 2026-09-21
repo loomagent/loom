@@ -17,8 +17,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/packages/respjson"
 	"github.com/openai/openai-go/v3/shared"
@@ -304,4 +306,60 @@ func (s *Stream) Close() error {
 	}
 	s.closed = true
 	return s.source.Close()
+}
+
+// Messages translates Loom messages onto the OpenAI wire format.
+//
+// carryReasoningAs names the extra field an assistant turn's reasoning travels back in.
+// DeepSeek and Zhipu require it across a multi-turn thinking tool loop, and the endpoint
+// rejects the next call without it. Passing "" sends no reasoning, which is what a provider
+// that carries its reasoning request-level does.
+//
+// An unknown role is an error rather than a user message: quietly changing who said something
+// rewrites the conversation, and nothing downstream would notice.
+func Messages(msgs []loom.Message, carryReasoningAs string) ([]openai.ChatCompletionMessageParamUnion, error) {
+	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(msgs))
+	for _, m := range msgs {
+		var gm openai.ChatCompletionMessageParamUnion
+		switch m.Role {
+		case loom.RoleSystem:
+			gm = openai.SystemMessage(m.Content)
+		case loom.RoleAssistant:
+			gm = openai.AssistantMessage(m.Content)
+			if m.ReasoningContent != "" && carryReasoningAs != "" {
+				gm.OfAssistant.SetExtraFields(map[string]any{carryReasoningAs: m.ReasoningContent})
+			}
+			if m.Name != "" {
+				gm.OfAssistant.Name = param.NewOpt(m.Name)
+			}
+			for _, tc := range m.ToolCalls {
+				gm.OfAssistant.ToolCalls = append(gm.OfAssistant.ToolCalls, openai.ChatCompletionMessageToolCallUnionParam{
+					OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{ID: tc.ID, Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{Name: tc.Name, Arguments: tc.Arguments}},
+				})
+			}
+		case loom.RoleTool:
+			gm = openai.ToolMessage(m.Content, m.ToolCallID)
+		case loom.RoleUser:
+			gm = openai.UserMessage(m.Content)
+		default:
+			return nil, fmt.Errorf("message %d uses unknown role %q", len(out), m.Role)
+		}
+		out = append(out, gm)
+	}
+	return out, nil
+}
+
+// Client builds an SDK client for one provider. Retries belong to Loom, so the SDK must not
+// retry underneath: its default retries would multiply the attempts and bypass the shared
+// rate-limit cooldown.
+func Client(apiKey, baseURL string, httpClient *http.Client) openai.Client {
+	options := []option.RequestOption{
+		option.WithAPIKey(apiKey),
+		option.WithBaseURL(baseURL),
+		option.WithMaxRetries(0),
+	}
+	if httpClient != nil {
+		options = append(options, option.WithHTTPClient(httpClient))
+	}
+	return openai.NewClient(options...)
 }
