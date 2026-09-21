@@ -163,6 +163,11 @@ func checkSupported(s *schema.Schema, path string, patterns map[*schema.Schema]*
 		}
 		patterns[s] = compiled
 	}
+	for index, alternate := range s.AllOf {
+		if err := checkSupported(alternate, fmt.Sprintf("%s/allOf/%d", path, index), patterns); err != nil {
+			return err
+		}
+	}
 	for _, name := range s.PropertyNames() {
 		if err := checkSupported(s.Properties[name], path+"/properties/"+name, patterns); err != nil {
 			return err
@@ -209,6 +214,11 @@ func (run *validation) visit(s *schema.Schema, value any, pointer string) {
 			"received": jsonTypeName(value),
 		})
 		return
+	}
+	// Every branch constrains the same instance, so a value that breaks two of them
+	// reports both and the caller can say so in one message.
+	for _, alternate := range s.AllOf {
+		run.visit(alternate, value, pointer)
 	}
 	switch typed := value.(type) {
 	case map[string]any:
@@ -282,9 +292,7 @@ func (run *validation) string(s *schema.Schema, value, pointer string) {
 	}
 	if s.Pattern != "" {
 		if pattern := run.patterns[s]; pattern != nil && !pattern.MatchString(value) {
-			// format travels with the violation so the message can name the shape the
-			// author asked for instead of the regular expression the contract derived.
-			run.add(pointer, "pattern", "pattern_mismatch", map[string]any{"pattern": s.Pattern, "format": s.Format})
+			run.add(pointer, "pattern", "pattern_mismatch", map[string]any{"pattern": s.Pattern})
 		}
 	}
 }

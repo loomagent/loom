@@ -42,6 +42,12 @@ type Schema struct {
 	// Array keywords.
 	Items *Schema `json:"items,omitempty"`
 
+	// AllOf holds subschemas the instance must satisfy in full. It is how the subset
+	// says "this value obeys all of these", which a single value keyword cannot: a
+	// property has one pattern, so an argument that is both a date and non-blank needs
+	// two branches rather than one keyword that replaces the other.
+	AllOf []*Schema `json:"allOf,omitempty"`
+
 	// Value keywords.
 	Enum []any `json:"enum,omitempty"`
 	// Const is raw JSON, not a Go value: nil means "no const", while a literal

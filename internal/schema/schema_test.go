@@ -158,7 +158,7 @@ func TestMarshalRoundTrip(t *testing.T) {
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"type": "object",
 		"properties": {
-			"a": {"type": "string", "enum": ["a"], "pattern": "^a", "const": null},
+			"a": {"type": "string", "enum": ["a"], "pattern": "^a", "const": null, "allOf": [{"pattern": "\\S"}]},
 			"b": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3, "uniqueItems": true}
 		},
 		"required": ["a"],
@@ -174,5 +174,18 @@ func TestMarshalRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(original, round) {
 		t.Fatalf("round-trip changed the schema:\n original = %+v\n round    = %+v", original, round)
+	}
+}
+
+// allOf is how the model says "this value obeys all of these", which a single value keyword
+// cannot: a property has one pattern, so the builder needs branches when an argument
+// declares two.
+func TestDecodesAllOf(t *testing.T) {
+	s := decodeSchema(t, `{"type":"string","pattern":"^a","allOf":[{"pattern":"\\S"},{"minLength":1}]}`)
+	if s.Pattern != "^a" || len(s.AllOf) != 2 {
+		t.Fatalf("schema = %+v", s)
+	}
+	if s.AllOf[0].Pattern != "\\S" || s.AllOf[1].MinLength == nil || *s.AllOf[1].MinLength != 1 {
+		t.Fatalf("branches = %+v", s.AllOf)
 	}
 }

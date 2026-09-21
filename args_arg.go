@@ -5,7 +5,6 @@ import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"fmt"
-	"strings"
 )
 
 // Declaration is one entry in an args contract: a typed argument or a whole-call
@@ -84,6 +83,7 @@ type argSpec struct {
 	enum        []any
 	format      string
 	pattern     string
+	notBlank    bool
 	minLength   *int
 	maxLength   *int
 	minimum     *float64
@@ -155,6 +155,11 @@ var formatPatterns = map[string]string{
 	"date-time": `^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|z|[+-]\d{2}:\d{2})$`,
 	"uuid":      `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`,
 }
+
+// notBlankPattern is the standard JSON Schema spelling of "not empty or whitespace":
+// a pattern, which the specification searches rather than anchors, so it asks for one
+// non-whitespace character anywhere in the value.
+const notBlankPattern = `\S`
 
 // String declares a string argument.
 func String(name string) *StringArg {
@@ -236,19 +241,13 @@ func (a *StringArg) Format(format string) *StringArg {
 	return a
 }
 
-// NotBlank rejects values that are empty or contain only whitespace.
+// NotBlank rejects values that are empty or contain only whitespace. It is the standard
+// JSON Schema spelling of that rule, so the model and the provider both see it before the
+// call instead of learning it from a failure. It says nothing about whether the model
+// must send the argument: an omitted optional argument still passes, exactly as a
+// property-level keyword does. Use Required for presence.
 func (a *StringArg) NotBlank() *StringArg {
-	name := a.spec.name
-	a.spec.validators = append(a.spec.validators, func(_ context.Context, value jsontext.Value) error {
-		var text string
-		if err := jsonv2.Unmarshal(value, &text); err != nil {
-			return err
-		}
-		if strings.TrimSpace(text) == "" {
-			return InvalidOn(a, "%s must not be blank", name)
-		}
-		return nil
-	})
+	a.spec.notBlank = true
 	return a
 }
 

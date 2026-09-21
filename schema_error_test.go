@@ -136,8 +136,8 @@ func TestExpectedArgumentsSummarizeEveryConstraint(t *testing.T) {
 		t.Fatalf("error type = %T", err)
 	}
 
-	// NotBlank is a whole-call rule rather than a pattern, so it is enforced and
-	// explained on failure but does not appear in the summary.
+	// NotBlank is a schema constraint now, so the model sees it before it calls. It
+	// lives in an allOf branch beside anything else the argument declares.
 	for _, want := range []string{
 		`mode=<string, required, one of ["fast","slow"]>`,
 		`ratio=<number, optional, 0..1>`,
@@ -146,7 +146,7 @@ func TestExpectedArgumentsSummarizeEveryConstraint(t *testing.T) {
 		`after=<integer, optional, >=0, >0>`,
 		`before=<number, optional, <1>`,
 		`name=<string, optional, min length 1, max length 5>`,
-		`note=<string, optional>`,
+		`note=<string, optional, non-blank>`,
 		`tag=<string, optional, starts with "ab">`,
 		`id=<string, optional, starts with "a.b">`,
 		`code=<string, optional, pattern "^a.c$">`,

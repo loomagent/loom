@@ -128,7 +128,11 @@ tool := loom.NewArgsTool(contract, "Run a Google search.",
 模型省略的可选参数读出来是零值,而 `Present` 能区分"未提供"和"提供了但为空"。
 整数是无符号的(`Uint`),所以计数类参数不可能为负,schema 同样拒绝负数。
 `Date`、`Time`、`DateTime`、`UUID` 同时投影出 `format` 和匹配的形状 `pattern`,
-因此忽略 `format` 的 provider 仍然能约束该值。未知参数默认被拒绝。
+因此忽略 `format` 的 provider 仍然能约束该值。`NotBlank` 用的是标准 schema 写法
+("非空且非纯空白"),所以它经 schema 到达模型,而不只是出现在失败文案里。它约束的是
+**内容**而非**存在性**:模型省掉一个可选参数仍然通过,要求必填仍用 `Required`。
+当一个参数需要多个 `pattern` 时(格式的形状 + 显式 pattern,或格式 + `NotBlank`),
+多出来的那些成为 `allOf` 分支,两者同时生效,而不是互相覆盖。未知参数默认被拒绝。
 
 字段级检查接收 `FieldValidator[T]`;整调用级检查用 `Cross` 声明,它接收自己要读的
 类型化句柄:
