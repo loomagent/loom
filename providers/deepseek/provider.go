@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -69,6 +70,9 @@ type Config struct {
 	// RateLimit still retries without end, which is the provider-side throttling
 	// backstop, and product code should not disable it.
 	Retry *loom.RetryConfig
+	// HTTPClient is optional, and replaces the client every request goes through. Use it
+	// for a proxy, custom timeouts, or a test server's in-memory client.
+	HTTPClient *http.Client
 
 	// Capabilities is what the caller or modelfactory fills in from the model's real
 	// configuration. nil leaves it undeclared, so capability checks pass requests
@@ -117,7 +121,7 @@ func New(cfg Config) (*Model, error) {
 		// loom owns every retry (ChatWithRetry / StreamWithRetry), so the SDK must
 		// not retry underneath; its default retries would multiply the attempts and
 		// bypass the shared rate-limit cooldown.
-		client:       openai.NewClient(option.WithAPIKey(cfg.APIKey), option.WithBaseURL(baseURL), option.WithMaxRetries(0)),
+		client:       newClient(cfg, baseURL),
 		name:         name,
 		retryCfg:     retryCfg,
 		capabilities: capabilities,
@@ -224,9 +228,13 @@ func (s *streamAdapter) Close() error {
 // protocol fields. It does not infer capabilities from the provider/model name.
 func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewParams, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
+	messages, err := translateMessages(req.Messages)
+	if err != nil {
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: translate messages: %w", err)
+	}
 	out := openai.ChatCompletionNewParams{
 		Model:    m.name,
-		Messages: translateMessages(req.Messages),
+		Messages: messages,
 	}
 	if req.Temperature != nil {
 		out.Temperature = param.NewOpt(*req.Temperature)
@@ -277,7 +285,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 			}
 			out.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
 				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-					Name:        req.StructuredOutput.Name,
+					Name:        loom.NormalizeStructuredOutputName(req.StructuredOutput.Name),
 					Description: param.NewOpt(req.StructuredOutput.Description),
 					Schema:      req.StructuredOutput.Schema,
 					// strict is always true: a provider's hard guarantee that the output conforms
@@ -355,7 +363,10 @@ func extractReasoning(extra map[string]respjson.Field) string {
 	return s
 }
 
-func translateMessages(msgs []loom.Message) []openai.ChatCompletionMessageParamUnion {
+// translateMessages maps loom messages onto the SDK's union. An unknown role is an error
+// rather than a user message: quietly changing who said something rewrites the
+// conversation, and nothing downstream would notice.
+func translateMessages(msgs []loom.Message) ([]openai.ChatCompletionMessageParamUnion, error) {
 	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(msgs))
 	for _, m := range msgs {
 		var gm openai.ChatCompletionMessageParamUnion
@@ -377,11 +388,11 @@ func translateMessages(msgs []loom.Message) []openai.ChatCompletionMessageParamU
 		case loom.RoleUser:
 			gm = openai.UserMessage(m.Content)
 		default:
-			gm = openai.UserMessage(m.Content)
+			return nil, fmt.Errorf("message %d uses unknown role %q", len(out), m.Role)
 		}
 		out = append(out, gm)
 	}
-	return out
+	return out, nil
 }
 func translateFinishReason(r string) loom.FinishReason {
 	switch r {
@@ -429,4 +440,19 @@ func translateUsage(u *openai.CompletionUsage) loom.Usage {
 		out.ReasoningTokensKnown = u.CompletionTokensDetails.JSON.ReasoningTokens.Valid()
 	}
 	return out
+}
+
+// newClient builds the SDK client. Retries belong to loom, so the SDK must not retry
+// underneath: its default retries would multiply the attempts and bypass the shared
+// rate-limit cooldown.
+func newClient(cfg Config, baseURL string) openai.Client {
+	options := []option.RequestOption{
+		option.WithAPIKey(cfg.APIKey),
+		option.WithBaseURL(baseURL),
+		option.WithMaxRetries(0),
+	}
+	if cfg.HTTPClient != nil {
+		options = append(options, option.WithHTTPClient(cfg.HTTPClient))
+	}
+	return openai.NewClient(options...)
 }

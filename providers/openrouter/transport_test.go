@@ -12,13 +12,13 @@ import (
 
 func testModel(t *testing.T, handler http.HandlerFunc) *Model {
 	t.Helper()
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
+	server := httptest.NewTestServer(t, handler)
 	m, err := New(Config{
-		APIKey:    "test",
-		BaseURL:   server.URL + "/api/v1",
-		ModelName: "x-ai/grok-4.3",
-		Retry:     &loom.RetryConfig{Mode: loom.RetryModeDisabled},
+		APIKey:     "test",
+		BaseURL:    server.URL + "/api/v1",
+		ModelName:  "x-ai/grok-4.3",
+		HTTPClient: server.Client(),
+		Retry:      &loom.RetryConfig{Mode: loom.RetryModeDisabled},
 	})
 	if err != nil {
 		t.Fatal(err)

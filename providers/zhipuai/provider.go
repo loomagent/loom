@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -34,6 +35,9 @@ type Config struct {
 
 	// Retry controls the retry policy; nil means loom.DefaultRetryConfig().
 	Retry *loom.RetryConfig
+	// HTTPClient is optional, and replaces the client every request goes through. Use it
+	// for a proxy, custom timeouts, or a test server's in-memory client.
+	HTTPClient *http.Client
 
 	// Capabilities is what the caller or modelfactory fills in from the model's real
 	// configuration. nil leaves it undeclared, so capability checks pass requests through.
@@ -76,7 +80,7 @@ func New(cfg Config) (*Model, error) {
 		capabilities = *cfg.Capabilities
 	}
 	return &Model{
-		client:       openai.NewClient(option.WithAPIKey(cfg.APIKey), option.WithBaseURL(strings.TrimRight(baseURL, "/")+"/"), option.WithMaxRetries(0)),
+		client:       newClient(cfg, baseURL),
 		name:         cfg.ModelName,
 		retryCfg:     retryCfg,
 		capabilities: capabilities,
@@ -259,7 +263,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 			}
 			out.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
 				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-					Name:        req.StructuredOutput.Name,
+					Name:        loom.NormalizeStructuredOutputName(req.StructuredOutput.Name),
 					Description: param.NewOpt(req.StructuredOutput.Description),
 					Schema:      req.StructuredOutput.Schema,
 					Strict:      param.NewOpt(true),
@@ -400,4 +404,19 @@ func finishError(reason string) error {
 	default:
 		return &APIError{Code: "invalid_finish_reason", Message: fmt.Sprintf("unexpected finish_reason %q", reason)}
 	}
+}
+
+// newClient builds the SDK client. Retries belong to loom, so the SDK must not retry
+// underneath: its default retries would multiply the attempts and bypass the shared
+// rate-limit cooldown.
+func newClient(cfg Config, baseURL string) openai.Client {
+	options := []option.RequestOption{
+		option.WithAPIKey(cfg.APIKey),
+		option.WithBaseURL(strings.TrimRight(baseURL, "/") + "/"),
+		option.WithMaxRetries(0),
+	}
+	if cfg.HTTPClient != nil {
+		options = append(options, option.WithHTTPClient(cfg.HTTPClient))
+	}
+	return openai.NewClient(options...)
 }
