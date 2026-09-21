@@ -42,6 +42,10 @@ func (a *Arg[T]) Get(args Args) T {
 	var out T
 	raw, ok := args.values[a.spec.name]
 	if !ok {
+		// A miss is either an optional argument the model omitted or a handle this
+		// contract never declared. Only the second is a mistake, and only on this path
+		// does it cost anything to tell them apart.
+		args.requireDeclared(a.spec.name)
 		return out
 	}
 	if err := jsonv2.Unmarshal(raw, &out); err != nil {
@@ -56,6 +60,9 @@ func (a *Arg[T]) Get(args Args) T {
 // omitted optional argument from one sent as its zero value.
 func (a *Arg[T]) Present(args Args) bool {
 	_, ok := args.values[a.spec.name]
+	if !ok {
+		args.requireDeclared(a.spec.name)
+	}
 	return ok
 }
 

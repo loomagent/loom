@@ -371,18 +371,24 @@ func TestFormatMustBeEnforced(t *testing.T) {
 	}
 }
 
-// Reading an argument no contract declared is a programming error, so RawJSON
-// panics instead of returning the nil a model could also have sent.
-func TestArgsRawJSONPanicsOnUndeclared(t *testing.T) {
-	contract := MustArgsContract("t", String("q").Desc("Q."))
+// Reading through a handle the contract never declared is a programming error. A zero
+// value would be indistinguishable from an optional argument the model omitted, so every
+// read path panics instead of inventing one.
+func TestArgsReadPanicsOnUndeclared(t *testing.T) {
+	q := String("q").Desc("Q.")
+	contract := MustArgsContract("t", q)
 	args, err := contract.Decode(`{"q":"x"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(args.RawJSON("q")); got != `"x"` {
-		t.Fatalf("RawJSON(q) = %s", got)
+	if q.Get(args) != "x" || !q.Present(args) || string(args.RawJSON("q")) != `"x"` {
+		t.Fatal("reading a declared argument failed")
 	}
-	assertPanics(t, func() { args.RawJSON("missing") })
+
+	other := String("other").Desc("Other.")
+	assertPanics(t, func() { other.Get(args) })
+	assertPanics(t, func() { other.Present(args) })
+	assertPanics(t, func() { args.RawJSON("other") })
 }
 
 func TestNewArgsToolEndToEnd(t *testing.T) {

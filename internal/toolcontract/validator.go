@@ -282,7 +282,9 @@ func (run *validation) string(s *schema.Schema, value, pointer string) {
 	}
 	if s.Pattern != "" {
 		if pattern := run.patterns[s]; pattern != nil && !pattern.MatchString(value) {
-			run.add(pointer, "pattern", "pattern_mismatch", map[string]any{"pattern": s.Pattern})
+			// format travels with the violation so the message can name the shape the
+			// author asked for instead of the regular expression the contract derived.
+			run.add(pointer, "pattern", "pattern_mismatch", map[string]any{"pattern": s.Pattern, "format": s.Format})
 		}
 	}
 }
