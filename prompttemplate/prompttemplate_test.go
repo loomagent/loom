@@ -1,6 +1,9 @@
 package prompttemplate
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateExactlyOnce(t *testing.T) {
 	tests := []struct {
@@ -77,5 +80,66 @@ func TestRenderAllExactlyOnce(t *testing.T) {
 	want := "Context: previous text\nQuestion: the user question\nAnswer: the assistant answer"
 	if got != want {
 		t.Fatalf("RenderAllExactlyOnce() = %q, want %q", got, want)
+	}
+}
+
+// A template that is missing a placeholder is rejected before it is rendered, and the message
+// names the variable so the author can find it.
+func TestValidateAllExactlyOnceReportsWhatIsWrong(t *testing.T) {
+	tests := map[string]struct {
+		template  string
+		variables []string
+		want      string
+	}{
+		"empty":          {"   ", []string{UserInputVariable}, "must not be empty"},
+		"missing":        {"a prompt with no placeholder", []string{UserInputVariable}, "must contain exactly one"},
+		"duplicated":     {"{{user_input}} and {{user_input}}", []string{UserInputVariable}, "must contain exactly one"},
+		"later variable": {"{{user_input}}", []string{UserInputVariable, AssistantAnswerVariable}, "must contain exactly one"},
+	}
+	for name, testCase := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateAllExactlyOnce(testCase.template, "prompt", testCase.variables...)
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("error = %v, want one containing %q", err, testCase.want)
+			}
+		})
+	}
+	if err := ValidateAllExactlyOnce("{{user_input}} {{assistant_answer}}", "prompt", UserInputVariable, AssistantAnswerVariable); err != nil {
+		t.Fatalf("a valid template failed: %v", err)
+	}
+	// No variables is a template that has nothing to require.
+	if err := ValidateAllExactlyOnce("plain", "prompt"); err != nil {
+		t.Fatalf("a template without variables failed: %v", err)
+	}
+}
+
+// Rendering refuses what validation refuses rather than rendering a half-filled template, and
+// both the template and the value lose their surrounding whitespace.
+func TestRenderingTrimsAndRefuses(t *testing.T) {
+	if _, err := RenderExactlyOnce("", UserInputVariable, "value", "prompt"); err == nil {
+		t.Fatal("an empty template must fail")
+	}
+	if _, err := RenderExactlyOnce("no placeholder", UserInputVariable, "value", "prompt"); err == nil {
+		t.Fatal("a missing placeholder must fail")
+	}
+	if _, err := RenderAllExactlyOnce("no placeholder", "prompt", map[string]string{UserInputVariable: "value"}, UserInputVariable); err == nil {
+		t.Fatal("a missing placeholder must fail")
+	}
+
+	got, err := RenderExactlyOnce("  {{user_input}}  ", UserInputVariable, "  spaced  ", "prompt")
+	if err != nil || got != "spaced" {
+		t.Fatalf("RenderExactlyOnce = %q, %v", got, err)
+	}
+	got, err = RenderAllExactlyOnce(" {{user_input}}/{{assistant_answer}} ", "prompt",
+		map[string]string{UserInputVariable: " q ", AssistantAnswerVariable: " a "},
+		UserInputVariable, AssistantAnswerVariable)
+	if err != nil || got != "q/a" {
+		t.Fatalf("RenderAllExactlyOnce = %q, %v", got, err)
+	}
+	// A variable the caller forgot to supply renders as empty rather than leaving the
+	// placeholder in front of the model.
+	got, err = RenderAllExactlyOnce("{{user_input}}!", "prompt", map[string]string{}, UserInputVariable)
+	if err != nil || got != "!" {
+		t.Fatalf("RenderAllExactlyOnce = %q, %v", got, err)
 	}
 }
