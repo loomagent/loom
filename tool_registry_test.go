@@ -38,7 +38,7 @@ func TestToolRegistryRejectsDuplicateName(t *testing.T) {
 	if err := registry.Register(newNamedTool()); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Register(newNamedTool()); err == nil || !strings.Contains(err.Error(), "已注册") {
+	if err := registry.Register(newNamedTool()); err == nil || !strings.Contains(err.Error(), "already registered") {
 		t.Fatalf("duplicate registration error = %v", err)
 	}
 	infos, err := registry.InfoList(context.Background())
@@ -49,14 +49,14 @@ func TestToolRegistryRejectsDuplicateName(t *testing.T) {
 
 func TestToolRegistryValidatesCustomToolNameAndIdentity(t *testing.T) {
 	invalid := &registryTestTool{info: &ToolInfo{Name: "invalid.name"}}
-	if err := NewToolRegistry().Register(invalid); err == nil || !strings.Contains(err.Error(), "名称") {
+	if err := NewToolRegistry().Register(invalid); err == nil || !strings.Contains(err.Error(), "invalid tool name") {
 		t.Fatalf("invalid custom tool error = %v", err)
 	}
 
 	mutable := &registryTestTool{info: &ToolInfo{Name: "stable_name"}}
 	registry := NewToolRegistry(mutable)
 	mutable.info.Name = "changed_name"
-	if _, err := registry.InfoList(context.Background()); err == nil || !strings.Contains(err.Error(), "注册后变为") {
+	if _, err := registry.InfoList(context.Background()); err == nil || !strings.Contains(err.Error(), "now reports the name") {
 		t.Fatalf("changed identity error = %v", err)
 	}
 }
