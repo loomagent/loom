@@ -3,6 +3,10 @@ package modelfactory
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/loomagent/loom"
@@ -147,4 +151,112 @@ func TestFactoryBuildErrors(t *testing.T) {
 			t.Fatalf("error = %v", err)
 		}
 	})
+}
+
+// recordingLimiter records what it was asked to admit, which is how a host sees the seam.
+type recordingLimiter struct {
+	acquired []loom.AttemptMeta
+	finished []loom.AttemptResult
+}
+
+func (l *recordingLimiter) Acquire(_ context.Context, meta loom.AttemptMeta) (loom.AttemptPermit, error) {
+	l.acquired = append(l.acquired, meta)
+	return recordingPermit{l}, nil
+}
+
+type recordingPermit struct{ limiter *recordingLimiter }
+
+func (p recordingPermit) Finish(result loom.AttemptResult) {
+	p.limiter.finished = append(p.limiter.finished, result)
+}
+
+// A limiter a caller declares reaches the provider: it is asked before each physical attempt,
+// with the quota identity that was declared, and told how the attempt ended. Loom ships no
+// limiter, so this is the whole of the framework's part in pacing.
+func TestBuildPassesAnAttemptLimiterThrough(t *testing.T) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"model":"deepseek-chat","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	limiter := &recordingLimiter{}
+	model, err := Build(Config{
+		Provider:       ProviderDeepSeek,
+		APIKey:         "key",
+		Model:          "deepseek-chat",
+		BaseURL:        server.URL,
+		HTTPClient:     server.Client(),
+		AttemptLimiter: limiter,
+		QuotaKey:       "credential-fingerprint",
+		QuotaLabel:     "deepseek",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.Chat(context.Background(), loom.ChatRequest{
+		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(limiter.acquired) != 1 {
+		t.Fatalf("acquired = %+v", limiter.acquired)
+	}
+	meta := limiter.acquired[0]
+	if meta.QuotaKey != "credential-fingerprint" || meta.QuotaLabel != "deepseek" || meta.Model != "deepseek-chat" {
+		t.Fatalf("meta = %+v", meta)
+	}
+	if len(limiter.finished) != 1 || !limiter.finished[0].Success {
+		t.Fatalf("finished = %+v", limiter.finished)
+	}
+}
+
+// A limiter with no quota would pace every attempt under a key nobody else shares, which looks
+// like pacing and is not, so it is refused where it is configured.
+func TestBuildRequiresAQuotaWithALimiter(t *testing.T) {
+	_, err := Build(Config{
+		Provider:       ProviderDeepSeek,
+		APIKey:         "key",
+		Model:          "deepseek-chat",
+		AttemptLimiter: &recordingLimiter{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "QuotaKey") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// A caller's own retry policy survives the limiter: the limiter is added to it rather than
+// replacing it, which the attempt count shows.
+func TestBuildKeepsTheCallersRetryPolicy(t *testing.T) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprint(w, `{"error":{"message":"down"}}`)
+	}))
+	limiter := &recordingLimiter{}
+	model, err := Build(Config{
+		Provider:       ProviderDeepSeek,
+		APIKey:         "key",
+		Model:          "deepseek-chat",
+		BaseURL:        server.URL,
+		HTTPClient:     server.Client(),
+		Retry:          &loom.RetryConfig{Mode: loom.RetryModeDisabled},
+		AttemptLimiter: limiter,
+		QuotaKey:       "fingerprint",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.Chat(context.Background(), loom.ChatRequest{
+		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+	}); err == nil {
+		t.Fatal("an endpoint that is down must fail")
+	}
+	// Retries are disabled by the caller's policy, so exactly one attempt was admitted.
+	if len(limiter.acquired) != 1 {
+		t.Fatalf("acquired = %d attempts, want the caller's policy to stand", len(limiter.acquired))
+	}
+	if len(limiter.finished) != 1 || limiter.finished[0].Success {
+		t.Fatalf("finished = %+v", limiter.finished)
+	}
 }

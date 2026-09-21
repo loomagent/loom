@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/loomagent/loom"
@@ -37,6 +38,22 @@ type Config struct {
 	// Capabilities declares the selected model's capabilities. A nil value
 	// leaves capabilities unspecified and skips capability gating.
 	Capabilities *loom.ModelCapabilities
+	// HTTPClient replaces the client every provider request goes through. Use it
+	// for a proxy, custom timeouts, or a test server's in-memory client.
+	HTTPClient *http.Client
+
+	// AttemptLimiter, when set, paces this model's physical requests: it is asked
+	// for a permit around every attempt the retry schedule makes. Loom ships no
+	// implementation, because how many requests a credential may have in flight,
+	// and how that changes as the provider pushes back, is deployment policy.
+	AttemptLimiter loom.AttemptLimiter
+	// QuotaKey identifies the credential the limiter shares, and is required with
+	// AttemptLimiter. Pass a fingerprint of the credential rather than the secret:
+	// the limiter decides what to do with it.
+	QuotaKey string
+	// QuotaLabel is a stable, non-secret, low-cardinality name for that credential,
+	// such as its API authority, for whatever the limiter reports.
+	QuotaLabel string
 }
 
 // Build constructs a ChatModel from cfg.
@@ -63,19 +80,37 @@ func Build(cfg Config) (loom.ChatModel, error) {
 		}
 	}
 
+	// A limiter without a quota is a mistake rather than an unshared one: every attempt
+	// would be paced under a key nobody else uses, which looks like pacing and is not.
+	retry := cfg.Retry
+	if cfg.AttemptLimiter != nil {
+		if strings.TrimSpace(cfg.QuotaKey) == "" {
+			return nil, fmt.Errorf("%w: QuotaKey is required when AttemptLimiter is set", ErrInvalidConfig)
+		}
+		policy := loom.DefaultRetryConfig()
+		if retry != nil {
+			copied := *retry
+			policy = &copied
+		}
+		policy.AttemptLimiter = cfg.AttemptLimiter
+		policy.AttemptMeta = loom.AttemptMeta{QuotaKey: cfg.QuotaKey, QuotaLabel: cfg.QuotaLabel, Model: cfg.Model}
+		retry = policy
+	}
+
 	var (
 		model loom.ChatModel
 		err   error
 	)
 	switch cfg.Provider {
 	case ProviderZhipuAI:
-		model, err = zhipuai.New(zhipuai.Config{APIKey: cfg.APIKey, ModelName: cfg.Model, BaseURL: cfg.BaseURL, Retry: cfg.Retry, Capabilities: cfg.Capabilities})
+		model, err = zhipuai.New(zhipuai.Config{APIKey: cfg.APIKey, ModelName: cfg.Model, BaseURL: cfg.BaseURL, Retry: retry, HTTPClient: cfg.HTTPClient, Capabilities: cfg.Capabilities})
 	case ProviderArk:
 		model, err = ark.New(ark.Config{
 			APIKey:       cfg.APIKey,
 			ModelName:    cfg.Model,
 			BaseURL:      cfg.BaseURL,
-			Retry:        cfg.Retry,
+			Retry:        retry,
+			HTTPClient:   cfg.HTTPClient,
 			Capabilities: cfg.Capabilities,
 		})
 	case ProviderDeepSeek:
@@ -83,7 +118,8 @@ func Build(cfg Config) (loom.ChatModel, error) {
 			APIKey:       cfg.APIKey,
 			ModelName:    cfg.Model,
 			BaseURL:      cfg.BaseURL,
-			Retry:        cfg.Retry,
+			Retry:        retry,
+			HTTPClient:   cfg.HTTPClient,
 			Capabilities: cfg.Capabilities,
 		})
 	case ProviderOpenRouter:
@@ -91,7 +127,8 @@ func Build(cfg Config) (loom.ChatModel, error) {
 			APIKey:       cfg.APIKey,
 			ModelName:    cfg.Model,
 			BaseURL:      cfg.BaseURL,
-			Retry:        cfg.Retry,
+			Retry:        retry,
+			HTTPClient:   cfg.HTTPClient,
 			Capabilities: cfg.Capabilities,
 		})
 	}

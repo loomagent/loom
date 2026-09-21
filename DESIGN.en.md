@@ -525,8 +525,7 @@ github.com/loomagent/loom/
   call_model.go                 CallModel / per-call failover
   retry.go                      the shared retry schedule (Transient / RateLimit / Permanent)
   tracing.go                    OTel spans
-  llmadmission/                 bounded, credential-scoped admission
-  attempt_admission.go          AttemptMeta (real supplier quota)
+  attempt_admission.go          the per-attempt admission seam (the policy belongs to the host)
   modelfactory/                 explicit model construction
 
   # Data model and execution
@@ -596,6 +595,7 @@ github.com/loomagent/loom/
 | 24 | The schema keyword set is closed; decoding rejects anything outside it | done |
 | 25 | Tools are declared with typed handles rather than struct tags | done |
 | 26 | `ValidateSchema` compiles its schema on every call; nothing caches it, because a schema is a plain value its caller may edit | done |
+| 27 | The framework ships no throttling policy — windows, AIMD, circuit thresholds are deployment policy — only the per-attempt admission seam | done |
 
 Dropped: the Note family (reasoning plus a label already carries process information);
 CloseDetector (external termination is a cancelled ctx with a cause); `Writer.RunTool`
