@@ -5,49 +5,58 @@ import "errors"
 // ErrUnsupportedCapability describes a local capability/configuration restriction.
 // It never establishes upstream model support; capability probes must reach the
 // provider independently of stored declarations and adapter assumptions.
-var ErrUnsupportedCapability = errors.New("loom: provider 不支持此请求")
+var ErrUnsupportedCapability = errors.New("loom: provider does not support this request")
 
-// ErrTurnClosed Turn 已封口或被外部终结,写入被拒。
-// 触发场景:
-//   - executor 已通过 FinalAnswer / StreamFinalAnswer 自封口
-//   - 外部 cancel / 超时 / dispatcher markFailed
+// ErrTurnClosed means the Turn is sealed or was terminated externally, so the
+// write is refused. It happens when:
+//   - the handler already sealed the Turn with FinalAnswer / StreamFinalAnswer
+//   - an external cancel, a timeout, or a dispatcher markFailed closed it
 //
-// agent 收到此 error 应静默退出。
+// An agent that receives it should exit quietly.
 var ErrTurnClosed = errors.New("loom: turn closed")
 
-// ErrHostShutdown runtime host 正在优雅停机,导致当前 turn 被取消。
+// ErrHostShutdown means the runtime host is shutting down gracefully, which
+// cancelled the current turn.
 var ErrHostShutdown = errors.New("loom: host shutdown")
 
-// ErrExternalCancel 外部权威控制面要求取消当前 turn/run。
+// ErrExternalCancel means an authoritative external control plane required the
+// current turn or run to be cancelled.
 var ErrExternalCancel = errors.New("loom: external cancel")
 
-// ErrContentFilter LLM 内容审核截断输出。
-// handler 检测到 FinishReasonContentFilter 时 return 此错;
-// Run 内核 errors.Is 识别 → Status=failed, CloseReason.Code="content_filter"。
+// ErrContentFilter means the model's content moderation cut the output short. A
+// handler returns it on FinishReasonContentFilter; the Run core recognises it
+// with errors.Is and records Status=failed with
+// CloseReason.Code="content_filter".
 var ErrContentFilter = errors.New("loom: content filter")
 
-// ErrSensitiveContentRisk 表示 provider 在请求建立阶段拒绝本次模型调用,
-// 原因是输入/上下文触发了敏感内容风控。
+// ErrSensitiveContentRisk means the provider refused the call while the request
+// was being established, because the input or context tripped sensitive-content
+// moderation.
 //
-// 与 ErrContentFilter 的区别:
-//   - ErrContentFilter 对应模型已经返回 finish_reason=content_filter;
-//   - ErrSensitiveContentRisk 对应 provider 直接返回错误(常见为 HTTP 400),
-//     调用点拿不到 ChatResponse / FinishReason。
+// How it differs from ErrContentFilter:
+//   - ErrContentFilter means the model already returned
+//     finish_reason=content_filter
+//   - ErrSensitiveContentRisk means the provider returned an error directly,
+//     usually an HTTP 400, so the call site has neither a ChatResponse nor a
+//     FinishReason
 //
-// provider 应把自己的官方错误类型映射到此 sentinel,上层 policy 不应匹配
-// provider 私有文案。例如 DeepSeek 官方 "Content Exists Risk" 由 deepseek
-// provider 负责识别。
+// A provider maps its own official error type onto this sentinel, and policies
+// above it must not match a provider's private wording. Recognising DeepSeek's
+// official "Content Exists Risk", for example, is the deepseek provider's job.
 var ErrSensitiveContentRisk = errors.New("loom: sensitive content risk")
 
-// ErrOutputTruncated LLM 输出被截断(撞 max_tokens 或模型自身输出上限)。
+// ErrOutputTruncated means the model's output was cut short, whether by
+// max_tokens or by the model's own output limit.
 //
-// 触发场景对应 OpenAI / DeepSeek / Anthropic 的 finish_reason="length":
-//   - 业务方设的 max_tokens 参数限制
-//   - 模型自身输出 token 上限(context window 剩余空间不够)
+// It matches finish_reason="length" from OpenAI, DeepSeek, and Anthropic:
+//   - the max_tokens limit the caller set
+//   - the model's own output token limit, when the context window has no room left
 //
-// 注意:输入 prompt 超 context 是另一回事 — provider 直接返 400,
-// 走不到 stream,handler 拿到的是 model.Stream() 返回的 err,不是此 sentinel。
+// An input prompt exceeding the context is a different matter: the provider
+// returns a 400 before the stream starts, so the handler receives the error from
+// model.Stream() rather than this sentinel.
 //
-// handler 检测到 FinishReasonLength 时 return 此错;
-// Run 内核 errors.Is 识别 → Status=failed, CloseReason.Code="output_truncated"。
+// A handler returns it on FinishReasonLength; the Run core recognises it with
+// errors.Is and records Status=failed with
+// CloseReason.Code="output_truncated".
 var ErrOutputTruncated = errors.New("loom: output truncated")

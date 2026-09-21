@@ -6,20 +6,20 @@ import (
 	"sync"
 )
 
-// streamCore 流式 Item 共用的累积态。
+// streamCore is the accumulation state shared by streaming Items.
 type streamCore struct {
 	mu        sync.Mutex
 	accumText strings.Builder
-	// finalText 业务方 SetFinalText 设置;nil 表示用 accumText 累积值。
+	// finalText is the value SetFinalText set; nil means the accumulated text is used.
 	finalText *string
 }
 
-// appendLocked mu 已持有时调。
+// appendLocked is called with mu already held.
 func (c *streamCore) appendLocked(chunk string) {
 	c.accumText.WriteString(chunk)
 }
 
-// finalize 取最终文本(SetFinalText 给的或累积值)。
+// finalize returns the final text: the SetFinalText value, or the accumulated one.
 func (c *streamCore) finalize() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -29,8 +29,9 @@ func (c *streamCore) finalize() string {
 	return c.accumText.String()
 }
 
-// itemTextStream 同时实现 ReasoningStream 和 FinalAnswerStream:两个接口的方法集
-// 相同,所以一个类型满足两者,不必各留一份一模一样的实现。
+// itemTextStream implements both ReasoningStream and FinalAnswerStream. The two
+// interfaces have the same method set, so one type satisfies both and neither
+// needs an identical copy of its own.
 type itemTextStream struct {
 	core     streamCore
 	state    *turnState

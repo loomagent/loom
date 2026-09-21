@@ -5,14 +5,15 @@ import (
 	"sync"
 )
 
-// MemorySink 在内存收集所有事件。线程安全。
+// MemorySink collects every event in memory. It is safe for concurrent use.
 //
-// 主要用途:
-//   - 单元测试:断言事件序列
-//   - 本地调试:回看完整事件流
-//   - 离线回放:把事件序列喂给其它 Sink
+// Its main uses:
+//   - unit tests: assert on the event sequence
+//   - local debugging: look back over the complete event stream
+//   - offline replay: feed the event sequence to another Sink
 //
-// 同一实例可被多个并发 Turn 共享(内部加锁);Reset 可在跨 Turn 复用时清空。
+// Several concurrent Turns may share one instance, since it locks internally.
+// Reset clears it before reuse across Turns.
 type MemorySink struct {
 	mu       sync.Mutex
 	started  []ItemStartedEvent
@@ -21,7 +22,7 @@ type MemorySink struct {
 	llmCalls []LLMCalledEvent
 }
 
-// NewMemorySink 构造空 MemorySink。
+// NewMemorySink returns an empty MemorySink.
 func NewMemorySink() *MemorySink {
 	return &MemorySink{}
 }
@@ -54,7 +55,8 @@ func (s *MemorySink) LLMCalled(_ context.Context, ev LLMCalledEvent) error {
 	return nil
 }
 
-// StartedEvents 返回所有 ItemStartedEvent 的副本(线程安全)。
+// StartedEvents returns a copy of every ItemStartedEvent. It is safe for
+// concurrent use.
 func (s *MemorySink) StartedEvents() []ItemStartedEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -63,7 +65,8 @@ func (s *MemorySink) StartedEvents() []ItemStartedEvent {
 	return out
 }
 
-// DeltaEvents 返回所有 ItemDeltaEvent 的副本(线程安全)。
+// DeltaEvents returns a copy of every ItemDeltaEvent. It is safe for concurrent
+// use.
 func (s *MemorySink) DeltaEvents() []ItemDeltaEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -72,7 +75,8 @@ func (s *MemorySink) DeltaEvents() []ItemDeltaEvent {
 	return out
 }
 
-// FinishedEvents 返回所有 ItemFinishedEvent 的副本(线程安全)。
+// FinishedEvents returns a copy of every ItemFinishedEvent. It is safe for
+// concurrent use.
 func (s *MemorySink) FinishedEvents() []ItemFinishedEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -81,7 +85,8 @@ func (s *MemorySink) FinishedEvents() []ItemFinishedEvent {
 	return out
 }
 
-// LLMCalls 返回所有 LLMCalledEvent 的副本(线程安全)。
+// LLMCalls returns a copy of every LLMCalledEvent. It is safe for concurrent
+// use.
 func (s *MemorySink) LLMCalls() []LLMCalledEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -90,7 +95,7 @@ func (s *MemorySink) LLMCalls() []LLMCalledEvent {
 	return out
 }
 
-// Reset 清空所有事件(同 sink 跨多个 Turn 复用前调用)。
+// Reset clears every event. Call it before reusing one sink across several Turns.
 func (s *MemorySink) Reset() {
 	s.mu.Lock()
 	s.started = nil
@@ -100,5 +105,5 @@ func (s *MemorySink) Reset() {
 	s.mu.Unlock()
 }
 
-// 编译期接口断言。
+// Compile-time interface assertions.
 var _ Sink = (*MemorySink)(nil)
