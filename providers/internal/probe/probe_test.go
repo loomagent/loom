@@ -42,3 +42,21 @@ func TestRequestParametersPropagatesBuilderFailure(t *testing.T) {
 		t.Fatalf("error = %v, want the builder's failure", err)
 	}
 }
+
+// A builder whose value cannot be serialized, or does not serialize to an object, is a mistake
+// in the caller's adapter rather than something to report as "no parameters were sent".
+func TestRequestParametersReportsWhatItCannotRead(t *testing.T) {
+	if _, err := RequestParameters(func(loom.ChatRequest) (chan int, error) { return nil, nil }, loom.Reasoning{}); err == nil {
+		t.Fatal("a builder value that cannot be marshaled must fail")
+	}
+	if _, err := RequestParameters(func(loom.ChatRequest) (int, error) { return 5, nil }, loom.Reasoning{}); err == nil {
+		t.Fatal("a builder value that is not an object must fail")
+	}
+	// A body that holds none of the fields under test is reported as empty, not as an error.
+	params, err := RequestParameters(func(loom.ChatRequest) (map[string]any, error) {
+		return map[string]any{"model": "m", "messages": []any{}}, nil
+	}, loom.Reasoning{})
+	if err != nil || len(params) != 0 {
+		t.Fatalf("params = %+v (%v)", params, err)
+	}
+}

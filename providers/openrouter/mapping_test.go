@@ -4,6 +4,7 @@ import (
 	"context"
 	jsonv2 "encoding/json/v2"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -271,5 +272,74 @@ func TestBuildRequestCarriesReasoningBack(t *testing.T) {
 	// for reasoning, while the message field hands the previous reasoning back.
 	if object, ok := body["reasoning"].(map[string]any); !ok || object["enabled"] != true {
 		t.Fatalf("request-level reasoning = %#v", body["reasoning"])
+	}
+}
+
+// The provider's own configuration is validated where it is built, not when a call fails.
+func TestNewRejectsEmptyCredentials(t *testing.T) {
+	if _, err := New(Config{ModelName: "x-ai/grok-4.3"}); err == nil || !strings.Contains(err.Error(), "APIKey") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := New(Config{APIKey: "k"}); err == nil || !strings.Contains(err.Error(), "ModelName") {
+		t.Fatalf("error = %v", err)
+	}
+	// A model built without capabilities declares nothing, so the checks pass requests through.
+	model, err := New(Config{APIKey: "k", ModelName: "x-ai/grok-4.3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capabilities := model.Capabilities(); capabilities.StructuredOutput != "" || capabilities.Reasoning != "" {
+		t.Fatalf("capabilities = %+v", capabilities)
+	}
+}
+
+// An endpoint that is down fails both call shapes, and the error names the adapter so a caller
+// can tell which provider it came from.
+func TestChatAndStreamReportUpstreamFailures(t *testing.T) {
+	model := testModel(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprint(w, `{"error":{"message":"upstream is down"}}`)
+	})
+	request := loom.ChatRequest{
+		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+	}
+	if _, err := model.Chat(t.Context(), request); err == nil || !strings.Contains(err.Error(), "loom/openrouter: chat") {
+		t.Fatalf("chat error = %v", err)
+	}
+	if _, err := model.Stream(t.Context(), request); err == nil {
+		t.Fatal("stream must fail when the endpoint does")
+	}
+}
+
+// A request the adapter cannot translate never reaches the endpoint: a model typo is refused
+// here rather than sent.
+func TestChatRefusesALocallyInvalidRequest(t *testing.T) {
+	calls := 0
+	model := testModel(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"model":"m","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
+	})
+	_, err := model.Chat(t.Context(), loom.ChatRequest{
+		Messages:  []loom.Message{{Role: loom.Role("assistent"), Content: "typo"}},
+		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+	})
+	if err == nil || !strings.Contains(err.Error(), `unknown role "assistent"`) {
+		t.Fatalf("error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatal("an untranslatable request reached the endpoint")
+	}
+	// The same request through Stream, which builds before it calls.
+	if _, err := model.Stream(t.Context(), loom.ChatRequest{
+		Messages:  []loom.Message{{Role: loom.Role("assistent"), Content: "typo"}},
+		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+	}); err == nil {
+		t.Fatal("stream must refuse an untranslatable request")
+	}
+	if calls != 0 {
+		t.Fatal("an untranslatable request reached the endpoint")
 	}
 }
