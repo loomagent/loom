@@ -8,8 +8,8 @@ func TestValidateExactlyOnce(t *testing.T) {
 		prompt  string
 		wantErr bool
 	}{
-		{name: "once", prompt: "用户输入：{{user_input}}", wantErr: false},
-		{name: "missing", prompt: "用户输入：", wantErr: true},
+		{name: "once", prompt: "User input: {{user_input}}", wantErr: false},
+		{name: "missing", prompt: "User input:", wantErr: true},
 		{name: "duplicate", prompt: "{{user_input}}\n{{user_input}}", wantErr: true},
 		{name: "empty", prompt: " ", wantErr: true},
 	}
@@ -25,18 +25,18 @@ func TestValidateExactlyOnce(t *testing.T) {
 }
 
 func TestRenderExactlyOnce(t *testing.T) {
-	got, err := RenderExactlyOnce("翻译：{{user_input}}", UserInputVariable, "hello", "system_prompt")
+	got, err := RenderExactlyOnce("Translate: {{user_input}}", UserInputVariable, "hello", "system_prompt")
 	if err != nil {
 		t.Fatalf("RenderExactlyOnce: %v", err)
 	}
-	if got != "翻译：hello" {
+	if got != "Translate: hello" {
 		t.Fatalf("rendered = %q", got)
 	}
 }
 
 func TestValidateAllExactlyOnce(t *testing.T) {
 	err := ValidateAllExactlyOnce(
-		"上下文：{{conversation_context}}\n问题：{{user_input}}\n回答：{{assistant_answer}}",
+		"Context: {{conversation_context}}\nQuestion: {{user_input}}\nAnswer: {{assistant_answer}}",
 		"followups system_prompt",
 		ConversationContextVariable,
 		UserInputVariable,
@@ -47,7 +47,7 @@ func TestValidateAllExactlyOnce(t *testing.T) {
 	}
 
 	err = ValidateAllExactlyOnce(
-		"问题：{{user_input}}\n回答：{{assistant_answer}}",
+		"Question: {{user_input}}\nAnswer: {{assistant_answer}}",
 		"followups system_prompt",
 		ConversationContextVariable,
 		UserInputVariable,
@@ -60,12 +60,12 @@ func TestValidateAllExactlyOnce(t *testing.T) {
 
 func TestRenderAllExactlyOnce(t *testing.T) {
 	got, err := RenderAllExactlyOnce(
-		"上下文：{{conversation_context}}\n问题：{{user_input}}\n回答：{{assistant_answer}}",
+		"Context: {{conversation_context}}\nQuestion: {{user_input}}\nAnswer: {{assistant_answer}}",
 		"followups system_prompt",
 		map[string]string{
-			ConversationContextVariable: "前文",
-			UserInputVariable:           "用户问题",
-			AssistantAnswerVariable:     "助手回答",
+			ConversationContextVariable: "previous text",
+			UserInputVariable:           "the user question",
+			AssistantAnswerVariable:     "the assistant answer",
 		},
 		ConversationContextVariable,
 		UserInputVariable,
@@ -74,7 +74,7 @@ func TestRenderAllExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderAllExactlyOnce(): %v", err)
 	}
-	want := "上下文：前文\n问题：用户问题\n回答：助手回答"
+	want := "Context: previous text\nQuestion: the user question\nAnswer: the assistant answer"
 	if got != want {
 		t.Fatalf("RenderAllExactlyOnce() = %q, want %q", got, want)
 	}
