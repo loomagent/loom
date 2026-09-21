@@ -143,7 +143,7 @@ so providers that ignore `format` still constrain the value. Unknown arguments
 are rejected by default.
 
 Field checks take a `FieldValidator[T]`; whole-call checks are declared with
-`Cross` / `Cross3` / `Cross4`, which take the typed handles they read:
+`Cross`, which takes the typed handles it reads:
 
 ```go
 loom.Cross(dateFrom, dateTo).Using(validateDateRange)
