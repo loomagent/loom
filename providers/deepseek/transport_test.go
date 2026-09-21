@@ -18,7 +18,7 @@ func TestSchemaRequestReachesUnknownModel(t *testing.T) {
 	for _, streaming := range []bool{false, true} {
 		t.Run(fmt.Sprint(streaming), func(t *testing.T) {
 			calls := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer test" {
 					t.Errorf("unexpected endpoint/auth: %s", r.URL.Path)
@@ -53,9 +53,8 @@ func TestSchemaRequestReachesUnknownModel(t *testing.T) {
 					_, _ = fmt.Fprint(w, `{"model":"deepseek-future","choices":[{"message":{"content":"{\"ok\":true}"},"finish_reason":"stop"}],"usage":{"total_tokens":12,"completion_tokens_details":{"reasoning_tokens":0}}}`)
 				}
 			}))
-			defer server.Close()
 			caps := loom.ReasoningProbeCapabilities(false)
-			m, err := New(Config{APIKey: "test", BaseURL: server.URL + "/v1", ModelName: "deepseek-future", Capabilities: &caps, Retry: &loom.RetryConfig{Mode: loom.RetryModeDisabled}})
+			m, err := New(Config{APIKey: "test", BaseURL: server.URL + "/v1", HTTPClient: server.Client(), ModelName: "deepseek-future", Capabilities: &caps, Retry: &loom.RetryConfig{Mode: loom.RetryModeDisabled}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -124,16 +123,15 @@ func TestReasoningTelemetryPresence(t *testing.T) {
 
 func TestSchemaUpstreamErrorAndDeclaredBusinessGuard(t *testing.T) {
 	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Retry-After", "7")
 		w.WriteHeader(400)
 		_, _ = fmt.Fprint(w, `{"error":{"message":"This response_format type is unavailable now"}}`)
 	}))
-	defer server.Close()
 	req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "JSON"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema, Name: "probe", Schema: &loom.Schema{Type: "object"}}}
-	m, err := New(Config{APIKey: "test", BaseURL: server.URL, ModelName: "deepseek-flash", Retry: &loom.RetryConfig{Mode: loom.RetryModeDisabled}})
+	m, err := New(Config{APIKey: "test", BaseURL: server.URL, HTTPClient: server.Client(), ModelName: "deepseek-flash", Retry: &loom.RetryConfig{Mode: loom.RetryModeDisabled}})
 	if err != nil {
 		t.Fatal(err)
 	}

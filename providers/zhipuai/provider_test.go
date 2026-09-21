@@ -18,9 +18,8 @@ import (
 
 func testModel(t *testing.T, handler http.HandlerFunc) *Model {
 	t.Helper()
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
-	m, err := New(Config{APIKey: "test-key", ModelName: "glm-5.3", BaseURL: server.URL + "/api/paas/v4/", Retry: &loom.RetryConfig{MaxRetries: -1}})
+	server := httptest.NewTestServer(t, handler)
+	m, err := New(Config{APIKey: "test-key", ModelName: "glm-5.3", BaseURL: server.URL + "/api/paas/v4/", HTTPClient: server.Client(), Retry: &loom.RetryConfig{MaxRetries: -1}})
 	if err != nil {
 		t.Fatal(err)
 	}

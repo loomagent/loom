@@ -32,7 +32,7 @@ func TestUsagePresenceOnWire(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(fmt.Sprintf("%s/stream=%v", tc.name, stream), func(t *testing.T) {
 				t.Parallel()
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer test" {
 						t.Errorf("request contract: %s", r.URL.Path)
 					}
@@ -60,8 +60,7 @@ func TestUsagePresenceOnWire(t *testing.T) {
 						_, _ = fmt.Fprintf(w, `{"model":"deepseek-future","choices":[{"message":{"content":"answer"},"finish_reason":"stop"}]%s}`, tc.usage)
 					}
 				}))
-				defer server.Close()
-				m, err := New(Config{APIKey: "test", BaseURL: server.URL, ModelName: "deepseek-future", Retry: &loom.RetryConfig{Mode: loom.RetryModeDisabled}})
+				m, err := New(Config{APIKey: "test", BaseURL: server.URL, HTTPClient: server.Client(), ModelName: "deepseek-future", Retry: &loom.RetryConfig{Mode: loom.RetryModeDisabled}})
 				if err != nil {
 					t.Fatal(err)
 				}
