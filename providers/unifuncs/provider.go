@@ -254,11 +254,21 @@ func (c *Client) retryable(ctx context.Context, err error, attempt int) (bool, t
 	return false, 0
 }
 
+// backoff returns the wait before one retry: retryDelay doubling with each attempt, never
+// past maxRetryDelay. It clamps before doubling rather than shifting, because a retry
+// budget large enough to overflow the shift produces a negative delay, and a negative
+// timer fires at once, which turns the budget into a hot loop.
 func (c *Client) backoff(attempt int) time.Duration {
 	if attempt < 0 {
 		attempt = 0
 	}
-	delay := c.retryDelay << attempt
+	delay := c.retryDelay
+	for range attempt {
+		if delay >= c.maxRetryDelay {
+			return c.maxRetryDelay
+		}
+		delay *= 2
+	}
 	return min(delay, c.maxRetryDelay)
 }
 
