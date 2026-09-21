@@ -231,8 +231,8 @@ func TestMessages(t *testing.T) {
 	}
 }
 
-// A provider that carries its reasoning request-level sends none back, and says so by passing
-// no field name.
+// The parameter means what it says: no field name, no reasoning on the wire, for a caller
+// whose messages carry none.
 func TestMessagesWithoutAReasoningField(t *testing.T) {
 	messages, err := Messages([]loom.Message{{Role: loom.RoleAssistant, Content: "answer", ReasoningContent: "why"}}, "")
 	if err != nil {

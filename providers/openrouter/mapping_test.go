@@ -226,3 +226,50 @@ func TestBuildRequestBranches(t *testing.T) {
 		}
 	})
 }
+
+// A reasoning model that is not handed its own previous reasoning back cannot continue the
+// chain it started, so an assistant turn carries it — in OpenRouter's field, which is the same
+// one its responses use.
+func TestBuildRequestCarriesReasoningBack(t *testing.T) {
+	model, err := New(Config{APIKey: "k", ModelName: "x-ai/grok-4.3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := model.buildRequest(loom.ChatRequest{
+		Messages: []loom.Message{
+			{Role: loom.RoleUser, Content: "hi"},
+			{
+				Role:             loom.RoleAssistant,
+				Content:          "calling",
+				ReasoningContent: "the chain so far",
+				ToolCalls:        []loom.ToolCall{{ID: "c1", Name: "lookup", Arguments: `{}`}},
+			},
+			{Role: loom.RoleTool, Content: "result", ToolCallID: "c1"},
+		},
+		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "high"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := jsonv2.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := jsonv2.Unmarshal(data, &body); err != nil {
+		t.Fatal(err)
+	}
+	assistant := body["messages"].([]any)[1].(map[string]any)
+	if assistant["reasoning"] != "the chain so far" {
+		t.Fatalf("assistant message = %#v", assistant)
+	}
+	// The other vendors' spelling is not this endpoint's.
+	if _, present := assistant["reasoning_content"]; present {
+		t.Fatalf("DeepSeek's field name leaked into an OpenRouter request: %#v", assistant)
+	}
+	// The request-level reasoning object is still there, and is a different thing: it asks
+	// for reasoning, while the message field hands the previous reasoning back.
+	if object, ok := body["reasoning"].(map[string]any); !ok || object["enabled"] != true {
+		t.Fatalf("request-level reasoning = %#v", body["reasoning"])
+	}
+}

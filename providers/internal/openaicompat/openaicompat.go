@@ -148,8 +148,15 @@ func Usage(u *openai.CompletionUsage) loom.Usage {
 	return out
 }
 
-// ReasoningContentField is the structured reasoning field the vendors Loom talks to use.
-const ReasoningContentField = "reasoning_content"
+// The field an assistant turn's reasoning travels back in. The endpoints disagree about the
+// name, not about whether they want it: a reasoning model that is not given its own previous
+// reasoning back cannot continue the chain it started.
+const (
+	// ReasoningContentField is what DeepSeek and Zhipu call it.
+	ReasoningContentField = "reasoning_content"
+	// ReasoningField is what OpenRouter calls it.
+	ReasoningField = "reasoning"
+)
 
 // ReasoningContent reads the structured reasoning field. A value that is not a string, a
 // null or an object, is not reasoning, and an optional field that failed to arrive is not
@@ -164,7 +171,7 @@ func ReasoningContentOrReasoning(extra map[string]respjson.Field) string {
 	if text := ReasoningContent(extra); text != "" {
 		return text
 	}
-	return stringField(extra, "reasoning")
+	return stringField(extra, ReasoningField)
 }
 
 func stringField(extra map[string]respjson.Field, name string) string {
@@ -310,10 +317,15 @@ func (s *Stream) Close() error {
 
 // Messages translates Loom messages onto the OpenAI wire format.
 //
-// carryReasoningAs names the extra field an assistant turn's reasoning travels back in.
-// DeepSeek and Zhipu require it across a multi-turn thinking tool loop, and the endpoint
-// rejects the next call without it. Passing "" sends no reasoning, which is what a provider
-// that carries its reasoning request-level does.
+// carryReasoningAs names the field an assistant turn's reasoning travels back in, which is
+// the one thing the endpoints spell differently: ReasoningContentField for DeepSeek and Zhipu,
+// ReasoningField for OpenRouter. Every one of them wants it, because a reasoning model that is
+// not handed its own previous reasoning cannot continue the chain it started. Passing "" sends
+// none, which a caller may want when the message carries no reasoning at all.
+//
+// Only the plain text form travels: OpenRouter also accepts a structured reasoning_details
+// array, which has to be echoed back byte-for-byte and in order, and Loom's Message has one
+// string for reasoning rather than a carrier for a provider's own structure.
 //
 // An unknown role is an error rather than a user message: quietly changing who said something
 // rewrites the conversation, and nothing downstream would notice.
