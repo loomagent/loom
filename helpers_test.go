@@ -15,6 +15,7 @@ func TestAppendAssistantTurnPairsResultsWithMessages(t *testing.T) {
 	response := &ChatResponse{
 		Content:          "calling",
 		ReasoningContent: "why",
+		ReasoningDetails: jsontext.Value(`[{"type":"reasoning.text","text":"why","id":"r1","index":0}]`),
 		ToolCalls:        []ToolCall{{ID: "c1", Name: "search", Arguments: `{}`}},
 	}
 	results := []ToolExecResult{
@@ -29,6 +30,11 @@ func TestAppendAssistantTurnPairsResultsWithMessages(t *testing.T) {
 	if assistant.Role != RoleAssistant || assistant.Content != "calling" ||
 		assistant.ReasoningContent != "why" || len(assistant.ToolCalls) != 1 {
 		t.Fatalf("assistant = %+v", assistant)
+	}
+	// A provider's structured reasoning continues the chain it came from, so the loop has to
+	// carry it onto the assistant message rather than only the text.
+	if string(assistant.ReasoningDetails) != `[{"type":"reasoning.text","text":"why","id":"r1","index":0}]` {
+		t.Fatalf("assistant details = %s", assistant.ReasoningDetails)
 	}
 	for index, want := range []struct{ id, content string }{
 		{"c1", `{"found":true}`},

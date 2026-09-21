@@ -152,8 +152,10 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 // accepts either reasoning field, because an upstream provider may pass the structured one
 // through in its place.
 var wire = openaicompat.Provider{
-	FinishReason: translateFinishReason,
-	Reasoning:    openaicompat.ReasoningContentOrReasoning,
+	FinishReason:          translateFinishReason,
+	Reasoning:             openaicompat.ReasoningContentOrReasoning,
+	ReasoningField:        openaicompat.ReasoningField,
+	ReasoningDetailsField: openaicompat.ReasoningDetailsField,
 }
 
 // buildRequest translates a loom.ChatRequest into the go-openai request structure.
@@ -161,7 +163,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 	defer func() { err = loom.LocalRequestError(err) }()
 	// An assistant turn's reasoning goes back in OpenRouter's own field, the same one its
 	// responses use, so a reasoning model can continue the chain it started.
-	messages, err := openaicompat.Messages(req.Messages, openaicompat.ReasoningField)
+	messages, err := wire.Messages(req.Messages)
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/openrouter: translate messages: %w", err)
 	}

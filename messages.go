@@ -166,6 +166,9 @@ func AppendAssistantTurn(msgs []Message, resp *ChatResponse, results []ToolExecR
 		Role:             RoleAssistant,
 		Content:          resp.Content,
 		ReasoningContent: resp.ReasoningContent,
+		// A provider's structured reasoning continues the chain it came from, so it goes
+		// back on the message that continues it.
+		ReasoningDetails: resp.ReasoningDetails,
 		ToolCalls:        resp.ToolCalls,
 	})
 	for _, r := range results {

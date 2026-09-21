@@ -13,6 +13,7 @@
 package openaicompat
 
 import (
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -156,6 +157,9 @@ const (
 	ReasoningContentField = "reasoning_content"
 	// ReasoningField is what OpenRouter calls it.
 	ReasoningField = "reasoning"
+	// ReasoningDetailsField holds a provider's own structured reasoning: a sequence of typed
+	// blocks it asks for back unchanged and in order.
+	ReasoningDetailsField = "reasoning_details"
 )
 
 // ReasoningContent reads the structured reasoning field. A value that is not a string, a
@@ -201,6 +205,13 @@ type Provider struct {
 	// NormalizeError, when set, translates an SDK error into the provider's own, which is
 	// what the provider's classifier and its callers expect to see.
 	NormalizeError func(error) error
+
+	// ReasoningField names the field an assistant turn's reasoning text travels back in, or
+	// "" for a provider that carries none.
+	ReasoningField string
+	// ReasoningDetailsField names the field its structured reasoning travels in, or "" for a
+	// provider that has no such form.
+	ReasoningDetailsField string
 }
 
 func (p Provider) normalize(err error) error {
@@ -233,11 +244,25 @@ func (p Provider) Response(out *openai.ChatCompletion) (*loom.ChatResponse, erro
 	return &loom.ChatResponse{
 		Content:          choice.Message.Content,
 		ReasoningContent: p.reasoning()(choice.Message.JSON.ExtraFields),
+		ReasoningDetails: detailsField(choice.Message.JSON.ExtraFields, p.ReasoningDetailsField),
 		ToolCalls:        ToolCalls(choice.Message.ToolCalls),
 		FinishReason:     p.FinishReason(choice.FinishReason),
 		Usage:            Usage(&out.Usage),
 		Model:            out.Model,
 	}, nil
+}
+
+// detailsField reads a provider's structured reasoning as the raw JSON it arrived as, because
+// it has to go back the way it came.
+func detailsField(extra map[string]respjson.Field, name string) jsontext.Value {
+	if name == "" {
+		return nil
+	}
+	field, ok := extra[name]
+	if !ok {
+		return nil
+	}
+	return jsontext.Value(field.Raw())
 }
 
 // StreamSource is the SDK's streaming reader. Every OpenAI-wire SDK spells it the same way.
@@ -291,6 +316,7 @@ func (s *Stream) Recv() (*loom.Chunk, error) {
 		choice := raw.Choices[0]
 		chunk.ContentDelta = choice.Delta.Content
 		chunk.ReasoningContentDelta = s.provider.reasoning()(choice.Delta.JSON.ExtraFields)
+		chunk.ReasoningDetails = detailsField(choice.Delta.JSON.ExtraFields, s.provider.ReasoningDetailsField)
 		chunk.ToolCallDeltas = ToolCallDeltas(choice.Delta.ToolCalls)
 		if choice.FinishReason != "" {
 			if s.provider.CheckFinish != nil {
@@ -317,19 +343,14 @@ func (s *Stream) Close() error {
 
 // Messages translates Loom messages onto the OpenAI wire format.
 //
-// carryReasoningAs names the field an assistant turn's reasoning travels back in, which is
-// the one thing the endpoints spell differently: ReasoningContentField for DeepSeek and Zhipu,
-// ReasoningField for OpenRouter. Every one of them wants it, because a reasoning model that is
-// not handed its own previous reasoning cannot continue the chain it started. Passing "" sends
-// none, which a caller may want when the message carries no reasoning at all.
-//
-// Only the plain text form travels: OpenRouter also accepts a structured reasoning_details
-// array, which has to be echoed back byte-for-byte and in order, and Loom's Message has one
-// string for reasoning rather than a carrier for a provider's own structure.
+// An assistant turn's reasoning travels back in the fields this provider names, because a
+// reasoning model that is not handed its own previous reasoning cannot continue the chain it
+// started. The text form is the one the endpoints spell differently; the structured form is a
+// provider's own sequence of blocks, which goes back exactly as it arrived.
 //
 // An unknown role is an error rather than a user message: quietly changing who said something
 // rewrites the conversation, and nothing downstream would notice.
-func Messages(msgs []loom.Message, carryReasoningAs string) ([]openai.ChatCompletionMessageParamUnion, error) {
+func (p Provider) Messages(msgs []loom.Message) ([]openai.ChatCompletionMessageParamUnion, error) {
 	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(msgs))
 	for _, m := range msgs {
 		var gm openai.ChatCompletionMessageParamUnion
@@ -338,8 +359,17 @@ func Messages(msgs []loom.Message, carryReasoningAs string) ([]openai.ChatComple
 			gm = openai.SystemMessage(m.Content)
 		case loom.RoleAssistant:
 			gm = openai.AssistantMessage(m.Content)
-			if m.ReasoningContent != "" && carryReasoningAs != "" {
-				gm.OfAssistant.SetExtraFields(map[string]any{carryReasoningAs: m.ReasoningContent})
+			extra := map[string]any{}
+			if m.ReasoningContent != "" && p.ReasoningField != "" {
+				extra[p.ReasoningField] = m.ReasoningContent
+			}
+			// The structured form goes back verbatim, and a provider that does not carry one
+			// never sees the field.
+			if len(m.ReasoningDetails) > 0 && p.ReasoningDetailsField != "" {
+				extra[p.ReasoningDetailsField] = m.ReasoningDetails
+			}
+			if len(extra) > 0 {
+				gm.OfAssistant.SetExtraFields(extra)
 			}
 			if m.Name != "" {
 				gm.OfAssistant.Name = param.NewOpt(m.Name)

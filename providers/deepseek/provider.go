@@ -163,7 +163,10 @@ func (m *Model) chatRaw(ctx context.Context, dsReq openai.ChatCompletionNewParam
 // wire is what this provider does differently when a response is read back. The request
 // shape stays here; reading a completion and reading a stream are the same work for every
 // provider on this wire format.
-var wire = openaicompat.Provider{FinishReason: translateFinishReason}
+var wire = openaicompat.Provider{
+	FinishReason:   translateFinishReason,
+	ReasoningField: openaicompat.ReasoningContentField,
+}
 
 // Stream implements loom.ChatModel.Stream with automatic retries, up to the first-frame
 // liveness probe. Once the consumer has the second frame or later, there are no more
@@ -184,7 +187,7 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 // protocol fields. It does not infer capabilities from the provider/model name.
 func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewParams, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
-	messages, err := openaicompat.Messages(req.Messages, openaicompat.ReasoningContentField)
+	messages, err := wire.Messages(req.Messages)
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: translate messages: %w", err)
 	}

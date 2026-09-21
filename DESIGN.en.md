@@ -596,6 +596,7 @@ github.com/loomagent/loom/
 | 25 | Tools are declared with typed handles rather than struct tags | done |
 | 26 | `ValidateSchema` compiles its schema on every call; nothing caches it, because a schema is a plain value its caller may edit | done |
 | 27 | The framework ships no throttling policy — windows, AIMD, circuit thresholds are deployment policy — only the per-attempt admission seam | done |
+| 28 | A provider's structured reasoning round-trips as the raw blocks it sent, in order: Message, ChatResponse, and Chunk each carry it opaquely, and a stream is concatenated frame by frame as the vendor documents | done |
 
 Dropped: the Note family (reasoning plus a label already carries process information);
 CloseDetector (external termination is a cancelled ctx with a cause); `Writer.RunTool`
@@ -616,5 +617,4 @@ the deltas).
 
 - **A multimodal UserMessage**: today it is Text plus Source and Purpose.
 - **Cross-Turn references**: a sub-agent referencing a tool result across the main turn would need a redesign; today product code wraps it as a Tool.
-- **A faithful reasoning round-trip**: OpenRouter's `reasoning_details` — encrypted or summarised reasoning — has to be echoed back unchanged and in order, and `loom.Message` carries reasoning as one string. Only the plain text form travels today; carrying that structure would need a provider-opaque raw-JSON field on Message.
 - **The visibility of rule-based constraints**: whole-call and field-level checks such as `NotBlank` do not appear in the expected-arguments summary, so a model learns about them only by failing. Making them visible would mean the builder carries prose aimed at the model.
