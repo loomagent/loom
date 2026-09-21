@@ -201,6 +201,23 @@ rules that a schema cannot express.
 Invalid JSON or schema violations use the configured output retry limit
 (`WithStructuredMaxAttempts`, two attempts by default).
 
+### The schema both directions share
+
+Both directions build on one schema model. `loom.Schema` carries exactly the
+keywords the declared-argument builder emits, and decoding rejects any other
+keyword, so a schema cannot advertise a constraint the validator silently
+ignores.
+
+Some constraints are enforced through a projected `pattern` rather than the
+keyword itself: `Date`, `Time`, `DateTime`, and `UUID` set `format` *and* a
+matching shape pattern, and a `format` with no pattern is refused when the
+contract is built. One deliberate deviation from the specification: an
+`integer` must be written without a fraction or exponent, so `1.0` is rejected.
+
+`loom.ValidateSchema(schema, value)` runs the same check a contract runs, for a
+value produced elsewhere, and `loom.ConstJSON(v)` renders a value as the raw JSON
+a `const` holds.
+
 ## Packages
 
 - `github.com/loomagent/loom`: runtime, events, writers, sinks, tools, and model abstractions
@@ -437,9 +454,30 @@ change between minor versions. Production users should pin an exact version.
 ## Development
 
 ```bash
-go test ./...
+gofmt -l .
 go vet ./...
+go test -race ./...
+golangci-lint run ./...
 ```
+
+CI runs all of the above. `golangci-lint` carries the lint rules the project's
+testing principles call for: `depguard` (tests use `encoding/json/v2`),
+`forbidigo` (tests advance time with `synctest`, never `time.Sleep`),
+`usetesting`, `thelper`, `tparallel`, and `modernize`.
+
+The test step also writes a coverage profile that `scripts/check-coverage.sh`
+checks against a floor. The floor is a ratchet against regressions, not the
+branch-coverage target: `go test -cover` counts only each package's own tests, so
+the total understates packages whose API other packages exercise.
+
+`internal/toolcontract` validates its subset against the official
+[JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite):
+the draft2020-12 files for the supported keywords are vendored under
+`internal/toolcontract/testdata/jsonschema`, and cases whose schema does not
+decode into Loom's model are skipped. `TestJSONSchemaSuiteSubset` fails when a
+documented deviation is fixed without updating the table, so that table stays
+current. To refresh the fixtures, take the files from the upstream commit
+recorded in the directory's README.
 
 ## Zhipu AI (domestic pay-as-you-go API)
 
