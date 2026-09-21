@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -225,4 +226,212 @@ func mustRegistry(t *testing.T, namespace string, store Store) *Registry {
 		t.Fatal(err)
 	}
 	return registry
+}
+
+// countingStore delegates to a real store and can refuse the first attempts, which is how a
+// concurrent registration looks from the losing side.
+type countingStore struct {
+	delegate  Store
+	conflicts int
+	calls     int
+}
+
+func (s *countingStore) EnsureBatch(ctx context.Context, namespace string, candidates []Candidate) ([]StoredRef, error) {
+	s.calls++
+	if s.calls <= s.conflicts {
+		return nil, ErrConflict
+	}
+	return s.delegate.EnsureBatch(ctx, namespace, candidates)
+}
+
+func (s *countingStore) Count(ctx context.Context, namespace string) (uint64, error) {
+	return s.delegate.Count(ctx, namespace)
+}
+
+// The conflict budget is a knob, so both ends of it have to behave: no retries fails
+// immediately, and more retries get through more conflicts.
+func TestWithConflictRetriesControlsTheAttempts(t *testing.T) {
+	for _, testCase := range []struct {
+		retries   int
+		conflicts int
+		wantErr   bool
+		wantCalls int
+	}{
+		{retries: 0, conflicts: 1, wantErr: true, wantCalls: 1},
+		{retries: 2, conflicts: 2, wantCalls: 3},
+		{retries: 2, conflicts: 3, wantErr: true, wantCalls: 3},
+		{retries: 4, conflicts: 4, wantCalls: 5},
+	} {
+		store := &countingStore{delegate: NewMemoryStore(), conflicts: testCase.conflicts}
+		registry, err := New("retries", store, WithConflictRetries(testCase.retries))
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs, err := registry.EnsureBatch(context.Background(), []Input{{URL: "https://example.com"}})
+		if testCase.wantErr {
+			if !errors.Is(err, ErrConflict) {
+				t.Fatalf("retries=%d conflicts=%d err=%v", testCase.retries, testCase.conflicts, err)
+			}
+		} else if err != nil || len(refs) != 1 || refs[0].Seq != 1 {
+			t.Fatalf("retries=%d conflicts=%d refs=%+v err=%v", testCase.retries, testCase.conflicts, refs, err)
+		}
+		if store.calls != testCase.wantCalls {
+			t.Errorf("retries=%d conflicts=%d calls=%d, want %d", testCase.retries, testCase.conflicts, store.calls, testCase.wantCalls)
+		}
+	}
+}
+
+// A caller with its own idea of a canonical URL replaces the conservative default, and two
+// spellings it considers equal then share one reference.
+func TestWithNormalizerReplacesTheKey(t *testing.T) {
+	stripTracking := func(raw string) (string, error) {
+		if before, _, found := strings.Cut(raw, "?"); found {
+			return before, nil
+		}
+		return raw, nil
+	}
+	registry, err := New("custom", NewMemoryStore(), WithNormalizer(stripTracking))
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := registry.EnsureBatch(context.Background(), []Input{
+		{URL: "https://example.com/report?utm_source=a"},
+		{URL: "https://example.com/report?utm_source=b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 2 || refs[0].Seq != refs[1].Seq {
+		t.Fatalf("refs = %+v", refs)
+	}
+
+	// A nil normalizer leaves the default in place rather than removing deduplication.
+	registry, err = New("nil-normalizer", NewMemoryStore(), WithNormalizer(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err = registry.EnsureBatch(context.Background(), []Input{
+		{URL: "https://example.com/report?a=1"},
+		{URL: "https://example.com/report?a=1"},
+	})
+	if err != nil || refs[0].Seq != refs[1].Seq {
+		t.Fatalf("refs = %+v err = %v", refs, err)
+	}
+}
+
+// A normalizer is caller-supplied, so its failures are reported with the input that caused
+// them rather than as a broken batch.
+func TestNormalizerFailuresAreReportedPerInput(t *testing.T) {
+	failing := func(string) (string, error) { return "", errors.New("no key for you") }
+	registry, err := New("failing", NewMemoryStore(), WithNormalizer(failing))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = registry.EnsureBatch(context.Background(), []Input{{URL: "https://example.com"}, {URL: "https://example.org"}})
+	if err == nil || !strings.Contains(err.Error(), "input 0: no key for you") {
+		t.Fatalf("error = %v", err)
+	}
+
+	empty := func(string) (string, error) { return "   ", nil }
+	registry, err = New("empty", NewMemoryStore(), WithNormalizer(empty))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = registry.EnsureBatch(context.Background(), []Input{{URL: "https://example.com"}})
+	if !errors.Is(err, ErrInvalidURL) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNewValidatesItsArguments(t *testing.T) {
+	if _, err := New("", NewMemoryStore()); err == nil || !strings.Contains(err.Error(), "namespace is required") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := New("   ", NewMemoryStore()); err == nil {
+		t.Fatal("a blank namespace must be refused")
+	}
+	if _, err := New("ns", nil); err == nil || !strings.Contains(err.Error(), "Store is required") {
+		t.Fatalf("error = %v", err)
+	}
+	// A nil option is skipped, and the namespace is trimmed.
+	registry, err := New("  spaced  ", NewMemoryStore(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registry.Namespace() != "spaced" {
+		t.Fatalf("Namespace() = %q", registry.Namespace())
+	}
+}
+
+// Accessors on an uninitialized registry report rather than panic, because a nil registry
+// is what a caller has before it constructs one.
+func TestUninitializedRegistry(t *testing.T) {
+	var registry *Registry
+	if registry.Namespace() != "" {
+		t.Fatalf("Namespace() = %q", registry.Namespace())
+	}
+	if _, err := registry.Count(context.Background()); err == nil {
+		t.Fatal("Count must report an uninitialized registry")
+	}
+	if _, err := registry.EnsureBatch(context.Background(), []Input{{URL: "https://example.com"}}); err == nil {
+		t.Fatal("EnsureBatch must report an uninitialized registry")
+	}
+}
+
+// Blank inputs carry no source, so they come back as empty references instead of failing
+// the batch or being sent to the Store.
+func TestEnsureBatchSkipsBlankInputs(t *testing.T) {
+	store := &countingStore{delegate: NewMemoryStore()}
+	registry, err := New("blank", store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := registry.EnsureBatch(context.Background(), []Input{{URL: "   "}, {URL: "https://example.com"}, {URL: ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 3 || refs[0] != (Ref{}) || refs[2] != (Ref{}) || refs[1].Seq != 1 {
+		t.Fatalf("refs = %+v", refs)
+	}
+
+	if refs, err := registry.EnsureBatch(context.Background(), []Input{{URL: ""}}); err != nil || len(refs) != 1 || refs[0] != (Ref{}) {
+		t.Fatalf("refs = %+v err = %v", refs, err)
+	}
+	if refs, err := registry.EnsureBatch(context.Background(), nil); err != nil || len(refs) != 0 {
+		t.Fatalf("refs = %+v err = %v", refs, err)
+	}
+}
+
+// A cancelation that lands while the registry is backing off from a conflict ends the
+// batch with the context's error rather than another attempt.
+func TestConflictRetryStopsOnCancelation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	store := &cancelOnConflictStore{delegate: NewMemoryStore(), cancel: cancel}
+	registry, err := New("cancel", store, WithConflictRetries(5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.EnsureBatch(ctx, []Input{{URL: "https://example.com"}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if store.calls != 1 {
+		t.Fatalf("calls = %d, want the batch to stop after the first conflict", store.calls)
+	}
+}
+
+type cancelOnConflictStore struct {
+	delegate Store
+	cancel   context.CancelFunc
+	calls    int
+}
+
+func (s *cancelOnConflictStore) EnsureBatch(ctx context.Context, namespace string, candidates []Candidate) ([]StoredRef, error) {
+	s.calls++
+	// The cancelation arrives from outside while this attempt is failing.
+	s.cancel()
+	return nil, ErrConflict
+}
+
+func (s *cancelOnConflictStore) Count(ctx context.Context, namespace string) (uint64, error) {
+	return s.delegate.Count(ctx, namespace)
 }
