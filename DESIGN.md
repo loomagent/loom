@@ -530,8 +530,7 @@ github.com/loomagent/loom/
   call_model.go                 CallModel / per-call failover
   retry.go                      共享 retry 调度(Transient / RateLimit / Permanent)
   tracing.go                    OTel span
-  llmadmission/                 按凭据的有界并发准入
-  attempt_admission.go          AttemptMeta(真实供应商配额)
+  attempt_admission.go          per-attempt 准入缝(节流策略由宿主提供)
   modelfactory/                 显式构造模型
 
   # 数据模型与执行
@@ -601,6 +600,7 @@ github.com/loomagent/loom/
 | 24 | schema 关键字集合是封闭的,解码拒绝集合外的关键字 | 已落实 |
 | 25 | 工具契约按声明式参数 + 类型化句柄,不用 struct tag | 已落实 |
 | 26 | `ValidateSchema` 每次调用重新编译 schema;不缓存,因为 schema 是调用方可能修改的普通值 | 已落实 |
+| 27 | 框架不内置节流策略(并发窗口 / AIMD / 熔断阈值都是部署策略),只提供每次物理尝试的准入缝 | 已落实 |
 
 已放弃:Note 系列(reasoning 与 label 足以表达过程信息)、CloseDetector(外部终结
 由调用方取消带 cause 的 ctx 表达)、`Writer.RunTool`(由 `RunToolByName` 与

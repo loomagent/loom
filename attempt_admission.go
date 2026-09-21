@@ -38,6 +38,14 @@ type AttemptPermit interface {
 
 // AttemptLimiter coordinates physical requests across every model instance
 // sharing the same provider credential.
+//
+// Loom owns the retry schedule, so a host cannot pace individual physical attempts from
+// outside: it can set counts and delays in RetryConfig, or wrap a ChatModel to pace logical
+// calls, but neither can hold back one attempt of a retry the schedule is running. This
+// interface is that seam. Loom ships no implementation, because how many requests a credential
+// may have in flight, and how that changes as a provider pushes back, is deployment policy
+// rather than framework behaviour. modelfactory.Config.AttemptLimiter is where a host plugs one
+// in.
 type AttemptLimiter interface {
 	Acquire(ctx context.Context, meta AttemptMeta) (AttemptPermit, error)
 }

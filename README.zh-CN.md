@@ -242,6 +242,11 @@ model, err := modelfactory.Build(modelfactory.Config{
 })
 ```
 
+`Config.AttemptLimiter` 对**每一次物理尝试**做节流,这是宿主从外部做不到的事:重试循环在
+loom 内部,所以包一层 `ChatModel` 只能限住逻辑调用,拦不下某次重试里的单次尝试。框架**不提供
+实现**——一个凭据能有多少请求在飞、provider 推回时如何调整,是部署策略。`QuotaKey` 标识共享
+该窗口的凭据(传指纹而不是密钥本身),`QuotaLabel` 是给指标用的低基数名字。
+
 按 ID 选择模型的应用可以实现 `modelfactory.ConfigLoader` 并使用
 `modelfactory.Factory`。加载器可以从文件、环境变量、密钥管理服务或数据库读取,
 而不必让 Loom 耦合到那套存储系统。

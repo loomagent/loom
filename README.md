@@ -273,6 +273,14 @@ model, err := modelfactory.Build(modelfactory.Config{
 })
 ```
 
+`Config.AttemptLimiter` paces **each physical attempt** the retry schedule makes, which is the
+one thing a host cannot do from outside: Loom owns the retry loop, so a `ChatModel` wrapper can
+pace logical calls but not one attempt of a retry. The framework ships **no implementation** —
+how many requests a credential may have in flight, and how that changes as a provider pushes
+back, is deployment policy. `QuotaKey` names the credential the window is shared by (pass a
+fingerprint, not the secret); `QuotaLabel` is a low-cardinality name for whatever the limiter
+reports.
+
 Applications that select models by ID can implement
 `modelfactory.ConfigLoader` and use `modelfactory.Factory`. A loader may read
 from a file, environment variables, a secrets manager, or a database without

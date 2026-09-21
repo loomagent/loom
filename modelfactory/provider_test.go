@@ -93,3 +93,31 @@ func TestProviderJSON(t *testing.T) {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 }
+
+// The wire representation is exact: a value is accepted only as itself, so an invalid
+// configuration is reported rather than quietly normalized.
+func TestProviderTextIsExact(t *testing.T) {
+	// An unsupported value fails rather than marshaling to something a configuration file
+	// would accept.
+	if _, err := Provider("nope").MarshalText(); err == nil {
+		t.Fatal("an unsupported provider must not marshal")
+	}
+	var target Provider
+	if err := target.UnmarshalText([]byte("DeepSeek")); err == nil {
+		t.Fatal("case must not be folded")
+	}
+	if err := target.UnmarshalText([]byte(" deepseek")); err == nil {
+		t.Fatal("whitespace must not be trimmed")
+	}
+	var absent *Provider
+	if err := absent.UnmarshalText([]byte("deepseek")); err == nil {
+		t.Fatal("a nil receiver must be refused")
+	}
+	// Every provider survives a round trip.
+	for _, provider := range ProviderValues() {
+		text, err := provider.MarshalText()
+		if err != nil || string(text) != provider.String() {
+			t.Errorf("MarshalText(%q) = %q, %v", provider, text, err)
+		}
+	}
+}
