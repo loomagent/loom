@@ -6,7 +6,7 @@ import (
 	"slices"
 )
 
-// Role 消息角色。
+// Role is a message role.
 type Role string
 
 const (
@@ -16,8 +16,9 @@ const (
 	RoleTool      Role = "tool"
 )
 
-// Message 一条上下文消息(纯文本)。
-// 不支持多模态;后续扩展会以追加字段方式做(不改现有 Content 语义)。
+// Message is one context message, in plain text. Multimodal input is not
+// supported; a later extension will add fields without changing what Content
+// means.
 type Message struct {
 	Role Role
 
@@ -27,44 +28,48 @@ type Message struct {
 	source  MessageSource
 	purpose MessagePurpose
 
-	// Content 主体内容。
-	// 对 reasoning 模型的 assistant 消息,这是去掉 reasoning 后的最终答案文本。
-	// role=assistant 且仅触发 tool_calls 没有文本输出时可为空。
+	// Content is the main body. For an assistant message from a reasoning model it
+	// is the final answer with the reasoning removed. It may be empty for an
+	// assistant message that only requested tool calls and produced no text.
 	Content string
 
-	// ReasoningContent 推理过程。
-	// 仅 assistant 消息可能填充;user/system/tool 应留空。
-	// 不支持推理的 provider 收到此字段时应静默忽略。
+	// ReasoningContent is the reasoning behind the answer. Only an assistant
+	// message may carry it; user, system, and tool messages should leave it empty. A
+	// provider that does not support reasoning must ignore it rather than fail.
 	ReasoningContent string
 
-	// ToolCalls 仅 role=assistant 携带:本轮 LLM 发起的工具调用列表。
-	// 用于把上一轮的 tool_calls 拼回对话历史,让 LLM 看到完整的"我调过哪些工具"。
+	// ToolCalls is carried by assistant messages only: the tool calls this round
+	// requested. It replays the previous round's calls back into the history so the
+	// model can see which tools it already used.
 	ToolCalls []ToolCall
 
-	// Name 可选:消息发送者名字(部分 provider 支持,用于多用户上下文区分)。
+	// Name is optional: the sender's name. Some providers use it to tell several
+	// users apart within one context.
 	Name string
 
-	// ToolCallID 仅 role=tool 时填,关联触发本结果的工具调用 id(对应某条 ToolCall.ID)。
+	// ToolCallID is set on role=tool messages only, linking this result to the call
+	// that produced it, matching some ToolCall.ID.
 	ToolCallID string
 }
 
-// FinishReason 模型停止的原因。
+// FinishReason is why the model stopped.
 type FinishReason string
 
 const (
-	FinishReasonStop          FinishReason = "stop"           // 自然停止
-	FinishReasonLength        FinishReason = "length"         // 撞 max_tokens
-	FinishReasonContentFilter FinishReason = "content_filter" // 被内容审核截断
-	FinishReasonToolCalls     FinishReason = "tool_calls"     // 模型请求调工具
-	FinishReasonError         FinishReason = "error"          // provider 异常归因
+	FinishReasonStop          FinishReason = "stop"           // stopped naturally
+	FinishReasonLength        FinishReason = "length"         // hit max_tokens
+	FinishReasonContentFilter FinishReason = "content_filter" // cut off by content moderation
+	FinishReasonToolCalls     FinishReason = "tool_calls"     // the model asked to call a tool
+	FinishReasonError         FinishReason = "error"          // attributed to a provider failure
 )
 
-// Usage Token 用量。各字段含义按下:
-//   - PromptTokens:    输入 token
-//   - CompletionTokens:输出 token (含 reasoning)
-//   - CachedTokens:    输入命中 prompt cache 的 token 数(provider 支持时)
-//   - ReasoningTokens: 输出中属于 reasoning 部分的 token 数(reasoning 模型)
-//   - TotalTokens:     Prompt + Completion
+// Usage is token accounting. The fields mean:
+//   - PromptTokens:     input tokens
+//   - CompletionTokens: output tokens, reasoning included
+//   - CachedTokens:     input tokens that hit the provider's prompt cache, when it
+//     reports one
+//   - ReasoningTokens:  output tokens that belong to reasoning, on a reasoning model
+//   - TotalTokens:      prompt plus completion
 type Usage struct {
 	PromptTokens     uint64
 	CompletionTokens uint64
@@ -81,57 +86,62 @@ type Usage struct {
 type ReasoningEffort string
 
 const (
-	ReasoningEffortDefault ReasoningEffort = "" // 未选择档位;不是业务默认值
+	ReasoningEffortDefault ReasoningEffort = "" // no effort selected; not a business default
 	ReasoningEffortMinimal ReasoningEffort = "minimal"
 	ReasoningEffortXHigh   ReasoningEffort = "xhigh"
-	ReasoningEffortLow     ReasoningEffort = "low"    // 较低推理预算
-	ReasoningEffortMedium  ReasoningEffort = "medium" // 中等推理预算
-	ReasoningEffortHigh    ReasoningEffort = "high"   // 较高推理预算
-	ReasoningEffortMax     ReasoningEffort = "max"    // 最高推理预算
+	ReasoningEffortLow     ReasoningEffort = "low"    // a lower reasoning budget
+	ReasoningEffortMedium  ReasoningEffort = "medium" // a medium reasoning budget
+	ReasoningEffortHigh    ReasoningEffort = "high"   // a higher reasoning budget
+	ReasoningEffortMax     ReasoningEffort = "max"    // the highest reasoning budget
 )
 
-// ReasoningMode 推理开关。
+// ReasoningMode is the reasoning switch.
 //
-// 必传:零值("")表示调用方未声明,provider 构造请求时直接报错。
-// 不存在"跟随服务端默认"的选项——供应商可能悄悄翻转默认行为
-// (deepseek-v4 系列服务端默认开 thinking,曾导致标题总结的 max_tokens 被
-// reasoning 耗尽、content 为空静默截断),每个调用点必须显式回答"这次要不要推理"。
+// It is required: a zero value, "", means the caller declared nothing, and the
+// provider fails while building the request. There is deliberately no "follow the
+// server default" option, because a provider can flip that default without telling
+// anyone. The deepseek-v4 series turns thinking on by server default, which once
+// drained a title-summarisation call's max_tokens into reasoning and left the
+// content silently empty. Every call site must answer explicitly whether this call
+// reasons.
 type ReasoningMode string
 
 const (
-	ReasoningModeEnabled  ReasoningMode = "enabled"  // 显式开启推理
-	ReasoningModeDisabled ReasoningMode = "disabled" // 显式关闭推理
+	ReasoningModeEnabled  ReasoningMode = "enabled"  // reasoning explicitly on
+	ReasoningModeDisabled ReasoningMode = "disabled" // reasoning explicitly off
 )
 
-// Reasoning 推理控制。Mode 必传,见 ReasoningMode。
+// Reasoning controls reasoning. Mode is required; see ReasoningMode.
 type Reasoning struct {
 	Mode   ReasoningMode
 	Effort ReasoningEffort
 }
 
-// ResponseFormat 输出格式控制。
+// ResponseFormat controls the output format.
 type ResponseFormat string
 
 const (
-	ResponseFormatDefault    ResponseFormat = ""            // provider 默认(通常 text)
-	ResponseFormatText       ResponseFormat = "text"        // 普通文本
-	ResponseFormatJSONObject ResponseFormat = "json_object" // 强制 JSON 输出(provider 支持时)
+	ResponseFormatDefault    ResponseFormat = ""            // the provider default, usually text
+	ResponseFormatText       ResponseFormat = "text"        // plain text
+	ResponseFormatJSONObject ResponseFormat = "json_object" // force JSON output where the provider supports it
 )
 
-// StructuredOutputMode 描述结构化输出能力/请求档位。
+// StructuredOutputMode describes the structured-output capability, or the level a
+// request asks for.
 //
-// 用在两处,取值集合略有差异:
-//   - ModelCapabilities.StructuredOutput(能力声明):None=明确声明不支持,
-//     ""=未声明(跳过能力校验、纯透传);
-//   - ChatRequest.StructuredOutput.Mode(请求):JSONObject/JSONSchema,
-//     ""(Unsupported)表示不要结构化输出。
+// It appears in two places, with slightly different value sets:
+//   - ModelCapabilities.StructuredOutput, a capability declaration: None explicitly
+//     declares no support, and "" means nothing was declared, so the check passes
+//     the request through
+//   - ChatRequest.StructuredOutput.Mode, a request: JSONObject or JSONSchema, with
+//     "" (Unsupported) meaning no structured output is wanted
 type StructuredOutputMode string
 
 const (
-	StructuredOutputUnsupported StructuredOutputMode = ""            // 请求:不要结构化输出 / 能力:未声明
-	StructuredOutputNone        StructuredOutputMode = "none"        // 能力专用:明确声明不支持
-	StructuredOutputJSONObject  StructuredOutputMode = "json_object" // 仅能要求 JSON object
-	StructuredOutputJSONSchema  StructuredOutputMode = "json_schema" // 可传 JSON Schema
+	StructuredOutputUnsupported StructuredOutputMode = ""            // request: none wanted / capability: undeclared
+	StructuredOutputNone        StructuredOutputMode = "none"        // capability only: explicitly no support
+	StructuredOutputJSONObject  StructuredOutputMode = "json_object" // can only ask for a JSON object
+	StructuredOutputJSONSchema  StructuredOutputMode = "json_schema" // can take a JSON Schema
 )
 
 // ReasoningSupport describes whether reasoning is unsupported, required, or toggleable.
@@ -160,19 +170,22 @@ func (s ReasoningSupport) Canonical() ReasoningSupport {
 	}
 }
 
-// ModelCapabilities 是模型在初始化时声明的能力。
+// ModelCapabilities is what a model declared at initialization.
 //
-// 能力由调用方或 modelfactory 按实际模型配置填充,provider 包不写死
-// 任何默认值。裸构造(不传 Capabilities)时一律是零值"未声明",
-// 各能力校验对未声明跳过、纯透传。
+// The caller or modelfactory fills it from the model's real configuration; no
+// provider package hardcodes a default. Building a model without Capabilities
+// leaves every field at its zero value, meaning nothing was declared, and each
+// capability check then passes the request through unchecked.
 type ModelCapabilities struct {
 	reasoningProbe   bool // only ReasoningProbeCapabilities enables diagnostic bypass
 	StructuredOutput StructuredOutputMode
 
-	// Reasoning 推理支持形态。零值("")表示未声明 — ResolveReasoning 对未声明
-	// 能力只做 Mode 必传校验、跳过能力交叉校验(纯透传)。
+	// Reasoning is the form of reasoning support. A zero value, "", means nothing was
+	// declared: ResolveReasoning then only requires Mode and skips the capability
+	// cross-check.
 	Reasoning ReasoningSupport
-	// ReasoningEfforts 支持的推理强度档位,空 = 不支持调档。
+	// ReasoningEfforts are the selectable reasoning efforts; empty means the model
+	// offers no choice.
 	ReasoningEfforts []ReasoningEffort
 
 	// ReasoningEffortsUnconfirmed marks imported, unreviewed metadata. Explicit
@@ -182,118 +195,134 @@ type ModelCapabilities struct {
 
 	// OfficialDefaultReasoningEffort records a reviewed provider default, never a request fallback.
 	OfficialDefaultReasoningEffort ReasoningEffort
-	// MaxOutputTokens 单次输出 token 上限,0 = 未知。
+	// MaxOutputTokens is the output token limit of one call; 0 means unknown.
 	MaxOutputTokens uint64
-	// MaxContextTokens 上下文窗口 token 上限,0 = 未知。
-	// 仅用于组装期预算/裁剪,不参与构造期硬拦截。
+	// MaxContextTokens is the context window limit; 0 means unknown. It is for
+	// budgeting and trimming while a request is assembled, not for rejecting one.
 	MaxContextTokens uint64
 }
 
-// ReasoningSend 推理参数的发送决策(ResolveReasoning 的输出,provider 无关)。
+// ReasoningSend is the decision to send reasoning parameters, as ResolveReasoning
+// returns it, independent of any provider.
 type ReasoningSend string
 
 const (
-	ReasoningSendOmit     ReasoningSend = "omit"     // 不发送推理开关参数
-	ReasoningSendEnabled  ReasoningSend = "enabled"  // 显式发送"开启推理"
-	ReasoningSendDisabled ReasoningSend = "disabled" // 显式发送"关闭推理"
+	ReasoningSendOmit     ReasoningSend = "omit"     // send no reasoning switch
+	ReasoningSendEnabled  ReasoningSend = "enabled"  // explicitly send "reasoning on"
+	ReasoningSendDisabled ReasoningSend = "disabled" // explicitly send "reasoning off"
 )
 
-// ResolvedReasoning 推理声明按模型能力解析后的结果。
-// provider 在 buildRequest 里把它翻译成各自的请求参数
-// (deepseek → thinking + reasoning_effort;ark → Thinking 字段)。
+// ResolvedReasoning is the outcome of resolving a reasoning request against the
+// model's capabilities. A provider's buildRequest turns it into its own request
+// parameters: thinking plus reasoning_effort for deepseek, the Thinking field for
+// ark.
 type ResolvedReasoning struct {
 	Send ReasoningSend
-	// Effort 仅 Send=enabled 时可能非空。
+	// Effort is non-empty only when Send is enabled.
 	Effort ReasoningEffort
 }
 
-// CheckRequestAgainstCapabilities 防御性校验:请求用到模型声明不支持的能力时
-// 在构造阶段直接报错,绝不发出去(「声明与使用矛盾要暴露,不静默降级/被吞」)。
+// CheckRequestAgainstCapabilities is a defensive check: a request that uses a
+// capability the model declared it does not have fails while it is being built and
+// is never sent. A contradiction between declaration and use has to surface, not
+// be silently downgraded or swallowed.
 //
-// 覆盖结构化输出与输出长度;推理由 ResolveReasoning 单独校验。
-// 能力未声明(对应字段为零值)时跳过对应校验、纯透传。
+// It covers structured output and output length; reasoning is checked separately by
+// ResolveReasoning. An undeclared capability, a zero field, skips its check and
+// passes the request through.
 //
-// 有意不校验输入是否超 max_context_tokens(别加)。2026-06 实测三家供应商
-// (deepseek/ark/openrouter)超窗均在生成前返回 400 — 不计费、报文带精确
-// token 数,且各 provider 的 ErrorClassifier 都把 400 归为 Permanent 不重试,
-// 错误即时上抛,供应商报错本身就是"提前报错"。而本地拦截必有误杀:各家校验
-// 语义不一致(deepseek/openrouter 把 messages+completion 加总校验;ark 只看
-// 输入,输入+max_tokens 加总超窗实测合法可生成),本地统一规则不可能同时对齐,
-// 且本地估算永远不如供应商 tokenizer 准。max_context_tokens 的消费场景是
-// 预算类(组装期裁剪/多轮循环用 Usage.PromptTokens 观测),不是构造期报错。
+// Input length against max_context_tokens is deliberately not checked here; do not
+// add it. As measured in 2026-06, all three providers (deepseek, ark, openrouter)
+// return a 400 before generating when the window is exceeded: no charge, an exact
+// token count in the response, and every provider's ErrorClassifier treats a 400 as
+// Permanent and does not retry, so the error comes straight back. The provider's own
+// rejection is the early warning. A local check would produce false positives,
+// because the providers disagree about what counts: deepseek and openrouter
+// validate messages plus completion together, while ark looks only at the input and
+// happily generates when input plus max_tokens exceeds the window. No single local
+// rule can match all three, and a local estimate is never as accurate as the
+// provider's tokenizer. max_context_tokens is meant for budgeting, trimming while
+// assembling a request and watching Usage.PromptTokens across rounds, not for
+// failing a request.
 //
-// 注意与 ChatStructured 的分工:ChatStructured 按声明能力主动降级
-// (json_schema → json_object → prompt 兜底),它构造的请求永远不会越过声明;
-// 本校验拦的是绕过 ChatStructured 直接手写 ChatRequest 的越界使用。
+// Note the division of labour with ChatStructured: it downgrades deliberately
+// according to the declared capability (json_schema → json_object → prompt), so a
+// request it builds never exceeds the declaration. This check catches the
+// out-of-bounds request written by hand, bypassing ChatStructured.
 func CheckRequestAgainstCapabilities(caps ModelCapabilities, req ChatRequest) error {
 	if req.StructuredOutput != nil {
 		switch req.StructuredOutput.Mode {
 		case StructuredOutputJSONSchema:
 			switch caps.StructuredOutput {
 			case StructuredOutputJSONSchema:
-				// 支持
+				// supported
 			case StructuredOutputUnsupported:
-				// 能力未声明,透传
+				// capability undeclared; pass through
 			case StructuredOutputNone, StructuredOutputJSONObject:
-				return fmt.Errorf("loom: 模型声明 structured_output=%q,不支持 json_schema", caps.StructuredOutput)
+				return fmt.Errorf("loom: model declares structured_output=%q, which does not support json_schema", caps.StructuredOutput)
 			default:
-				return fmt.Errorf("loom: 未知 structured output 能力 %q", caps.StructuredOutput)
+				return fmt.Errorf("loom: unknown structured output capability %q", caps.StructuredOutput)
 			}
 		case StructuredOutputJSONObject:
 			switch caps.StructuredOutput {
 			case StructuredOutputJSONObject, StructuredOutputJSONSchema:
-				// 支持
+				// supported
 			case StructuredOutputUnsupported:
-				// 能力未声明,透传
+				// capability undeclared; pass through
 			case StructuredOutputNone:
-				return fmt.Errorf("loom: 模型声明 structured_output=none,不支持 json_object")
+				return fmt.Errorf("loom: model declares structured_output=none, which does not support json_object")
 			default:
-				return fmt.Errorf("loom: 未知 structured output 能力 %q", caps.StructuredOutput)
+				return fmt.Errorf("loom: unknown structured output capability %q", caps.StructuredOutput)
 			}
 		case StructuredOutputUnsupported:
-			// 请求不要结构化输出,无需校验
+			// the request asks for no structured output, so nothing to check
 		case StructuredOutputNone:
-			return fmt.Errorf("loom: StructuredOutput.Mode 不允许取 %q(none 是能力声明专用值)", req.StructuredOutput.Mode)
+			return fmt.Errorf("loom: StructuredOutput.Mode may not be %q; none is reserved for capability declarations", req.StructuredOutput.Mode)
 		default:
-			return fmt.Errorf("loom: 未知 StructuredOutput.Mode %q", req.StructuredOutput.Mode)
+			return fmt.Errorf("loom: unknown StructuredOutput.Mode %q", req.StructuredOutput.Mode)
 		}
 	} else if req.ResponseFormat == ResponseFormatJSONObject {
 		switch caps.StructuredOutput {
 		case StructuredOutputJSONObject, StructuredOutputJSONSchema:
-			// 支持
+			// supported
 		case StructuredOutputUnsupported:
-			// 能力未声明,透传
+			// capability undeclared; pass through
 		case StructuredOutputNone:
-			return fmt.Errorf("loom: 模型声明 structured_output=none,不支持 response_format=json_object")
+			return fmt.Errorf("loom: model declares structured_output=none, which does not support response_format=json_object")
 		default:
-			return fmt.Errorf("loom: 未知 structured output 能力 %q", caps.StructuredOutput)
+			return fmt.Errorf("loom: unknown structured output capability %q", caps.StructuredOutput)
 		}
 	}
 
 	if req.MaxTokens != nil && *req.MaxTokens > 0 &&
 		caps.MaxOutputTokens > 0 && uint64(*req.MaxTokens) > caps.MaxOutputTokens {
-		return fmt.Errorf("loom: MaxTokens=%d 超过模型声明的输出上限 %d", *req.MaxTokens, caps.MaxOutputTokens)
+		return fmt.Errorf("loom: MaxTokens=%d exceeds the output limit of %d the model declared", *req.MaxTokens, caps.MaxOutputTokens)
 	}
 	return nil
 }
 
-// ResolveReasoning 按模型能力解析调用方的推理声明。矩阵全集见
-// reasoning_test.go 的 TestResolveReasoningMatrix;要点:
-//   - Mode 必传:零值直接报错,这是"每个调用点显式决策"的强制点;
-//   - 声明与能力矛盾(none×enabled / always_on×disabled / 档位越界)报错而非静默忽略;
-//   - 能力未声明(caps.Reasoning=="")只做必传校验,纯透传。
+// ResolveReasoning resolves the caller's reasoning request against the model's
+// capabilities. TestResolveReasoningMatrix in reasoning_test.go covers the whole
+// matrix. The essentials:
+//   - Mode is required: a zero value fails, which is what forces every call site to
+//     decide explicitly
+//   - a contradiction between request and capability (none×enabled,
+//     always_on×disabled, an unsupported effort) fails rather than being silently
+//     ignored
+//   - an undeclared capability (caps.Reasoning=="") only requires Mode and passes
+//     everything else through
 func ResolveReasoning(caps ModelCapabilities, r Reasoning) (ResolvedReasoning, error) {
 	if r.Mode == ReasoningModeEnabled && caps.ReasoningEffortsUnconfirmed {
-		return ResolvedReasoning{}, fmt.Errorf("loom: 原生推理档位尚未由管理员确认，不能开启推理")
+		return ResolvedReasoning{}, fmt.Errorf("loom: an administrator has not confirmed the native reasoning efforts, so reasoning cannot be enabled")
 	}
 
 	switch r.Mode {
 	case ReasoningModeEnabled, ReasoningModeDisabled:
-		// 合法,继续
+		// valid; continue
 	case "":
-		return ResolvedReasoning{}, fmt.Errorf("loom: Reasoning.Mode 必传(enabled/disabled),不允许依赖供应商服务端默认行为")
+		return ResolvedReasoning{}, fmt.Errorf("loom: Reasoning.Mode is required (enabled or disabled); relying on the provider's server-side default is not allowed")
 	default:
-		return ResolvedReasoning{}, fmt.Errorf("loom: 未知 Reasoning.Mode %q", r.Mode)
+		return ResolvedReasoning{}, fmt.Errorf("loom: unknown Reasoning.Mode %q", r.Mode)
 	}
 
 	if r.Effort != "" && !ValidReasoningEffort(r.Effort) {
@@ -304,57 +333,61 @@ func ResolveReasoning(caps ModelCapabilities, r Reasoning) (ResolvedReasoning, e
 	case ReasoningModeEnabled:
 		switch caps.Reasoning {
 		case ReasoningSupportNone:
-			return ResolvedReasoning{}, fmt.Errorf("loom: 模型不支持推理(reasoning_support=none),不能要求 enabled")
+			return ResolvedReasoning{}, fmt.Errorf("loom: the model supports no reasoning (reasoning_support=none), so it cannot be enabled")
 		case ReasoningSupportAlwaysOn, ReasoningSupportToggleable,
 			ReasoningSupportToggleableDefaultOn,
 			ReasoningSupportToggleableDefaultOff,
 			"":
-			// 显式发送 enabled(always_on 时无害且更显式;能力未声明时透传)
+			// Explicitly send enabled: harmless and more explicit under always_on, and
+			// passed through when the capability is undeclared
 		default:
-			return ResolvedReasoning{}, fmt.Errorf("loom: 未知 reasoning_support %q", caps.Reasoning)
+			return ResolvedReasoning{}, fmt.Errorf("loom: unknown reasoning_support %q", caps.Reasoning)
 		}
 		if r.Effort == ReasoningEffortDefault && len(caps.ReasoningEfforts) > 0 {
-			return ResolvedReasoning{}, fmt.Errorf("loom: 启用推理时必须显式指定 reasoning effort (支持: %v)", caps.ReasoningEfforts)
+			return ResolvedReasoning{}, fmt.Errorf("loom: enabling reasoning requires an explicit effort (supported: %v)", caps.ReasoningEfforts)
 		}
 		if r.Effort != ReasoningEffortDefault &&
 			(caps.Reasoning != "" || caps.ReasoningEfforts != nil) &&
 			!slices.Contains(caps.ReasoningEfforts, r.Effort) {
-			return ResolvedReasoning{}, fmt.Errorf("loom: 模型不支持推理强度档位 %q(支持: %v)", r.Effort, caps.ReasoningEfforts)
+			return ResolvedReasoning{}, fmt.Errorf("loom: the model does not support reasoning effort %q (supported: %v)", r.Effort, caps.ReasoningEfforts)
 		}
 		return ResolvedReasoning{Send: ReasoningSendEnabled, Effort: r.Effort}, nil
 
 	case ReasoningModeDisabled:
 		if r.Effort != ReasoningEffortDefault {
-			return ResolvedReasoning{}, fmt.Errorf("loom: Reasoning.Mode=disabled 与 Effort=%q 矛盾(关闭推理不应指定推理强度)", r.Effort)
+			return ResolvedReasoning{}, fmt.Errorf("loom: Reasoning.Mode=disabled contradicts Effort=%q; a disabled call must not select an effort", r.Effort)
 		}
 		switch caps.Reasoning {
 		case ReasoningSupportNone:
-			// 模型本无推理,不发参数
+			// the model has no reasoning, so send no parameters
 			return ResolvedReasoning{Send: ReasoningSendOmit}, nil
 		case ReasoningSupportAlwaysOn:
-			return ResolvedReasoning{}, fmt.Errorf("loom: 该模型推理不可关闭(reasoning_support=always_on),不能要求 disabled")
+			return ResolvedReasoning{}, fmt.Errorf("loom: this model cannot turn reasoning off (reasoning_support=always_on)")
 		case ReasoningSupportToggleable, ReasoningSupportToggleableDefaultOn,
 			ReasoningSupportToggleableDefaultOff,
 			"":
 			return ResolvedReasoning{Send: ReasoningSendDisabled}, nil
 		default:
-			return ResolvedReasoning{}, fmt.Errorf("loom: 未知 reasoning_support %q", caps.Reasoning)
+			return ResolvedReasoning{}, fmt.Errorf("loom: unknown reasoning_support %q", caps.Reasoning)
 		}
 
 	default:
-		// 不可达:Mode 已在开头校验
-		return ResolvedReasoning{}, fmt.Errorf("loom: 未知 Reasoning.Mode %q", r.Mode)
+		// unreachable: Mode was validated at the top
+		return ResolvedReasoning{}, fmt.Errorf("loom: unknown Reasoning.Mode %q", r.Mode)
 	}
 }
 
-// StructuredOutput 是一次调用的结构化输出约束。
+// StructuredOutput is the structured-output constraint of one call.
 //
-// 没有 Strict 字段是有意的:strict("供应商硬保证输出合规")永远是调用方想要的,
-// 不存在"希望输出可以违反 schema"的场景,所以 provider 在 json_schema 模式下
-// 固定发 strict=true,不做成开关。2026-06 实测 deepseek/ark/openrouter 对
-// strict 参数都静默接受(无校验管线、无行为差异),不会因此报错;将来接入
-// OpenAI 式实现 strict 的供应商时,不满足 strict 子集规则的 schema(可选字段、
-// 缺 additionalProperties:false)会在请求时 400(Permanent 不重试),改 schema 即可。
+// The absence of a Strict field is deliberate. Strict, a provider's hard guarantee
+// that the output conforms, is always what the caller wants; there is no case for
+// output that may violate the schema. A provider therefore sends strict=true under
+// json_schema and does not make it a switch. As measured in 2026-06, deepseek, ark,
+// and openrouter all accept the parameter silently, with no validation pipeline and
+// no behavioural difference, so it cannot fail a request. When a provider that
+// implements strict the OpenAI way is added, a schema outside the strict subset —
+// optional fields, a missing additionalProperties:false — will draw a 400 at request
+// time, which is Permanent and not retried; fix the schema.
 type StructuredOutput struct {
 	Mode        StructuredOutputMode
 	Name        string
@@ -362,101 +395,107 @@ type StructuredOutput struct {
 	Schema      *Schema
 }
 
-// ChatRequest 一次 LLM 调用的参数。
-// 必填:Messages。其它字段为零值时使用 provider 默认。
+// ChatRequest holds the parameters of one LLM call. Messages is required; a zero
+// value in any other field means the provider default.
 type ChatRequest struct {
 	Messages []Message
 
-	// Tools 本次调用允许 LLM 使用的工具列表;nil 或空 = 不暴露任何工具。
-	// 工具实现侧不在此字段内 — 这里只传 ToolInfo 元数据给 LLM。
+	// Tools lists the tools this call may use; nil or empty exposes none. Tool
+	// implementations are not part of it: only ToolInfo metadata reaches the model.
 	Tools []*ToolInfo
 
-	// ToolChoice 工具调用策略;nil = provider 默认(有 Tools 时等价于 Auto)。
+	// ToolChoice is the tool-selection policy; nil means the provider default, which
+	// is Auto when Tools are present.
 	ToolChoice *ToolChoice
 
 	Temperature *float64
 	TopP        *float64
 	MaxTokens   *int
 
-	// Stop 自定义停止序列。
-	// 长度 1 时翻译成 provider 的单 stop;>1 时翻译成 stop 数组。
+	// Stop holds custom stop sequences. One entry becomes the provider's single
+	// stop; more than one becomes the stop array.
 	Stop []string
 
 	Reasoning      Reasoning
 	ResponseFormat ResponseFormat
 
-	// StructuredOutput 优先于 ResponseFormat。支持 json_schema 的 provider 会把
-	// Schema 原样传给模型;仅支持 json_object 的 provider 会退化成 JSON object。
+	// StructuredOutput takes precedence over ResponseFormat. A provider that supports
+	// json_schema passes the Schema through unchanged; one that only supports
+	// json_object falls back to a JSON object.
 	StructuredOutput *StructuredOutput
 }
 
-// ChatResponse 同步调用的完整结果。
+// ChatResponse is the complete result of a synchronous call.
 type ChatResponse struct {
 	Content          string
 	ReasoningContent string
 
-	// ToolCalls LLM 本轮发起的工具调用(可能为空)。
-	// agent 拿到后用 Tool.Invoke 执行,把结果作为 role=tool 消息塞回历史进入下一轮。
+	// ToolCalls holds the calls this round requested, possibly none. The agent runs
+	// them with Tool.Invoke and appends the results to the history as role=tool
+	// messages for the next round.
 	ToolCalls []ToolCall
 
 	FinishReason FinishReason
 	Usage        Usage
 
-	// Model provider 实际使用的 model id(审计 / observability;
-	// 可能与请求时声明的 model 不同,如 provider 做了别名解析)。
+	// Model is the model id the provider actually used, for auditing and
+	// observability. It may differ from the one requested when the provider resolves
+	// an alias.
 	Model string
 }
 
-// Chunk 流式调用的一个增量片段。
-// 任一 *Delta 字段可能为空字符串(本帧没有该通道的内容);
-// FinishReason / Usage 通常仅最后一帧填充。
+// Chunk is one increment of a streaming call. Any *Delta field may be an empty
+// string, meaning this frame carried nothing for that channel. FinishReason and
+// Usage are usually filled in the last frame only.
 type Chunk struct {
 	ContentDelta          string
 	ReasoningContentDelta string
 
-	// ToolCallDeltas 流式工具调用增量;按 Index 累加拼成完整 ToolCall。
-	// 调用方负责按 Index 维护累积态(或用 loom 提供的拼装 helper,待后续添加)。
+	// ToolCallDeltas are the streaming increments of tool calls, accumulated by Index
+	// into complete ToolCalls. The caller keeps that accumulation.
 	ToolCallDeltas []ToolCallDelta
 
-	FinishReason FinishReason // 仅最后一帧填,中间帧为 ""
-	Usage        *Usage       // 仅有 Usage 信息的帧(通常最后一帧)填,否则 nil
+	FinishReason FinishReason // set on the last frame; "" in between
+	Usage        *Usage       // set on frames carrying usage, usually the last; nil otherwise
 	Model        string
 }
 
-// Stream 流式调用的句柄。
-// 调用方典型用法:
+// Stream is the handle of a streaming call. A typical caller:
+
+// s, err := model.Stream(ctx, req)
+// if err != nil { ... }
+// defer s.Close()
 //
-//	s, err := model.Stream(ctx, req)
-//	if err != nil { ... }
-//	defer s.Close()
 //	for {
 //	    ch, err := s.Recv()
 //	    if errors.Is(err, io.EOF) { break }
 //	    if err != nil { return err }
-//	    if ch == nil { continue } // provider 偶尔发空帧,跳过
-//	    // 处理 ch
+//	    if ch == nil { continue } // providers occasionally send an empty frame
+//	    // handle ch
 //	}
 type Stream interface {
-	// Recv 拿下一个 chunk。流自然结束时返回 io.EOF。
-	// 可能返回 (nil, nil) 表示一个无信息的空帧(调用方应 continue)。
+	// Recv returns the next chunk, or io.EOF once the stream ends naturally. It may
+	// return (nil, nil) for an uninformative empty frame, which the caller skips.
 	Recv() (*Chunk, error)
-	// Close 释放底层连接,幂等。
+	// Close releases the underlying connection. It is idempotent.
 	Close() error
 }
 
-// ChatModel 一个具体模型实例(provider × model 组合)。
-// 实现见 providers/* 子包。
+// ChatModel is one concrete model instance: a provider and a model. See the
+// providers/* subpackages for implementations.
 type ChatModel interface {
-	// Name 返回模型可读标识,形如 "deepseek/deepseek-v4-flash"。
-	// 用于 log / observability,不参与请求路由。
+	// Name returns a readable model identifier such as
+	// "deepseek/deepseek-v4-flash". It is for logging and observability and takes no
+	// part in request routing.
 	Name() string
 
-	// Capabilities 返回模型初始化时声明的能力,供调用侧决定是否启用结构化输出等特性。
+	// Capabilities returns what the model declared at initialization, which the
+	// caller uses to decide whether to ask for structured output and the like.
 	Capabilities() ModelCapabilities
 
-	// Chat 同步调用,阻塞直到完整结果返回。
+	// Chat is the synchronous call; it blocks until the complete result arrives.
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 
-	// Stream 流式调用。调用方必须 Close 返回的 Stream。
+	// Stream is the streaming call. The caller must Close the Stream it returns.
 	Stream(ctx context.Context, req ChatRequest) (Stream, error)
 }

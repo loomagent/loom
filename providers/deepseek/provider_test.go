@@ -33,8 +33,9 @@ func TestClassifierTreats503AsTransientAndReadsRetryAfter(t *testing.T) {
 	}
 }
 
-// TestBuildRequestReasoningModeRequired 必传契约的 provider 级兜底:
-// 调用方忘传 Reasoning.Mode 时,请求在构造阶段就报错,绝不发出去。
+// TestBuildRequestReasoningModeRequired is the provider-level backstop for the
+// required-Mode contract: a caller that forgets Reasoning.Mode fails while the
+// request is being built, and nothing is sent.
 func TestBuildRequestReasoningModeRequired(t *testing.T) {
 	m, err := New(Config{APIKey: "test-key"})
 	if err != nil {
@@ -43,13 +44,13 @@ func TestBuildRequestReasoningModeRequired(t *testing.T) {
 
 	_, err = m.buildRequest(loom.ChatRequest{
 		Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
-		// 故意不传 Reasoning
+		// Reasoning is deliberately omitted
 	})
 	if err == nil {
-		t.Fatal("期望 Reasoning.Mode 未传报错,实际成功")
+		t.Fatal("a missing Reasoning.Mode must fail")
 	}
-	if !strings.Contains(err.Error(), "必传") {
-		t.Fatalf("错误信息 %q 不含 \"必传\"", err.Error())
+	if !strings.Contains(err.Error(), "is required") {
+		t.Fatalf("error %q does not say the mode is required", err.Error())
 	}
 }
 
