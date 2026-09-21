@@ -65,7 +65,8 @@ func TestBuildRequestReasoningModeRequired(t *testing.T) {
 	}
 }
 
-// TestBuildRequestReasoningModeExplicit 显式传 enabled/disabled 映射到请求级 Thinking 字段。
+// TestBuildRequestReasoningModeExplicit checks that an explicit enabled or disabled maps
+// onto the request-level Thinking field.
 func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 	m, err := New(Config{APIKey: "test-key", ModelName: "ep-test"})
 	if err != nil {
@@ -88,7 +89,7 @@ func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 			t.Fatalf("mode=%s buildRequest: %v", tt.mode, err)
 		}
 		if req.Thinking == nil {
-			t.Fatalf("mode=%s 期望显式发送 Thinking 字段,实际为 nil", tt.mode)
+			t.Fatalf("mode=%s expected an explicit Thinking field, got nil", tt.mode)
 		}
 		if req.Thinking.Type != tt.want {
 			t.Fatalf("mode=%s Thinking.Type = %q, want %q", tt.mode, req.Thinking.Type, tt.want)

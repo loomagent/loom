@@ -54,8 +54,8 @@ func TestBuildRequestReasoningModeRequired(t *testing.T) {
 	}
 }
 
-// TestBuildRequestReasoningModeExplicit 显式传 enabled/disabled 时,请求体带上
-// DeepSeek 专有的 thinking 对象(通过 SDK 的 extra fields 注入)。
+// TestBuildRequestReasoningModeExplicit checks that an explicit enabled or disabled puts
+// DeepSeek's own thinking object in the request, injected through the SDK's extra fields.
 func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 	m, err := New(Config{APIKey: "test-key"})
 	if err != nil {
@@ -83,7 +83,7 @@ func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 			t.Fatalf("mode=%s unmarshal: %v", mode, err)
 		}
 		if body.Thinking == nil {
-			t.Fatalf("mode=%s 期望显式发送 thinking 字段,实际缺失: %s", mode, data)
+			t.Fatalf("mode=%s expected an explicit thinking field, it is missing: %s", mode, data)
 		}
 		if body.Thinking.Type != string(mode) {
 			t.Fatalf("mode=%s thinking.type = %q", mode, body.Thinking.Type)

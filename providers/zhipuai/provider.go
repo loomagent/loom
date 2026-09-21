@@ -20,27 +20,27 @@ import (
 	"github.com/loomagent/loom/providers/internal/openaicompat"
 )
 
-// DefaultBaseURL Zhipu AI API 入口。
+// DefaultBaseURL is the Zhipu AI API endpoint.
 const DefaultBaseURL = "https://open.bigmodel.cn/api/paas/v4"
 
-// Config Zhipu AI provider 构造参数。
+// Config holds the Zhipu AI provider's construction parameters.
 type Config struct {
-	// APIKey 必填。
+	// APIKey is required.
 	APIKey string
-	// ModelName 必填,Zhipu AI 模型标识,如 "glm-5.3"。
+	// ModelName is required: the Zhipu AI model identifier, such as "glm-5.3".
 	ModelName string
-	// BaseURL 可空 — 不设时用 DefaultBaseURL。
+	// BaseURL may be empty, in which case DefaultBaseURL is used.
 	BaseURL string
 
-	// Retry 控制 retry 策略;nil 走 loom.DefaultRetryConfig()。
+	// Retry controls the retry policy; nil means loom.DefaultRetryConfig().
 	Retry *loom.RetryConfig
 
-	// Capabilities 模型能力,由调用方或 modelfactory 按实际模型配置填充。
-	// nil = 零值"未声明"(能力校验跳过、纯透传)。
+	// Capabilities is what the caller or modelfactory fills in from the model's real
+	// configuration. nil leaves it undeclared, so capability checks pass requests through.
 	Capabilities *loom.ModelCapabilities
 }
 
-// Model 一个 Zhipu AI 模型实例,实现 loom.ChatModel。
+// Model is one Zhipu AI model instance, implementing loom.ChatModel.
 type Model struct {
 	client       openai.Client
 	name         string
@@ -50,13 +50,13 @@ type Model struct {
 
 var _ loom.ChatModel = (*Model)(nil)
 
-// New 构造 Model。
+// New builds a Model.
 func New(cfg Config) (*Model, error) {
 	if strings.TrimSpace(cfg.APIKey) == "" {
-		return nil, fmt.Errorf("loom/zhipuai: APIKey 不能为空")
+		return nil, fmt.Errorf("loom/zhipuai: APIKey must not be empty")
 	}
 	if strings.TrimSpace(cfg.ModelName) == "" {
-		return nil, fmt.Errorf("loom/zhipuai: ModelName 不能为空")
+		return nil, fmt.Errorf("loom/zhipuai: ModelName must not be empty")
 	}
 
 	baseURL := DefaultBaseURL
@@ -68,8 +68,9 @@ func New(cfg Config) (*Model, error) {
 	if retryCfg == nil {
 		retryCfg = loom.DefaultRetryConfig()
 	}
-	// 能力由调用方或 modelfactory 传入,这里不写死模型默认值。
-	// 裸构造(nil)= 零值"未声明",各能力校验跳过、纯透传。
+	// Capabilities come from the caller or modelfactory; no model default is hardcoded
+	// here. Building the model without them leaves every capability undeclared, so each
+	// check passes requests through.
 	capabilities := loom.ModelCapabilities{}
 	if cfg.Capabilities != nil {
 		capabilities = *cfg.Capabilities
@@ -82,17 +83,17 @@ func New(cfg Config) (*Model, error) {
 	}, nil
 }
 
-// Name 返回 "zhipuai/<model>" 形式标识。
+// Name returns an identifier of the form "zhipuai/<model>".
 func (m *Model) Name() string {
 	return "zhipuai/" + m.name
 }
 
-// Capabilities 返回初始化时声明的模型能力。
+// Capabilities returns the model capabilities declared at initialization.
 func (m *Model) Capabilities() loom.ModelCapabilities {
 	return m.capabilities
 }
 
-// Chat 实现 loom.ChatModel.Chat,自动 retry。
+// Chat implements loom.ChatModel.Chat with automatic retries.
 func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatResponse, error) {
 	orReq, err := m.buildRequest(req)
 	if err != nil {
@@ -103,14 +104,14 @@ func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatRespo
 	})
 }
 
-// chatRaw 单次同步调用(无 retry)。
+// chatRaw is one synchronous call with no retry.
 func (m *Model) chatRaw(ctx context.Context, orReq openai.ChatCompletionNewParams) (*loom.ChatResponse, error) {
 	out, err := m.client.Chat.Completions.New(ctx, orReq)
 	if err != nil {
 		return nil, fmt.Errorf("loom/zhipuai: chat: %w", normalizeError(err))
 	}
 	if len(out.Choices) == 0 {
-		return nil, fmt.Errorf("loom/zhipuai: chat 返回 0 个 choice")
+		return nil, fmt.Errorf("loom/zhipuai: chat returned 0 choices")
 	}
 	choice := out.Choices[0]
 	if err := finishError(choice.FinishReason); err != nil {
@@ -126,7 +127,8 @@ func (m *Model) chatRaw(ctx context.Context, orReq openai.ChatCompletionNewParam
 	}, nil
 }
 
-// Stream 实现 loom.ChatModel.Stream,自动 retry(只 retry 到首帧探活前)。
+// Stream implements loom.ChatModel.Stream with automatic retries, up to the first-frame
+// liveness probe.
 // Zhipu returns usage without OpenAI stream_options. Tool deltas require tool_stream.
 func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, error) {
 	orReq, err := m.buildRequest(req)
@@ -147,7 +149,7 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 	})
 }
 
-// streamAdapter 把 OpenAI SDK ChatCompletion stream 包装成 loom.Stream。
+// streamAdapter wraps the OpenAI SDK's ChatCompletion stream as a loom.Stream.
 type streamAdapter struct {
 	finished bool
 	closed   bool
@@ -180,7 +182,8 @@ func (s *streamAdapter) Recv() (*loom.Chunk, error) {
 		u := openaicompat.Usage(&raw.Usage)
 		chunk.Usage = &u
 	}
-	// usage-only 的末尾帧 choices=[];普通帧取首项 delta。
+	// The trailing usage-only frame has choices=[]; an ordinary frame's first delta is
+	// taken.
 	if len(raw.Choices) > 0 {
 		choice := raw.Choices[0]
 		chunk.ContentDelta = choice.Delta.Content
@@ -206,12 +209,12 @@ func (s *streamAdapter) Close() error {
 	return s.inner.Close()
 }
 
-// buildRequest 把 loom.ChatRequest 翻译成 go-openai 请求结构。
+// buildRequest translates a loom.ChatRequest into the go-openai request structure.
 func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewParams, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
 	messages, err := translateMessages(req.Messages)
 	if err != nil {
-		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: 翻译 messages: %w", err)
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: translate messages: %w", err)
 	}
 	out := openai.ChatCompletionNewParams{
 		Model:    m.name,
@@ -252,7 +255,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 		switch req.StructuredOutput.Mode {
 		case loom.StructuredOutputJSONSchema:
 			if req.StructuredOutput.Schema == nil {
-				return out, fmt.Errorf("loom/zhipuai: json_schema structured output 缺少 schema")
+				return out, fmt.Errorf("loom/zhipuai: json_schema structured output has no schema")
 			}
 			out.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
 				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
@@ -265,12 +268,13 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 		case loom.StructuredOutputJSONObject:
 			out.ResponseFormat.OfJSONObject = &shared.ResponseFormatJSONObjectParam{}
 		case loom.StructuredOutputUnsupported:
-			// 不传
+			// send nothing
 		case loom.StructuredOutputNone:
-			// 请求侧不允许 none(能力声明专用),CheckRequestAgainstCapabilities 已前置拦截
-			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: StructuredOutput.Mode 不允许取 %q", req.StructuredOutput.Mode)
+			// The request side forbids none, which is reserved for capability declarations;
+			// CheckRequestAgainstCapabilities already rejects it earlier
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: StructuredOutput.Mode may not be %q", req.StructuredOutput.Mode)
 		default:
-			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: 未知 structured output mode %q", req.StructuredOutput.Mode)
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: unknown structured output mode %q", req.StructuredOutput.Mode)
 		}
 	} else {
 		switch req.ResponseFormat {
@@ -279,7 +283,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 		case loom.ResponseFormatText:
 			out.ResponseFormat.OfText = &shared.ResponseFormatTextParam{}
 		case loom.ResponseFormatDefault:
-			// 不传
+			// send nothing
 		default:
 			return out, fmt.Errorf("unknown response format %q", req.ResponseFormat)
 		}
@@ -287,7 +291,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 
 	tools, err := openaicompat.Tools(req.Tools)
 	if err != nil {
-		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: 翻译 tools: %w", err)
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: translate tools: %w", err)
 	}
 	out.Tools = tools
 	if req.ToolChoice != nil {
@@ -359,7 +363,7 @@ func translateMessages(msgs []loom.Message) ([]openai.ChatCompletionMessageParam
 		case loom.RoleUser:
 			gm = openai.UserMessage(m.Content)
 		default:
-			return nil, fmt.Errorf("消息 %d 使用未知角色 %q", len(out), m.Role)
+			return nil, fmt.Errorf("message %d uses unknown role %q", len(out), m.Role)
 		}
 		out = append(out, gm)
 	}

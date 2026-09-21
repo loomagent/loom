@@ -11,7 +11,7 @@
 //   - reasoning token presence is reported through
 //     usage.completion_tokens_details.reasoning_tokens.
 //
-// 用法:
+// Usage:
 //
 //	model, err := deepseek.New(deepseek.Config{
 //	    APIKey:    os.Getenv("DEEPSEEK_API_KEY"),
@@ -20,7 +20,7 @@
 //	if err != nil { ... }
 //
 //	resp, err := model.Chat(ctx, loom.ChatRequest{
-//	    Messages:  []loom.Message{{Role: loom.RoleUser, Content: "你好"}},
+//	    Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hello"}},
 //	    Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortHigh},
 //	})
 package deepseek
@@ -44,36 +44,39 @@ import (
 	"github.com/loomagent/loom/providers/internal/openaicompat"
 )
 
-// DefaultBaseURL DeepSeek API 入口。
+// DefaultBaseURL is the DeepSeek API endpoint.
 const DefaultBaseURL = "https://api.deepseek.com"
 
-// 默认 model 别名。
+// The default model aliases.
 const (
 	ModelV4Flash = "deepseek-v4-flash"
 	ModelV4Pro   = "deepseek-v4-pro"
 )
 
-// Config DeepSeek provider 构造参数。
+// Config holds the DeepSeek provider's construction parameters.
 type Config struct {
-	// APIKey 必填。
+	// APIKey is required.
 	APIKey string
-	// ModelName 必填,如 ModelV4Flash / ModelV4Pro;空时默认 ModelV4Flash。
+	// ModelName is required, such as ModelV4Flash or ModelV4Pro; empty means
+	// ModelV4Flash.
 	ModelName string
-	// BaseURL 可空 — 不设时用 DefaultBaseURL。
+	// BaseURL may be empty, in which case DefaultBaseURL is used.
 	BaseURL string
 
-	// Retry 控制 retry 策略;nil 走 loom.DefaultRetryConfig()(默认开启)。
-	// 想完全关掉 retry,传 &loom.RetryConfig{MaxRetries: -1}(MaxRetries<0 时
-	// 任意 Transient 都走一次后立即放弃 — 但 RateLimit 还是无限 retry,
-	// 这是 provider 限流的兜底语义,业务不应该关)。
+	// Retry controls the retry policy; nil means loom.DefaultRetryConfig(), which retries
+	// by default. To turn retries off entirely, pass &loom.RetryConfig{MaxRetries: -1}:
+	// a MaxRetries below zero gives up after one attempt at any Transient error. A
+	// RateLimit still retries without end, which is the provider-side throttling
+	// backstop, and product code should not disable it.
 	Retry *loom.RetryConfig
 
-	// Capabilities 模型能力,由调用方或 modelfactory 按实际模型配置填充。
-	// nil = 零值"未声明"(能力校验跳过、纯透传)。
+	// Capabilities is what the caller or modelfactory fills in from the model's real
+	// configuration. nil leaves it undeclared, so capability checks pass requests
+	// through.
 	Capabilities *loom.ModelCapabilities
 }
 
-// Model 一个 DeepSeek 模型实例,实现 loom.ChatModel。
+// Model is one DeepSeek model instance, implementing loom.ChatModel.
 type Model struct {
 	client       openai.Client
 	name         string
@@ -81,13 +84,13 @@ type Model struct {
 	capabilities loom.ModelCapabilities
 }
 
-// 编译期保证接口实现。
+// Compile-time interface check.
 var _ loom.ChatModel = (*Model)(nil)
 
-// New 构造 Model。
+// New builds a Model.
 func New(cfg Config) (*Model, error) {
 	if strings.TrimSpace(cfg.APIKey) == "" {
-		return nil, fmt.Errorf("loom/deepseek: APIKey 不能为空")
+		return nil, fmt.Errorf("loom/deepseek: APIKey must not be empty")
 	}
 
 	baseURL := DefaultBaseURL
@@ -103,8 +106,9 @@ func New(cfg Config) (*Model, error) {
 	if retryCfg == nil {
 		retryCfg = loom.DefaultRetryConfig()
 	}
-	// 能力由调用方或 modelfactory 传入,这里不写死模型默认值。
-	// 裸构造(nil)= 零值"未声明",各能力校验跳过、纯透传。
+	// Capabilities come from the caller or modelfactory; no model default is hardcoded
+	// here. Building the model without them leaves every capability undeclared, so each
+	// check passes requests through.
 	capabilities := loom.ModelCapabilities{}
 	if cfg.Capabilities != nil {
 		capabilities = *cfg.Capabilities
@@ -120,19 +124,19 @@ func New(cfg Config) (*Model, error) {
 	}, nil
 }
 
-// Name 返回 "deepseek/<model>" 形式标识。
+// Name returns an identifier of the form "deepseek/<model>".
 func (m *Model) Name() string {
 	return "deepseek/" + m.name
 }
 
-// Capabilities 返回初始化时声明的模型能力。
+// Capabilities returns the model capabilities declared at initialization.
 func (m *Model) Capabilities() loom.ModelCapabilities {
 	return m.capabilities
 }
 
-// Chat 实现 loom.ChatModel.Chat,自动 retry。
-// retry 策略由 m.retryCfg 控制,见 Config.Retry。错误分类由本 provider 的
-// classifier{} 提供(状态码 → ErrorClass)。
+// Chat implements loom.ChatModel.Chat with automatic retries. m.retryCfg controls the
+// policy; see Config.Retry. This provider's classifier{} supplies the error
+// classification from status code to ErrorClass.
 func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatResponse, error) {
 	dsReq, err := m.buildRequest(req)
 	if err != nil {
@@ -143,14 +147,15 @@ func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatRespo
 	})
 }
 
-// chatRaw 单次同步 Chat 调用(无 retry,供 retry helper 反复调)。
+// chatRaw is one synchronous Chat call with no retry, which the retry helper calls
+// repeatedly.
 func (m *Model) chatRaw(ctx context.Context, dsReq openai.ChatCompletionNewParams) (*loom.ChatResponse, error) {
 	out, err := m.client.Chat.Completions.New(ctx, dsReq)
 	if err != nil {
 		return nil, fmt.Errorf("loom/deepseek: chat: %w", normalizeDeepSeekError(err))
 	}
 	if len(out.Choices) == 0 {
-		return nil, fmt.Errorf("loom/deepseek: chat 返回 0 个 choice")
+		return nil, fmt.Errorf("loom/deepseek: chat returned 0 choices")
 	}
 	choice := out.Choices[0]
 	return &loom.ChatResponse{
@@ -163,9 +168,10 @@ func (m *Model) chatRaw(ctx context.Context, dsReq openai.ChatCompletionNewParam
 	}, nil
 }
 
-// Stream 实现 loom.ChatModel.Stream,自动 retry(只 retry 到首帧探活前)。
-// 一旦 stream 开始消费(业务方拿到第二帧及之后)就不再 retry。
-// 默认强制开启 stream_options.include_usage,这样末尾帧能拿到 Usage。
+// Stream implements loom.ChatModel.Stream with automatic retries, up to the first-frame
+// liveness probe. Once the consumer has the second frame or later, there are no more
+// retries. stream_options.include_usage is forced on by default, so the last frame
+// carries Usage.
 func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, error) {
 	dsReq, err := m.buildRequest(req)
 	if err != nil {
@@ -196,8 +202,8 @@ func (s *streamAdapter) Recv() (*loom.Chunk, error) {
 		u := translateUsage(&raw.Usage)
 		chunk.Usage = &u
 	}
-	// DeepSeek 末尾会发一帧 choices=[] 的 Usage 帧;
-	// 普通帧 choices 至少 1 项,取首项 delta。
+	// DeepSeek sends a trailing usage frame with choices=[]; an ordinary frame has at
+	// least one choice, whose delta is taken.
 	if len(raw.Choices) > 0 {
 		choice := raw.Choices[0]
 		chunk.ContentDelta = choice.Delta.Content
@@ -233,7 +239,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 	}
 	switch len(req.Stop) {
 	case 0:
-		// 不传
+		// send nothing
 	case 1:
 		out.Stop.OfString = param.NewOpt(req.Stop[0])
 	default:
@@ -246,17 +252,18 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: %w", err)
 	}
-	// thinking 是 DeepSeek 专有字段,SDK 没有类型化的位置,按需注入。
-	// ReasoningSendOmit 时不注入,等价于不发该字段。
+	// thinking is a DeepSeek-specific field with no typed place in the SDK, so it is
+	// injected as needed. ReasoningSendOmit injects nothing, which is the same as leaving
+	// the field out.
 	switch resolved.Send {
 	case loom.ReasoningSendEnabled:
 		out.SetExtraFields(map[string]any{"thinking": map[string]any{"type": "enabled"}})
 	case loom.ReasoningSendDisabled:
 		out.SetExtraFields(map[string]any{"thinking": map[string]any{"type": "disabled"}})
 	case loom.ReasoningSendOmit:
-		// 不发 thinking 字段
+		// send no thinking field
 	default:
-		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: 未知 reasoning send %q", resolved.Send)
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: unknown reasoning send %q", resolved.Send)
 	}
 	out.ReasoningEffort = shared.ReasoningEffort(resolved.Effort)
 
@@ -266,24 +273,26 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 			out.ResponseFormat.OfJSONObject = &shared.ResponseFormatJSONObjectParam{}
 		case loom.StructuredOutputJSONSchema:
 			if req.StructuredOutput.Schema == nil {
-				return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: json_schema structured output 缺少 schema")
+				return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: json_schema structured output has no schema")
 			}
 			out.ResponseFormat.OfJSONSchema = &shared.ResponseFormatJSONSchemaParam{
 				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
 					Name:        req.StructuredOutput.Name,
 					Description: param.NewOpt(req.StructuredOutput.Description),
 					Schema:      req.StructuredOutput.Schema,
-					// strict 固定 true:供应商硬保证输出合规永远是调用方想要的,见 loom.StructuredOutput 注释
+					// strict is always true: a provider's hard guarantee that the output conforms
+					// is always what the caller wants; see the loom.StructuredOutput comment
 					Strict: param.NewOpt(true),
 				},
 			}
 		case loom.StructuredOutputUnsupported:
-			// 不传
+			// send nothing
 		case loom.StructuredOutputNone:
-			// 请求侧不允许 none(能力声明专用),CheckRequestAgainstCapabilities 已前置拦截
-			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: StructuredOutput.Mode 不允许取 %q", req.StructuredOutput.Mode)
+			// The request side forbids none, which is reserved for capability declarations;
+			// CheckRequestAgainstCapabilities already rejects it earlier
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: StructuredOutput.Mode may not be %q", req.StructuredOutput.Mode)
 		default:
-			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: 未知 structured output mode %q", req.StructuredOutput.Mode)
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: unknown structured output mode %q", req.StructuredOutput.Mode)
 		}
 	} else {
 		switch req.ResponseFormat {
@@ -292,14 +301,14 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 		case loom.ResponseFormatText:
 			out.ResponseFormat.OfText = &shared.ResponseFormatTextParam{}
 		case loom.ResponseFormatDefault:
-			// 不传
+			// send nothing
 		default:
-			// 未知格式不传
+			// An unknown format sends nothing
 		}
 	}
 	tools, err := openaicompat.Tools(req.Tools)
 	if err != nil {
-		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: 翻译 tools: %w", err)
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: translate tools: %w", err)
 	}
 	out.Tools = tools
 	if req.ToolChoice != nil {
@@ -308,7 +317,7 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewPa
 	return out, nil
 }
 
-// normalizeDeepSeekError 把 DeepSeek 的业务错误映射成 loom 的哨兵错误。
+// normalizeDeepSeekError maps DeepSeek's own business errors onto loom's sentinels.
 func normalizeDeepSeekError(err error) error {
 	if err == nil {
 		return nil
@@ -330,8 +339,9 @@ func isDeepSeekContentExistsRisk(err error) bool {
 	return strings.EqualFold(strings.TrimSpace(apiErr.Message), "Content Exists Risk")
 }
 
-// extractReasoning 提取 DeepSeek 的推理输出。DeepSeek 用 message 级的
-// "reasoning_content" 字段,SDK 没有类型化,放在 ExtraFields。
+// extractReasoning reads DeepSeek's reasoning output. DeepSeek uses a message-level
+// "reasoning_content" field with no typed place in the SDK, so it arrives in
+// ExtraFields.
 func extractReasoning(extra map[string]respjson.Field) string {
 	field, ok := extra["reasoning_content"]
 	if !ok {
@@ -339,7 +349,7 @@ func extractReasoning(extra map[string]respjson.Field) string {
 	}
 	var s string
 	if err := jsonv2.Unmarshal([]byte(field.Raw()), &s); err != nil {
-		// 不是 string(如 null 或对象),忽略
+		// Not a string, a null or an object for instance; ignore it
 		return ""
 	}
 	return s
