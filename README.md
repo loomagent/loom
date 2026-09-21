@@ -141,7 +141,13 @@ reads back as its zero value, and `Present` distinguishes "omitted" from
 "present but empty". Integers are unsigned (`Uint`), so counting arguments
 cannot be negative and the schema rejects negatives too. `Date`, `Time`,
 `DateTime`, and `UUID` project both a `format` and a matching shape `pattern`,
-so providers that ignore `format` still constrain the value. Unknown arguments
+so providers that ignore `format` still constrain the value. `NotBlank` is the
+standard schema idiom for "not empty or whitespace", so it reaches the model in the
+schema rather than only in a failure message. It constrains content, not presence:
+an omitted optional argument still passes, and `Required` stays the way to ask for
+presence. When an argument would need more than one `pattern` — a format's shape and
+an explicit pattern, or a format and `NotBlank` — the extra ones become `allOf`
+branches, so both are enforced instead of one replacing the other. Unknown arguments
 are rejected by default.
 
 Field checks take a `FieldValidator[T]`; whole-call checks are declared with

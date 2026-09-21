@@ -491,3 +491,81 @@ func assertPanics(t *testing.T, fn func()) {
 	}()
 	fn()
 }
+
+// NotBlank is the standard schema idiom rather than a private rule, so the model sees it
+// in the schema it receives, before it calls anything.
+func TestNotBlankIsProjectedIntoTheSchema(t *testing.T) {
+	note := String("note").NotBlank().Desc("Note.")
+	contract := MustArgsContract("t", note)
+	if got := contract.Schema().Properties["note"].Pattern; got != notBlankPattern {
+		t.Fatalf("schema pattern = %q", got)
+	}
+	// A pattern says nothing about presence, so an omitted optional argument still passes.
+	if _, err := contract.Decode(`{}`); err != nil {
+		t.Fatalf("an omitted optional argument must pass: %v", err)
+	}
+	for _, blank := range []string{`{"note":""}`, `{"note":"   "}`, `{"note":"\t\n"}`} {
+		if _, err := contract.Decode(blank); err == nil {
+			t.Fatalf("%s must be rejected", blank)
+		}
+	}
+	if _, err := contract.Decode(`{"note":"x"}`); err != nil {
+		t.Fatalf("a non-blank value must pass: %v", err)
+	}
+}
+
+// Required is presence and NotBlank is content. Only together do they say "the model must
+// send something meaningful", so each one alone is still meaningful.
+func TestRequiredAndNotBlankCoverDifferentThings(t *testing.T) {
+	contract := MustArgsContract("t", String("note").Required().NotBlank().Desc("Note."))
+	if _, err := contract.Decode(`{}`); err == nil {
+		t.Fatal("Required must reject an omitted argument, blank or not")
+	}
+	if _, err := contract.Decode(`{"note":"  "}`); err == nil {
+		t.Fatal("NotBlank must reject a blank value even though it is present")
+	}
+	if _, err := contract.Decode(`{"note":"x"}`); err != nil {
+		t.Fatalf("a present non-blank value must pass: %v", err)
+	}
+}
+
+// Two pattern sources used to lose one silently: an explicit pattern replaced the shape
+// the format projected, so a value that was not a date passed the contract.
+func TestFormatAndExplicitPatternBothApply(t *testing.T) {
+	contract := MustArgsContract("t", Date("day").Pattern(`^x`).Desc("Day."))
+	property := contract.Schema().Properties["day"]
+	if property.Pattern != formatPatterns["date"] || len(property.AllOf) != 1 || property.AllOf[0].Pattern != "^x" {
+		t.Fatalf("schema = %+v", property)
+	}
+	if _, err := contract.Decode(`{"day":"xyz"}`); err == nil {
+		t.Fatal("a value that is not a date must fail even though it matches the explicit pattern")
+	}
+	if _, err := contract.Decode(`{"day":"2026-08-17"}`); err == nil {
+		t.Fatal("a date that misses the explicit pattern must fail")
+	}
+}
+
+// A format and NotBlank are two constraints, so the value must satisfy both, and both
+// appear in the summary the model reads when it gets the value wrong.
+func TestFormatAndNotBlankBothApply(t *testing.T) {
+	contract := MustArgsContract("t", Date("day").NotBlank().Desc("Day."))
+	property := contract.Schema().Properties["day"]
+	if property.Pattern != formatPatterns["date"] || len(property.AllOf) != 1 || property.AllOf[0].Pattern != notBlankPattern {
+		t.Fatalf("schema = %+v", property)
+	}
+	if _, err := contract.Decode(`{"day":"   "}`); err == nil {
+		t.Fatal("a blank value must fail")
+	}
+	if _, err := contract.Decode(`{"day":"2026-08-17"}`); err != nil {
+		t.Fatalf("a date must pass: %v", err)
+	}
+
+	_, err := contract.Decode(`{"day":"17/08/2026"}`)
+	var argumentError *ToolArgumentError
+	if !errors.As(err, &argumentError) {
+		t.Fatalf("error type = %T", err)
+	}
+	if !strings.Contains(argumentError.ExpectedArguments, "format date, non-blank") {
+		t.Fatalf("summary = %s", argumentError.ExpectedArguments)
+	}
+}

@@ -4,11 +4,11 @@ These files are copied verbatim from the [JSON Schema Test Suite], the subset of
 `tests/draft2020-12` for the keywords Loom implements:
 
 ```
-additionalProperties  const          enum             exclusiveMaximum
-exclusiveMinimum      items          maximum          maxItems
-maxLength             minimum        minItems         minLength
-pattern               properties     required         type
-uniqueItems
+additionalProperties  allOf          const            enum
+exclusiveMaximum      exclusiveMinimum items           maximum
+maxItems              maxLength      minimum          minItems
+minLength             pattern        properties       required
+type                  uniqueItems
 ```
 
 Source commit: `ab079cc2bace029fdbb483be28a6ade526bcfbc2`.

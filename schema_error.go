@@ -226,7 +226,7 @@ func validationIssue(field string, violation toolcontract.Violation) ToolArgumen
 	case "unique_items_mismatch":
 		message = label + " must contain unique items"
 	case "pattern_mismatch":
-		message = patternValidationMessage(label, fmt.Sprint(params["pattern"]), fmt.Sprint(params["format"]))
+		message = patternValidationMessage(label, fmt.Sprint(params["pattern"]))
 	case "string_too_short":
 		message = label + " must contain at least " + fmt.Sprint(params["min_length"]) + " characters"
 	case "string_too_long":
@@ -245,13 +245,12 @@ func validationIssue(field string, violation toolcontract.Violation) ToolArgumen
 	return ToolArgumentIssue{Field: field, Rule: rule, Code: code, Message: message}
 }
 
-func patternValidationMessage(label, pattern, format string) string {
-	if isFormatProjection(&Schema{Format: format, Pattern: pattern}) {
-		if prose, ok := formatProse[format]; ok {
-			return label + " must be " + prose
-		}
-	}
+func patternValidationMessage(label, pattern string) string {
 	switch {
+	case formatOfProjectedPattern(pattern) != "":
+		return label + " must be " + formatProse[formatOfProjectedPattern(pattern)]
+	case pattern == notBlankPattern:
+		return label + " must not be blank"
 	case strings.HasPrefix(pattern, "^") && isLiteralPattern(strings.TrimPrefix(pattern, "^")):
 		return label + " must start with " + strconv.Quote(strings.TrimPrefix(pattern, "^"))
 	case strings.HasSuffix(pattern, "$") && isLiteralPattern(strings.TrimSuffix(pattern, "$")):
@@ -271,6 +270,35 @@ func isFormatProjection(schema *Schema) bool {
 		return false
 	}
 	return formatPatterns[schema.Format] == schema.Pattern
+}
+
+// formatOfProjectedPattern names the format a pattern is the shape check for. A violation
+// carries only the pattern it broke, so this is what lets the message describe the shape
+// the author asked for instead of the regular expression the contract derived. An author
+// who writes the same pattern by hand gets the same answer.
+func formatOfProjectedPattern(pattern string) string {
+	for format, projected := range formatPatterns {
+		if projected == pattern {
+			return format
+		}
+	}
+	return ""
+}
+
+// schemaPatterns lists the patterns a model has to satisfy, in the order the builder
+// declared them: the property's own pattern, then one per allOf branch. A format's shape
+// check is left out because "format date" already names it.
+func schemaPatterns(schema *Schema) []string {
+	var patterns []string
+	if schema.Pattern != "" && !isFormatProjection(schema) {
+		patterns = append(patterns, schema.Pattern)
+	}
+	for _, branch := range schema.AllOf {
+		if branch.Pattern != "" {
+			patterns = append(patterns, branch.Pattern)
+		}
+	}
+	return patterns
 }
 
 // formatProse describes a format the way a model can act on it. It covers the formats
@@ -408,11 +436,18 @@ func appendSchemaConstraintParts(parts []string, schema *Schema) []string {
 	if schema.MaxLength != nil {
 		parts = append(parts, "max length "+strconv.Itoa(*schema.MaxLength))
 	}
-	if schema.Pattern != "" && !isFormatProjection(schema) {
-		if literal, kind, ok := literalPatternConstraint(schema.Pattern); ok {
-			parts = append(parts, kind+" "+strconv.Quote(literal))
-		} else {
-			parts = append(parts, "pattern "+strconv.Quote(schema.Pattern))
+	if len(schemaPatterns(schema)) > 0 {
+		for _, pattern := range schemaPatterns(schema) {
+			switch {
+			case pattern == notBlankPattern:
+				parts = append(parts, "non-blank")
+			default:
+				if literal, kind, ok := literalPatternConstraint(pattern); ok {
+					parts = append(parts, kind+" "+strconv.Quote(literal))
+				} else {
+					parts = append(parts, "pattern "+strconv.Quote(pattern))
+				}
+			}
 		}
 	}
 	if schema.MinItems != nil {

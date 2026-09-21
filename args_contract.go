@@ -278,12 +278,35 @@ func (s *argSpec) schema() *Schema {
 		property.MaxLength = s.maxLength
 		property.Enum = s.enum
 		property.Format = s.format
-		switch {
-		case s.pattern != "":
-			property.Pattern = s.pattern
+		// A format is only worth advertising while something enforces it, so the shape
+		// check it projects stays on the property itself.
+		if pattern, ok := formatPatterns[s.format]; ok {
+			property.Pattern = pattern
+		}
+		// Every other pattern source becomes its own allOf branch. A property carries one
+		// pattern, so a value that is both a date and non-blank, or both a date and a
+		// shape the author pinned down, needs two branches rather than one keyword that
+		// quietly replaces the other.
+		var additional []string
+		if s.pattern != "" && s.pattern != property.Pattern {
+			additional = append(additional, s.pattern)
+		}
+		if s.notBlank {
+			additional = append(additional, notBlankPattern)
+		}
+		switch len(additional) {
+		case 0:
+			// The property's own pattern already says everything the author declared.
+		case 1:
+			if property.Pattern == "" {
+				property.Pattern = additional[0]
+				break
+			}
+			property.AllOf = []*Schema{{Pattern: additional[0]}}
 		default:
-			if pattern, ok := formatPatterns[s.format]; ok {
-				property.Pattern = pattern
+			property.AllOf = make([]*Schema, 0, len(additional))
+			for _, pattern := range additional {
+				property.AllOf = append(property.AllOf, &Schema{Pattern: pattern})
 			}
 		}
 	case argKindUint:
