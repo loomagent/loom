@@ -27,13 +27,15 @@ func ValidateToolName(name string) error {
 	return nil
 }
 
-// ToolInfo 一个工具的元数据,供 LLM 决定何时 / 如何调用。
+// ToolInfo is a tool's metadata, which the model uses to decide when and how to
+// call it.
 //
-// Name 需要在工具集合内唯一;Description 应清楚说明"何时用 / 为什么用",
-// 必要时给少样本示例 — 这是影响 LLM 调用准确率的关键。
+// Name must be unique within a tool set. Description should say clearly when and why
+// to use the tool, with a worked example where one helps; it is the single biggest
+// influence on how accurately a model calls the tool.
 //
-// Parameters 是 JSON Schema (draft 2020-12 或 draft-07)。
-// nil 表示无入参;空 *Schema{} 等价于"接受任意 JSON"。
+// Parameters is a JSON Schema, draft 2020-12 or draft-07. nil means no arguments; an
+// empty *Schema{} accepts any JSON.
 type ToolInfo struct {
 	Name            string
 	Description     string
@@ -41,30 +43,35 @@ type ToolInfo struct {
 	RequiresNetwork bool
 }
 
-// Tool 一个可调用工具。
+// Tool is one callable tool.
 //
-// 典型 react 循环用法:
-//  1. 把工具元数据(Tool.Info)通过 ChatRequest.Tools 暴露给 LLM
-//  2. LLM 返回 ChatResponse.ToolCalls (流式则是 Chunk.ToolCallDeltas 拼装而成)
-//  3. 业务方 ToolRegistry.Lookup(call.Name) 找到 Tool,调 Tool.Invoke(call.Arguments)
-//  4. 把返回的 JSON 字符串包成 Message{Role: RoleTool, ToolCallID: call.ID, Content: result}
-//     拼回历史,进入下一轮
+// A typical react loop:
+//  1. expose the tool metadata, Tool.Info, to the model through ChatRequest.Tools
+//  2. the model returns ChatResponse.ToolCalls, or Chunk.ToolCallDeltas to assemble
+//  3. find the Tool with ToolRegistry.Lookup(call.Name) and run
+//     Tool.Invoke(call.Arguments)
+//  4. wrap the returned JSON string in
+//     Message{Role: RoleTool, ToolCallID: call.ID, Content: result} and append it to
+//     the history for the next round
 //
-// loom 不内置"自动跑这个循环"的高层节点;agent 业务方手写循环,框架只提供原子接口。
+// Loom deliberately ships no high-level node that runs this loop. The agent writes
+// the loop; the framework supplies the atomic pieces.
 type Tool interface {
-	// Info 返回工具元数据。
-	// 同一 Tool 实例多次调用应返回逻辑等价的结果(允许 ctx 影响,但不宜频繁变化)。
+	// Info returns the tool's metadata. Repeated calls on one Tool should return
+	// logically equivalent results: ctx may affect them, but they should not change
+	// often.
 	Info(ctx context.Context) (*ToolInfo, error)
 
-	// Invoke 执行工具。
+	// Invoke runs the tool.
 	//
-	//   argumentsJSON: LLM 给出的工具入参,JSON 字符串(可能不合法 — 由 Tool 自行 validate)。
-	//   返回值: 喂回给 LLM 的 tool result,JSON 字符串(任意结构,LLM 会按文本理解)。
+	// argumentsJSON is the argument JSON the model produced. It may be invalid, and
+	// the tool validates it. The return value is the tool result fed back to the
+	// model as a JSON string of any structure, which the model reads as text.
 	//
-	// 错误处理约定:
-	//   - 工具内部失败时返回 err,由调用方决定是否把 err.Error() 当作 result 反喂 LLM
-	//     (让 LLM 自行决定换工具 / 重试 / 放弃)。
-	//   - Invoke 自身不做"把错误转 result"的兜底 — 那是 agent 层的职责。
+	// Errors: a tool that fails returns err, and the caller decides whether to feed
+	// err.Error() back to the model as the result, letting it choose another tool,
+	// retry, or give up. Invoke itself does not turn an error into a result; that is
+	// the agent layer's job.
 	Invoke(ctx context.Context, argumentsJSON string) (string, error)
 }
 
@@ -111,61 +118,65 @@ func (t *funcTool) Invoke(ctx context.Context, argumentsJSON string) (string, er
 	return t.fn(ctx, argumentsJSON)
 }
 
-// ToolCall LLM 发起的一次工具调用(非流式响应或流式拼装完成后)。
+// ToolCall is one tool call the model requested, from a non-streaming response or
+// assembled from a stream.
 type ToolCall struct {
-	// ID provider 分配的调用标识,用于配对 tool result(作为 role=tool 消息的 ToolCallID)。
+	// ID is the call identity the provider assigned, which pairs the tool result: it
+	// becomes the ToolCallID of the role=tool message.
 	ID string
-	// Name 被调用的工具名。
+	// Name is the tool being called.
 	Name string
-	// Arguments 工具入参,JSON 字符串(LLM 输出,不保证合法)。
+	// Arguments is the argument JSON the model produced, which is not guaranteed to
+	// be valid.
 	Arguments string
 }
 
-// ToolCallDelta 流式工具调用增量。
+// ToolCallDelta is one increment of a streamed tool call.
 //
-// 单个 ToolCall 可能跨多个 Chunk 拼出:
-//   - 首帧通常带 Index/ID/Name + 第一段 Arguments
-//   - 后续帧只带 Index + Arguments 增量(append 到累积值)
-//
-// 多个并发 ToolCall 通过 Index 区分(同 Index 的多帧增量同属一个 ToolCall)。
+// A single ToolCall may arrive across several chunks. The first frame usually
+// carries Index, ID, and Name plus the first piece of Arguments; later frames carry
+// only Index and an Arguments increment to append. Index tells concurrent tool calls
+// apart: increments sharing an Index belong to one ToolCall.
 type ToolCallDelta struct {
 	Index     int
-	ID        string // 仅首帧填,后续帧空字符串
-	Name      string // 仅首帧填,后续帧空字符串
-	Arguments string // 本帧的增量片段
+	ID        string // set on the first frame only; later frames are empty
+	Name      string // set on the first frame only; later frames are empty
+	Arguments string // the increment this frame carries
 }
 
-// ToolChoiceMode 工具选择策略。
+// ToolChoiceMode is the tool-selection policy.
 type ToolChoiceMode string
 
 const (
-	// ToolChoiceAuto LLM 自决是否调用工具(等价于 ChatRequest.ToolChoice 为 nil)。
+	// ToolChoiceAuto lets the model decide, equivalent to a nil ChatRequest.ToolChoice.
 	ToolChoiceAuto ToolChoiceMode = "auto"
-	// ToolChoiceNone 强制 LLM 不调用任何工具。
+	// ToolChoiceNone forbids the model from calling any tool.
 	ToolChoiceNone ToolChoiceMode = "none"
-	// ToolChoiceRequired 强制 LLM 至少调用一个工具。
+	// ToolChoiceRequired makes the model call at least one tool.
 	ToolChoiceRequired ToolChoiceMode = "required"
-	// ToolChoiceSpecific 强制调用 ToolChoice.Name 指定的工具。
+	// ToolChoiceSpecific makes the model call the tool named by ToolChoice.Name.
 	ToolChoiceSpecific ToolChoiceMode = "specific"
 )
 
-// ToolChoice 工具选择控制。
-// 通过 ChatRequest.ToolChoice 传入;nil 表示 provider 默认(通常 = Auto)。
+// ToolChoice controls tool selection. It is passed through
+// ChatRequest.ToolChoice; nil means the provider default, usually Auto.
 type ToolChoice struct {
 	Mode ToolChoiceMode
-	// Name 仅 Mode=ToolChoiceSpecific 时使用,指定必须调用的工具名。
+	// Name is used only with Mode=ToolChoiceSpecific, and names the tool that must be
+	// called.
 	Name string
 }
 
-// ToolRegistry 按名字管理一组工具,常作为 ChatRequest.Tools 列表的来源。
-//
-// 同时也方便 agent 在拿到 ChatResponse.ToolCalls 后用 Lookup 找到对应 Tool 执行。
+// ToolRegistry manages a set of tools by name, and is usually where the
+// ChatRequest.Tools list comes from. It also lets the agent find the Tool to run for
+// each entry of ChatResponse.ToolCalls through Lookup.
 type ToolRegistry struct {
 	tools map[string]Tool
 	order []string
 }
 
-// NewToolRegistry 构造注册表。可变参一次性 register;失败 panic(启动期暴露 bug)。
+// NewToolRegistry builds a registry and registers the given tools. It panics on
+// failure, so a configuration mistake surfaces at startup.
 func NewToolRegistry(tools ...Tool) *ToolRegistry {
 	r := &ToolRegistry{tools: map[string]Tool{}}
 	for _, t := range tools {
@@ -176,16 +187,16 @@ func NewToolRegistry(tools ...Tool) *ToolRegistry {
 	return r
 }
 
-// Subset 按名字选子集,返回新的 ToolRegistry(不修改原 registry)。
-// 任一 name 未注册返错(启动期 / 调用前发现配置错误)。
-//
-// 典型用法:executor 内声明全集,handler 按 chat_mode.Tools 选子集。
+// Subset selects tools by name and returns a new ToolRegistry, leaving the original
+// untouched. An unregistered name is an error, so a configuration mistake surfaces
+// at startup or before a call. A typical use declares the full set in the executor
+// and lets the handler pick a subset by chat mode.
 func (r *ToolRegistry) Subset(names []string) (*ToolRegistry, error) {
 	out := NewToolRegistry()
 	for _, name := range names {
 		t, ok := r.Lookup(name)
 		if !ok {
-			return nil, fmt.Errorf("loom: tool %q 不在 registry 中", name)
+			return nil, fmt.Errorf("loom: tool %q is not in the registry", name)
 		}
 		if err := out.Register(t); err != nil {
 			return nil, err
@@ -194,57 +205,57 @@ func (r *ToolRegistry) Subset(names []string) (*ToolRegistry, error) {
 	return out, nil
 }
 
-// Register 注册一个工具;重名报错。
-// 工具的 Name 通过 Info 取(此处会调一次 Info(context.Background()))。
+// Register adds one tool; a duplicate name is an error. The tool's Name comes from
+// Info, which is called once here with context.Background().
 func (r *ToolRegistry) Register(t Tool) error {
 	if t == nil {
-		return fmt.Errorf("loom: tool 不能为 nil")
+		return fmt.Errorf("loom: tool must not be nil")
 	}
 	info, err := t.Info(context.Background())
 	if err != nil {
-		return fmt.Errorf("loom: Tool.Info 失败: %w", err)
+		return fmt.Errorf("loom: Tool.Info failed: %w", err)
 	}
 	if info == nil {
-		return fmt.Errorf("loom: Tool.Info 返回 nil")
+		return fmt.Errorf("loom: Tool.Info returned nil")
 	}
 	if err := ValidateToolName(info.Name); err != nil {
-		return fmt.Errorf("loom: 工具名称 %q 无效: %w", info.Name, err)
+		return fmt.Errorf("loom: invalid tool name %q: %w", info.Name, err)
 	}
 	if r.tools == nil {
 		r.tools = make(map[string]Tool)
 	}
 	if _, exists := r.tools[info.Name]; exists {
-		return fmt.Errorf("loom: 工具 %q 已注册", info.Name)
+		return fmt.Errorf("loom: tool %q is already registered", info.Name)
 	}
 	r.tools[info.Name] = t
 	r.order = append(r.order, info.Name)
 	return nil
 }
 
-// Lookup 查找指定名字的工具。
+// Lookup finds the tool with the given name.
 func (r *ToolRegistry) Lookup(name string) (Tool, bool) {
 	t, ok := r.tools[name]
 	return t, ok
 }
 
-// InfoList 收集所有工具的 ToolInfo,按注册顺序返回。
-// 任一 Tool.Info 出错都中断并返回错误。
+// InfoList collects every tool's ToolInfo in registration order. An error from any
+// Tool.Info stops the walk and is returned.
 func (r *ToolRegistry) InfoList(ctx context.Context) ([]*ToolInfo, error) {
 	out := make([]*ToolInfo, 0, len(r.order))
 	for _, name := range r.order {
 		t := r.tools[name]
 		if t == nil {
-			continue // 不变量上不会发生:order 和 tools 同步维护
+			continue // unreachable: order and tools are maintained together
 		}
 		info, err := t.Info(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("loom: 工具 %q Info: %w", name, err)
+			return nil, fmt.Errorf("loom: tool %q Info: %w", name, err)
 		}
 		if info == nil {
-			return nil, fmt.Errorf("loom: 工具 %q Info 返回 nil", name)
+			return nil, fmt.Errorf("loom: tool %q Info returned nil", name)
 		}
 		if info.Name != name {
-			return nil, fmt.Errorf("loom: 工具注册名 %q 在注册后变为 %q", name, info.Name)
+			return nil, fmt.Errorf("loom: tool registered as %q now reports the name %q", name, info.Name)
 		}
 		out = append(out, info)
 	}

@@ -8,7 +8,7 @@ import (
 
 const internalFailoverAttemptLimit uint64 = 8
 
-// CallModelOption 配置一次同步模型调用。
+// CallModelOption configures one synchronous model call.
 type CallModelOption func(*callModelConfig)
 
 type callModelConfig struct {
@@ -17,13 +17,14 @@ type callModelConfig struct {
 	requestForModel func(ChatModel) ChatRequest
 }
 
-// FailoverConfig 参考 Eino 的模型 failover 形态:是否切换、切到哪个模型都由调用方决定。
+// FailoverConfig follows Eino's failover shape: the caller decides whether to
+// switch and which model to switch to.
 type FailoverConfig struct {
 	ShouldFailover   func(ctx context.Context, attempt FailoverAttempt) bool
 	GetFailoverModel func(ctx context.Context, attempt FailoverAttempt) (ChatModel, error)
 }
 
-// FailoverAttempt 描述一次已经完成的模型尝试。
+// FailoverAttempt describes one model attempt that has already finished.
 type FailoverAttempt struct {
 	Attempt  uint64
 	Model    ChatModel
@@ -32,14 +33,15 @@ type FailoverAttempt struct {
 	Error    error
 }
 
-// WithModelFailover 为本次 CallModel 启用 failover。
+// WithModelFailover enables failover for this CallModel.
 func WithModelFailover(cfg FailoverConfig) CallModelOption {
 	return func(c *callModelConfig) {
 		c.failover = &cfg
 	}
 }
 
-// WithCallModelCaptureContent 控制同步调用 span 是否记录 prompt / completion。
+// WithCallModelCaptureContent controls whether a synchronous call's span records
+// the prompt and the completion.
 func WithCallModelCaptureContent(capture bool) CallModelOption {
 	return func(c *callModelConfig) {
 		c.captureContent = capture
@@ -52,7 +54,8 @@ func withCallModelRequestForModel(fn func(ChatModel) ChatRequest) CallModelOptio
 	}
 }
 
-// ShouldFailoverOnErrorOrFinishReason 返回常见 failover 判定:调用报错或命中特定 FinishReason。
+// ShouldFailoverOnErrorOrFinishReason is the common failover rule: switch when the
+// call errors or the finish reason is one of those listed.
 func ShouldFailoverOnErrorOrFinishReason(reasons ...FinishReason) func(context.Context, FailoverAttempt) bool {
 	reasonSet := make(map[FinishReason]struct{}, len(reasons))
 	for _, reason := range reasons {
@@ -70,8 +73,8 @@ func ShouldFailoverOnErrorOrFinishReason(reasons ...FinishReason) func(context.C
 	}
 }
 
-// CallModel 是同步模型调用的统一入口。Retry 仍由 provider 自己处理;这里负责 tracing
-// 和 per-call failover。
+// CallModel is the single entry point for synchronous model calls. Providers still
+// own retries; this handles tracing and per-call failover.
 func CallModel(
 	ctx context.Context,
 	purpose string,
@@ -80,7 +83,7 @@ func CallModel(
 	opts ...CallModelOption,
 ) (*ChatResponse, error) {
 	if model == nil {
-		return nil, errors.New("loom.CallModel: model 不能为 nil")
+		return nil, errors.New("loom.CallModel: model must not be nil")
 	}
 	cfg := callModelConfig{}
 	for _, opt := range opts {
@@ -121,9 +124,9 @@ func CallModel(
 		}
 		if next == nil {
 			if err != nil {
-				return resp, errors.Join(err, errors.New("loom.CallModel: failover model 不能为 nil"))
+				return resp, errors.Join(err, errors.New("loom.CallModel: failover model must not be nil"))
 			}
-			return resp, errors.New("loom.CallModel: failover model 不能为 nil")
+			return resp, errors.New("loom.CallModel: failover model must not be nil")
 		}
 		current = next
 	}

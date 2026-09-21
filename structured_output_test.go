@@ -37,8 +37,8 @@ func (m *fakeStructuredModel) Stream(context.Context, ChatRequest) (Stream, erro
 // the same declared contract used for tool arguments, now constraining model
 // output.
 func reviewContract() (contract *ArgsContract, done *BoolArg, notes *StringArg) {
-	done = Bool("overall_done").Required().Desc("是否已经完成评审")
-	notes = String("notes").Required().Desc("评审备注")
+	done = Bool("overall_done").Required().Desc("whether the review is complete")
+	notes = String("notes").Required().Desc("review notes")
 	return MustArgsContract("structured_review_fixture", done, notes), done, notes
 }
 

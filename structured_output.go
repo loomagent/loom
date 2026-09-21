@@ -14,11 +14,14 @@ import (
 
 const defaultStructuredOutputAttempts uint64 = 2
 
-// maxStructuredOutputNameLen 故意保持无类型常量:它要和 int(b.Len()/len)比较。
-// 别加 uint64 显式类型(会编译失败),也别并进上面的 typed 常量组(会触发 SA9004 并被 --fix 错改)。
+// maxStructuredOutputNameLen is deliberately an untyped constant, so it can be
+// compared with int values. Do not give it an explicit uint64 type, which will not
+// compile, and do not fold it into the typed constant group above, which trips
+// SA9004.
 const maxStructuredOutputNameLen = 64
 
-// StructuredOption 配置 ChatStructuredArgs 的结构化输出和输出重试。
+// StructuredOption configures the structured output and output retry of
+// ChatStructuredArgs.
 type StructuredOption func(*structuredConfig)
 
 type structuredConfig struct {
@@ -29,47 +32,53 @@ type structuredConfig struct {
 	callOptions []CallModelOption
 }
 
-// WithStructuredName 设置传给 provider 的 response_format 名称。默认用契约名。
+// WithStructuredName sets the response_format name sent to the provider. The
+// contract's name is used by default.
 func WithStructuredName(name string) StructuredOption {
 	return func(cfg *structuredConfig) {
 		cfg.name = name
 	}
 }
 
-// WithStructuredDescription 设置传给 provider 和提示词的结构说明。
+// WithStructuredDescription sets the description sent to the provider and included
+// in the prompt.
 func WithStructuredDescription(description string) StructuredOption {
 	return func(cfg *structuredConfig) {
 		cfg.description = description
 	}
 }
 
-// WithStructuredMaxAttempts 设置输出不满足契约时的最大尝试次数。
+// WithStructuredMaxAttempts sets how many attempts are made when the output does
+// not satisfy the contract.
 func WithStructuredMaxAttempts(maxAttempts uint64) StructuredOption {
 	return func(cfg *structuredConfig) {
 		cfg.maxAttempts = maxAttempts
 	}
 }
 
-// WithStructuredValidator 在契约校验后追加业务校验,失败同样触发输出重试。
+// WithStructuredValidator adds a business check after contract validation; a
+// failure there also triggers an output retry.
 func WithStructuredValidator(validate func(Args) error) StructuredOption {
 	return func(cfg *structuredConfig) {
 		cfg.validate = validate
 	}
 }
 
-// WithStructuredCallOptions 透传 CallModel 选项,如 per-call failover。
+// WithStructuredCallOptions passes CallModel options through, such as per-call
+// failover.
 func WithStructuredCallOptions(opts ...CallModelOption) StructuredOption {
 	return func(cfg *structuredConfig) {
 		cfg.callOptions = append(cfg.callOptions, opts...)
 	}
 }
 
-// WithStructuredFailover 为本次结构化调用启用模型 failover。
+// WithStructuredFailover enables model failover for this structured call.
 func WithStructuredFailover(cfg FailoverConfig) StructuredOption {
 	return WithStructuredCallOptions(WithModelFailover(cfg))
 }
 
-// StructuredOutputError 表示模型输出不完整、不是合法 JSON，或未通过本地契约 / 业务校验。
+// StructuredOutputError means the model's output was incomplete, was not valid
+// JSON, or failed the local contract or a business check.
 type StructuredOutputError struct {
 	Attempt uint64
 	Content string
@@ -84,19 +93,21 @@ func (e *StructuredOutputError) Unwrap() error {
 	return e.Err
 }
 
-// ChatStructuredArgs 调用模型并把输出按 contract 校验后返回 Args。
+// ChatStructuredArgs calls the model and returns Args once the output has been
+// validated against the contract.
 //
-// 这是工具入参契约的镜像:同一套 ArgsContract 声明字段、约束和描述,只是这里约束的是
-// 模型的返回值而不是它的入参。读取方式和工具一样,通过声明时的 typed handle:
+// It mirrors the tool-argument contract: the same ArgsContract declares the fields,
+// the constraints, and the descriptions, except that here it constrains what the
+// model returns rather than what it sends. Reading works the same way, through the
+// typed handles fixed at declaration:
 //
-//	summary := loom.String("summary").MinLen(1).MaxLen(200).Desc("评审摘要")
-//	contract := loom.MustArgsContract("review", summary)
-//	args, _, err := loom.ChatStructuredArgs(ctx, "review", model, req, contract)
-//	summary.Get(args)
+//	summary := loom.String("summary").MinLen(1).MaxLen(200).Desc("review summary")
 //
-// Provider 原生支持 json_schema 时会传同一份 schema;仅支持 json_object 时退化成
-// JSON object + prompt 约束;本地始终按契约校验。响应必须整体为一个合法 JSON 值。
-// 不可映射的业务约束通过 WithStructuredValidator 校验。
+// A provider with native json_schema support receives this same schema; one that
+// only supports json_object falls back to a JSON object plus a prompt constraint.
+// The output is always validated locally against the contract, and the whole
+// response must be a single valid JSON value. Business constraints a schema cannot
+// express go through WithStructuredValidator.
 func ChatStructuredArgs(
 	ctx context.Context,
 	purpose string,
@@ -106,10 +117,10 @@ func ChatStructuredArgs(
 	opts ...StructuredOption,
 ) (Args, *ChatResponse, error) {
 	if model == nil {
-		return Args{}, nil, errors.New("loom.ChatStructuredArgs: model 不能为 nil")
+		return Args{}, nil, errors.New("loom.ChatStructuredArgs: model must not be nil")
 	}
 	if contract == nil {
-		return Args{}, nil, errors.New("loom.ChatStructuredArgs: contract 不能为 nil")
+		return Args{}, nil, errors.New("loom.ChatStructuredArgs: contract must not be nil")
 	}
 
 	cfg := structuredConfig{maxAttempts: defaultStructuredOutputAttempts}
@@ -169,7 +180,7 @@ func ChatStructuredArgs(
 	return Args{}, lastResp, lastErr
 }
 
-// NormalizeStructuredOutputName 生成 provider 可接受的 response_format name。
+// NormalizeStructuredOutputName builds a response_format name a provider accepts.
 func NormalizeStructuredOutputName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -218,10 +229,11 @@ func NormalizeStructuredOutputName(name string) string {
 	return out
 }
 
-// StructuredSchemaObject 把 schema 转成普通 JSON object,供 provider SDK 放进 interface{} 字段。
+// StructuredSchemaObject turns a schema into a plain JSON object, which a provider
+// SDK can place in an interface{} field.
 func StructuredSchemaObject(schema *Schema) (map[string]any, error) {
 	if schema == nil {
-		return nil, errors.New("schema 不能为 nil")
+		return nil, errors.New("schema must not be nil")
 	}
 	data, err := jsonv2.Marshal(schema)
 	if err != nil {
@@ -249,7 +261,8 @@ func withStructuredOutputRequest(req ChatRequest, caps ModelCapabilities, name, 
 		req.StructuredOutput = &StructuredOutput{Mode: StructuredOutputJSONObject}
 		req.Messages = appendStructuredPrompt(req.Messages, schema, description)
 	case StructuredOutputNone, StructuredOutputUnsupported:
-		// 明确不支持 / 能力未声明:都退化为 schema 写进 prompt 的纯文本兜底
+		// Explicitly unsupported, or undeclared: both fall back to writing the schema
+		// into the prompt as plain text
 		req.ResponseFormat = ResponseFormatDefault
 		req.StructuredOutput = nil
 		req.Messages = appendStructuredPrompt(req.Messages, schema, description)
@@ -266,9 +279,9 @@ func appendStructuredPrompt(messages []Message, schema *Schema, description stri
 	if err != nil {
 		schemaJSON = []byte("{}")
 	}
-	content := fmt.Sprintf(`请只输出一个满足下列 JSON Schema 的 JSON 值,不要输出 Markdown 或解释。
+	content := fmt.Sprintf(`Output only one JSON value that satisfies the JSON Schema below. Do not output Markdown or an explanation.
 
-结构说明:
+Description:
 %s
 
 JSON Schema:
@@ -288,9 +301,9 @@ func withStructuredRetryMessages(messages []Message, resp *ChatResponse, err err
 	}
 	out = append(out, Message{
 		Role: RoleUser,
-		Content: fmt.Sprintf(`上一条输出不满足结构化输出要求: %v
+		Content: fmt.Sprintf(`The previous output did not satisfy the structured-output requirements: %v
 
-请重新输出完整 JSON。只输出 JSON,不要输出 Markdown 或解释。`, err),
+Output the complete JSON again. Output JSON only, with no Markdown and no explanation.`, err),
 	})
 	return out
 }

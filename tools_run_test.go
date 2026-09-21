@@ -23,14 +23,14 @@ func newFailingTool() Tool {
 	)
 }
 
-// ===== ExecuteToolCalls(ReAct 场景) =====
+// ===== ExecuteToolCalls, the ReAct case =====
 
 func TestExecuteToolCalls_Success(t *testing.T) {
 	reg := NewToolRegistry()
 	_ = reg.Register(newEchoTool())
 
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
-		// 模拟 LLM 返了两个 tool_calls
+		// the model returned two tool calls
 		calls := []ToolCall{
 			{ID: "llm_c1", Name: "echo", Arguments: `{"value":"a"}`},
 			{ID: "llm_c2", Name: "echo", Arguments: `{"value":"b"}`},
@@ -54,7 +54,7 @@ func TestExecuteToolCalls_Success(t *testing.T) {
 	if turn.Status != TurnStatusCompleted {
 		t.Fatalf("status: %v", turn.Status)
 	}
-	// 期望:tool_call(c1) / tool_result(c1) / tool_call(c2) / tool_result(c2) / final_answer
+	// expected: tool_call(c1), tool_result(c1), tool_call(c2), tool_result(c2), final_answer
 	if len(turn.Items) != 5 {
 		t.Fatalf("items: %d", len(turn.Items))
 	}
@@ -88,7 +88,7 @@ func TestExecuteToolCalls_ToolFails(t *testing.T) {
 	}
 }
 
-// ===== RunToolByName(代码编排场景) =====
+// ===== RunToolByName, the code-orchestration case =====
 
 func TestRunToolByName_Success(t *testing.T) {
 	reg := NewToolRegistry()
@@ -100,15 +100,15 @@ func TestRunToolByName_Success(t *testing.T) {
 	))
 
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
-		output, err := RunToolByName(ctx, w, "查询 1", reg, "query", map[string]any{"query": "ai"})
+		output, err := RunToolByName(ctx, w, "query 1", reg, "query", map[string]any{"query": "ai"})
 		if err != nil {
 			return err
 		}
 		if output != `{"query":"ai"}` {
 			t.Errorf("output: %s", output)
 		}
-		// 再调一次,验证 callID 递增
-		output2, _ := RunToolByName(ctx, w, "查询 2", reg, "query", map[string]any{"query": "ml"})
+		// call again to check that the call ID increments
+		output2, _ := RunToolByName(ctx, w, "query 2", reg, "query", map[string]any{"query": "ml"})
 		if output2 != `{"query":"ml"}` {
 			t.Errorf("output2: %s", output2)
 		}
@@ -118,7 +118,7 @@ func TestRunToolByName_Success(t *testing.T) {
 	if turn == nil {
 		t.Fatalf("Run returned nil turn")
 	}
-	// turn[0].tool_call[0] callID 应为 "call_0";第二次 "call_1"
+	// turn[0].tool_call[0] call ID should be "call_0", the second "call_1"
 	if turn.Items[0].ToolCallID != "call_0" {
 		t.Errorf("first callID: %s", turn.Items[0].ToolCallID)
 	}
