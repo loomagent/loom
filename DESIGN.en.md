@@ -337,8 +337,9 @@ noop tracer until you configure one.
 
 ```
 Priority:
-  1. closeReason already set (sealed by FinalAnswer) → keep it
-  2. a strict-mode sinkErr                          → {Failed, agent_error}
+  1. a sinkErr, which only strict mode records       → {Failed, agent_error}
+     (it outranks the seal: the write that failed may be the one that persisted the answer)
+  2. closeReason already set (sealed by FinalAnswer) → keep it
   3. ctx.DeadlineExceeded                           → {Cancelled, timeout}
   4. ctx.Canceled with a context.Cause              → {Cancelled, user_cancel |
    |                                                    host_shutdown | external_cancel}

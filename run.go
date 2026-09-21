@@ -139,22 +139,26 @@ func Run(ctx context.Context, h Handler, opts RunOptions) (*Turn, error) {
 }
 
 // deriveCloseReason is called with mu already held. The priority order:
-//  1. closeReason already set, sealed by FinalAnswer → keep it
-//  2. a strict-mode sinkErr  → {Failed, "agent_error", cause: sinkErr}
+//  1. a sinkErr, which only strict mode records → {Failed, "agent_error", cause: sinkErr}
+//  2. closeReason already set, sealed by FinalAnswer → keep it
 //  3. ctx.DeadlineExceeded   → {Cancelled, "timeout"}
 //  4. ctx.Canceled with cause → {Cancelled, "user_cancel" / "host_shutdown" / "external_cancel"}
 //  5. handlerErr != nil      → {Failed, "agent_error", cause: handlerErr}
 //  6. handlerErr nil, no FinalAnswer → {Failed, "no_final_answer"}
+//
+// A strict sink failure outranks the seal because the write that failed may be the one that
+// persisted the final answer. Reporting that turn as completed would tell a strict caller the
+// answer is stored when it is not, which is the case strict mode exists for.
 func deriveCloseReason(state *turnState, ctx context.Context, handlerErr error) {
-	if state.closeReason != nil {
-		return
-	}
 	if state.sinkErr != nil {
 		state.closeReason = &CloseReason{
 			Code:    CloseCodeAgentError,
 			Message: state.sinkErr.Error(),
 			Cause:   state.sinkErr,
 		}
+		return
+	}
+	if state.closeReason != nil {
 		return
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {

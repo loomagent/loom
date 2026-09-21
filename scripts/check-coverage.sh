@@ -9,7 +9,7 @@
 set -euo pipefail
 
 profile="${1:-coverage.out}"
-floor="${COVERAGE_FLOOR:-87}"
+floor="${COVERAGE_FLOOR:-90}"
 
 # Runnable examples are main packages with no tests of their own. CI runs them instead,
 # which checks more than coverage would, so they stay out of the total.

@@ -342,8 +342,9 @@ Tracer 不在这里:OTel 走 SDK 的全局 TracerProvider,未配置时是 noop t
 
 ```
 优先级:
-  1. closeReason 已设(FinalAnswer 自封口)        → 保留
-  2. strict 模式 sinkErr                          → {Failed, agent_error}
+  1. strict 模式记录的 sinkErr                     → {Failed, agent_error}
+     (排在封口之前:失败的那次写入可能正是持久化 final answer 的那次)
+  2. closeReason 已设(FinalAnswer 自封口)        → 保留
   3. ctx.DeadlineExceeded                         → {Cancelled, timeout}
   4. ctx.Canceled + context.Cause                 → {Cancelled, user_cancel |
    |                                                   host_shutdown | external_cancel}
