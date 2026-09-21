@@ -68,7 +68,3 @@ func (m Message) IsExternalUserMessage() bool {
 		return false
 	}
 }
-
-func (m Message) IsFrameworkUserMessage(purpose MessagePurpose) bool {
-	return m.Role == RoleUser && m.source == MessageSourceFramework && m.purpose == purpose
-}
