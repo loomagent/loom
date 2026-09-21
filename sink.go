@@ -4,12 +4,9 @@ import "context"
 
 // Sink is where an agent framework's downstream events are consumed.
 //
-// Implementations are pluggable:
-//   - sinks/memory: for tests, collecting events in memory
-//   - sinks/log: structured logging through zap
-//   - sinks/tee: fan-out to several Sinks
-//   - product code: an EntSink for persistence, a WSSink pushing to a frontend,
-//     a ProtoStreamSink, and so on
+// Implementations are pluggable. The framework ships one, MemorySink, for tests and
+// debugging; persistence and frontend push are product implementations, such as an
+// EntSink writing rows or a WebSocket sink pushing to a browser.
 //
 // RunOptions.OnSinkErr decides what a sink failure means:
 //   - by default it is swallowed and reported through the callback, and the main

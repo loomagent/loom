@@ -242,7 +242,7 @@ a `const` holds.
 - `github.com/loomagent/loom/tools/calculator`: sandboxed Starlark calculator
 - `github.com/loomagent/loom/tools/gettime`: fixed Beijing-time tool
 
-The architecture and original design decisions are documented in
+The architecture and the decisions behind it are documented in
 [DESIGN.en.md](DESIGN.en.md), also available in [Chinese](DESIGN.md).
 
 ## Model factory

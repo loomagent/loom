@@ -213,7 +213,7 @@ pattern 会在构建契约时被拒。有一处刻意偏离规范:`integer` 必�
 - `github.com/loomagent/loom/tools/calculator`:沙箱化的 Starlark 计算器
 - `github.com/loomagent/loom/tools/gettime`:固定北京时间的工具
 
-架构与最初的设计决策记录在 [DESIGN.md](DESIGN.md) 中,另有
+架构与其背后的设计决策记录在 [DESIGN.md](DESIGN.md) 中,另有
 [英文版](DESIGN.en.md)。
 
 ## 模型工厂

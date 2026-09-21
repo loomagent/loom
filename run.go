@@ -29,8 +29,8 @@ type RunOptions struct {
 	// run; the Run core fans out to all of them. Pass several directly in one []Sink; no
 	// Tee wrapper is needed.
 	//
-	// A typical combination is an EntSink for persistence, a LogSink, and a WSSink pushing
-	// to a frontend. Each Sink handles the events it cares about; see the consume-as-needed
+	// A typical combination is an EntSink writing rows and a WebSocket sink pushing to a
+	// browser. Each Sink handles the events it cares about; see the consume-as-needed
 	// semantics of Sink.ItemDelta.
 	Sinks []Sink
 
@@ -46,8 +46,8 @@ type RunOptions struct {
 	// string makes Run fail. It is a first-class value:
 	//   - it goes to the loom.conversation.id attribute of the OTel turn span, which lets a
 	//     backend aggregate the traces of one conversation
-	//   - it is written into the Turn snapshot, so a Repository or Sink can take it without
-	//     decoding metadata
+	//   - it is written into the Turn snapshot, so a Sink can take it without decoding
+	//     metadata
 	//   - product code loading cross-turn state, such as scanning past citation IDs, uses
 	//     the same ID
 	ConversationID string
