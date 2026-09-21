@@ -13,7 +13,10 @@ func TestMessageProvenanceSeparatesTaskAndFrameworkUserRoles(t *testing.T) {
 	if !scheduled.IsExternalUserMessage() || scheduled.Source() != MessageSourceScheduledTask {
 		t.Fatalf("scheduled message provenance = %#v", scheduled)
 	}
-	if status.Role != RoleUser || status.IsExternalUserMessage() || !status.IsFrameworkUserMessage(MessagePurposeRuntimeStatus) {
+	// A framework message carries a purpose but no trust as external input, and reading it
+	// back needs only the accessors every Message has.
+	if status.Role != RoleUser || status.IsExternalUserMessage() ||
+		status.Source() != MessageSourceFramework || status.Purpose() != MessagePurposeRuntimeStatus {
 		t.Fatalf("framework message provenance = %#v", status)
 	}
 	if status.Name != "" {
