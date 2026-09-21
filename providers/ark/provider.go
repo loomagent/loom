@@ -18,10 +18,12 @@ package ark
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/volcengine/volcengine-go-sdk/service/arkruntime"
@@ -53,6 +55,10 @@ type Config struct {
 	// request. The map is snapshotted by New. Callers should use this only for
 	// endpoint policy negotiated with their Ark account, never for per-user data.
 	RequestHeaders map[string]string
+	// HTTPClient is optional, and replaces the client every request goes through. Use it
+	// for a proxy, custom timeouts, or a test server's in-memory client. Loom still wraps
+	// its transport, because the usage evidence has to be read before the SDK decodes it.
+	HTTPClient *http.Client
 }
 
 // Model is one Ark model instance, implementing loom.ChatModel.
@@ -79,6 +85,9 @@ func New(cfg Config) (*Model, error) {
 		baseURL = DefaultBaseURL
 	}
 	opts := []arkruntime.ConfigOption{arkruntime.WithBaseUrl(baseURL)}
+	if cfg.HTTPClient != nil {
+		opts = append(opts, arkruntime.WithHTTPClient(cfg.HTTPClient))
+	}
 	opts = withUsageTransport(cfg.APIKey, opts)
 	client := arkruntime.NewClientWithApiKey(cfg.APIKey, opts...)
 	retryCfg := cfg.Retry
@@ -257,7 +266,11 @@ func (m *Model) buildRequest(req loom.ChatRequest) (_ arkmodel.CreateChatComplet
 		out.Stop = req.Stop
 	}
 	if len(req.Tools) > 0 {
-		out.Tools = translateTools(req.Tools)
+		tools, err := translateTools(req.Tools)
+		if err != nil {
+			return arkmodel.CreateChatCompletionRequest{}, err
+		}
+		out.Tools = tools
 	}
 	if req.ToolChoice != nil {
 		out.ToolChoice = translateToolChoice(req.ToolChoice)
@@ -370,18 +383,26 @@ func translateRole(r loom.Role) string {
 	}
 }
 
-func translateTools(tools []*loom.ToolInfo) []*arkmodel.Tool {
+// translateTools converts declared tools into Ark tools.
+//
+// The parameter schema is carried as jsontext.Value, not as a []byte: the SDK's
+// Parameters field is an interface, and the encoder turns a plain []byte into a base64
+// string, which the endpoint cannot read as a schema. A schema that cannot be serialized
+// fails the request rather than advertising the tool without its parameters, which would
+// let the model call a tool whose arguments are unconstrained.
+func translateTools(tools []*loom.ToolInfo) ([]*arkmodel.Tool, error) {
 	out := make([]*arkmodel.Tool, 0, len(tools))
 	for _, t := range tools {
 		if t == nil {
 			continue
 		}
-		var params []byte
+		var params jsontext.Value
 		if t.Parameters != nil {
 			b, err := jsonv2.Marshal(t.Parameters)
-			if err == nil {
-				params = b
+			if err != nil {
+				return nil, fmt.Errorf("loom/ark: tool %q argument schema could not be marshaled: %w", t.Name, err)
 			}
+			params = b
 		}
 		out = append(out, &arkmodel.Tool{
 			Type: arkmodel.ToolTypeFunction,
@@ -392,7 +413,7 @@ func translateTools(tools []*loom.ToolInfo) []*arkmodel.Tool {
 			},
 		})
 	}
-	return out
+	return out, nil
 }
 
 func translateToolChoice(tc *loom.ToolChoice) any {

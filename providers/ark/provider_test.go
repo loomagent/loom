@@ -169,3 +169,17 @@ func TestExplicitNoneDeclarationRejectsEnabledBeforeNetwork(t *testing.T) {
 		t.Fatalf("isolated default probe must omit: params=%+v err=%v", params, err)
 	}
 }
+
+func TestModelNameAndCapabilities(t *testing.T) {
+	caps := loom.ModelCapabilities{StructuredOutput: loom.StructuredOutputJSONSchema}
+	m, err := New(Config{APIKey: "test", ModelName: "ep-2026", Capabilities: &caps})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Name(); got != "ark/ep-2026" {
+		t.Fatalf("Name() = %q", got)
+	}
+	if m.Capabilities().StructuredOutput != loom.StructuredOutputJSONSchema {
+		t.Fatalf("Capabilities() = %+v", m.Capabilities())
+	}
+}
