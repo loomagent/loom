@@ -6,15 +6,16 @@ import (
 	"time"
 )
 
-// Handler agent 业务方实现的核心函数。
+// Handler is the core function product code implements.
 //
-// 通过 TurnWriter 写出过程事件(Step / Reasoning / ToolCall / ... / FinalAnswer)。
-// 返回 error 表达失败:
-//   - nil + 调过 FinalAnswer   → Turn Completed
-//   - nil + 没调 FinalAnswer    → Turn Failed(code=no_final_answer)
-//   - 非 nil                    → Turn Failed(code=agent_error,cause=err)
+// It writes the process events through a TurnWriter: Step, Reasoning, ToolCall, and
+// finally FinalAnswer. Its error return is how it reports failure:
+//   - nil after calling FinalAnswer → the Turn is Completed
+//   - nil without FinalAnswer       → the Turn Failed with code=no_final_answer
+//   - non-nil                       → the Turn Failed with code=agent_error and cause=err
 //
-// ctx 的 cancel / deadline 由 Run 检测,转成对应的 Cancelled / 超时终态。
+// Run watches for a cancelled or expired ctx and turns it into the matching Cancelled or
+// timeout terminal state.
 type Handler func(
 	ctx context.Context,
 	w TurnWriter,
@@ -22,72 +23,82 @@ type Handler func(
 	input UserMessage,
 ) error
 
-// RunOptions Run 的所有配置。
+// RunOptions holds every Run configuration.
 type RunOptions struct {
-	// Sinks 事件下游。可空(开发期调试场景),Run 内核 fan-out 给所有 sink。
-	// 多个 Sink 直接传 []Sink,无需 Tee 包装。
+	// Sinks are the event downstreams. The slice may be empty, which suits a debugging
+	// run; the Run core fans out to all of them. Pass several directly in one []Sink; no
+	// Tee wrapper is needed.
 	//
-	// 业务方典型组合:EntSink(落库)+ LogSink(打 log)+ WSSink(推前端)+ ...,
-	// 各 Sink 独立处理自己关心的事件(详见 Sink.ItemDelta 的"按需消费"语义)。
+	// A typical combination is an EntSink for persistence, a LogSink, and a WSSink pushing
+	// to a frontend. Each Sink handles the events it cares about; see the consume-as-needed
+	// semantics of Sink.ItemDelta.
 	Sinks []Sink
 
-	// History 已完成的历史 Turn(按时间升序),拼上下文用。
-	// 由调用方加载(loom 不规定历史从哪来 — 业务方可能查 DB / 缓存 / 内存)。
+	// History holds the finished turns in ascending time order, used to build context. The
+	// caller loads it; loom does not say where history comes from, whether a database, a
+	// cache, or memory.
 	History []Turn
 
-	// Input 本轮用户输入,Run 自动作为第一个 item 写入(user_message)。
+	// Input is this round's user input.
 	Input UserMessage
 
-	// ConversationID 本轮归属的 conversation id,**必填**(空字符串 Run 返错)。
-	// 一等公民概念:
-	//   - 写到 OTel turn span 的 loom.conversation.id attribute,方便后端按对话聚合多轮 trace
-	//   - 写到 Turn struct 数据快照,业务方 Repository/Sink 直接拿,不需要解 metadata
-	//   - 业务侧加载跨轮状态(citation src_id 历史扫描等)用同样的 ID
+	// ConversationID is the conversation this turn belongs to, and is required: an empty
+	// string makes Run fail. It is a first-class value:
+	//   - it goes to the loom.conversation.id attribute of the OTel turn span, which lets a
+	//     backend aggregate the traces of one conversation
+	//   - it is written into the Turn snapshot, so a Repository or Sink can take it without
+	//     decoding metadata
+	//   - product code loading cross-turn state, such as scanning past citation IDs, uses
+	//     the same ID
 	ConversationID string
 
-	// TurnIndex 在 conversation 内的 0-based 序号。
-	// 0 默认值会被解读为"自动 = uint64(len(History))",
-	// 业务方分页加载历史(History 不完整)时应显式传非 0 值。
+	// TurnIndex is the 0-based position within the conversation. The zero value means
+	// "derive it" as uint64(len(History)); when product code loads history page by page and
+	// History is therefore incomplete, it must pass a non-zero value.
 	TurnIndex uint64
 
-	// Metadata 业务侧透传 K/V(loom 不解释)。
-	// 常见 key:"conversation_id" / "user_id" / "chat_mode" / ...
+	// Metadata is a K/V passthrough for product code; loom does not interpret it.
+	// Conventional keys: "conversation_id", "user_id", "chat_mode".
 	Metadata map[string]string
 
-	// OnSinkErr Sink 失败回调(默认 nil = 静默 swallow)。
+	// OnSinkErr is the sink failure callback; nil by default, which swallows a failure
+	// silently.
 	OnSinkErr func(Sink, error)
 
-	// StrictSink true 时任一 Sink 失败立即让整 Turn Failed。
-	// 默认 false:Sink 失败不影响主流程,继续跑。
+	// StrictSink makes any sink failure fail the whole Turn at once. It is false by default,
+	// where a sink failure does not disturb the main flow.
 	StrictSink bool
 
-	// CaptureContent 控制 OTel span 是否落 prompt / completion / tool args/output。
-	// false(默认)只保留元数据(model / token / finish_reason / latency),
-	// 适合生产含 PII / 合规敏感数据时。开发期建议设 true 方便调试。
+	// CaptureContent controls whether OTel spans record the prompt, the completion, tool
+	// args, and tool output. False, the default, keeps only metadata — model, tokens,
+	// finish reason, latency — which suits production data with PII or compliance
+	// sensitivity. Turn it on while developing, where it makes debugging easier.
 	CaptureContent bool
 }
 
-// Run 执行一次 agent。
+// Run executes one agent.
 //
-// 流程:
-//  1. 构造 turnState + turnRoot,注册 Sinks
-//  2. 调 handler(ctx, root, History, Input)
-//  3. 根据 handler 返回值 + state.closeReason + ctx 状态 + state.sinkErr,
-//     派生最终 CloseReason
-//  4. 返回 *Turn 数据快照 + error
-//     - error 仅在 handler return 非 nil(且不是 ctx 取消)时返回
-//     - 正常完成 / 取消 / no_final_answer 等返 nil error,详情看 Turn.CloseReason
+// The flow:
+//  1. build the turnState and the turnRoot, then register the sinks
+//  2. call handler(ctx, root, History, Input)
+//  3. derive the final CloseReason from the handler's return value, state.closeReason,
+//     the ctx state, and state.sinkErr
+//  4. return the *Turn snapshot and an error
 //
-// 注:loom.Run **不自动写 user_message Item**。
-// user_message 的持久化由调用方(如 wolosink.InsertUserMessageItem)在 Run 之前完成,
-// 然后通过 opts.Input 把 input 文本传给 handler 使用。
-// 返回的 *Turn.Items 不含 user_message — 完整 items 树请从持久化层加载。
+// The error is set only when the handler returned one itself and a cancelled ctx did not
+// cause it. A normal end, a cancellation, and a no_final_answer all return a nil error;
+// Turn.CloseReason has the detail.
+//
+// Note that Run does not write the user_message item. The caller persists it before Run,
+// as wolosink.InsertUserMessageItem does, and passes its text in through opts.Input for
+// the handler to use. The returned *Turn.Items therefore holds no user_message; load the
+// complete item tree from the persistence layer.
 func Run(ctx context.Context, h Handler, opts RunOptions) (*Turn, error) {
 	if h == nil {
-		return validationFailedTurn(opts, "handler 不能为空"), errors.New("loom.Run: handler 不能为空")
+		return validationFailedTurn(opts, "handler must not be empty"), errors.New("loom.Run: handler must not be empty")
 	}
 	if opts.ConversationID == "" {
-		return validationFailedTurn(opts, "ConversationID 必填"), errors.New("loom.Run: ConversationID 必填")
+		return validationFailedTurn(opts, "ConversationID is required"), errors.New("loom.Run: ConversationID is required")
 	}
 
 	turnIdx := opts.TurnIndex
@@ -97,26 +108,29 @@ func Run(ctx context.Context, h Handler, opts RunOptions) (*Turn, error) {
 	state := newTurnState(turnIdx, opts.ConversationID, opts.Sinks, opts.OnSinkErr, opts.StrictSink, opts.Metadata, opts.CaptureContent)
 	root := newTurnRoot(state)
 
-	// OTel:起 Turn 根 span,handler 拿到的 ctx 已嵌入 span,Step / StreamLLMToStep /
-	// runOneTool 内部起的子 span 自然成为子节点。OTel 未 Setup 时是 noop tracer,零开销。
+	// OTel: start the Turn root span. The ctx the handler receives carries the span, so
+	// child spans started by a Step, by StreamLLMToStep, or inside runOneTool nest under
+	// it. Without OTel configured it is the noop tracer, which costs nothing.
 	turnCtx, turnSpan := startTurnSpan(ctx, state)
 	turnCtx = withUsageScope(turnCtx, root.underlyingScope())
 
 	handlerErr := h(turnCtx, root, opts.History, opts.Input)
 
-	// 派生最终 closeReason
+	// Derive the final close reason
 	state.mu.Lock()
 	deriveCloseReason(state, ctx, handlerErr)
 	state.mu.Unlock()
 
-	// OTel:Turn 收尾 — 按 CloseReason 设 span Status,打上 totalUsage 总和
+	// OTel: close the Turn, setting the span Status from the CloseReason and attaching the
+	// total usage
 	state.mu.Lock()
 	finalizeTurnSpan(turnSpan, state)
 	state.mu.Unlock()
 
 	snapshot := buildTurnSnapshot(state)
 
-	// 返回的 error:仅 handler 主动 return 非 nil 时(且不是 ctx 取消触发)
+	// The returned error is set only when the handler returned one itself and a cancelled
+	// ctx did not cause it
 	var retErr error
 	if handlerErr != nil && !IsCancelError(handlerErr) {
 		retErr = handlerErr
@@ -124,14 +138,13 @@ func Run(ctx context.Context, h Handler, opts RunOptions) (*Turn, error) {
 	return snapshot, retErr
 }
 
-// deriveCloseReason mu 已持有时调。
-// 优先级:
-//  1. closeReason 已设(FinalAnswer 自封口)→ keep
-//  2. strict 模式 sinkErr        → {Failed, "agent_error", cause: sinkErr}
-//  3. ctx.DeadlineExceeded       → {Cancelled, "timeout"}
-//  4. ctx.Canceled + Cause       → {Cancelled, "user_cancel"/"host_shutdown"/"external_cancel"}
-//  5. handlerErr != nil          → {Failed, "agent_error", cause: handlerErr}
-//  6. handlerErr nil + 没 FinalAnswer → {Failed, "no_final_answer"}
+// deriveCloseReason is called with mu already held. The priority order:
+//  1. closeReason already set, sealed by FinalAnswer → keep it
+//  2. a strict-mode sinkErr  → {Failed, "agent_error", cause: sinkErr}
+//  3. ctx.DeadlineExceeded   → {Cancelled, "timeout"}
+//  4. ctx.Canceled with cause → {Cancelled, "user_cancel" / "host_shutdown" / "external_cancel"}
+//  5. handlerErr != nil      → {Failed, "agent_error", cause: handlerErr}
+//  6. handlerErr nil, no FinalAnswer → {Failed, "no_final_answer"}
 func deriveCloseReason(state *turnState, ctx context.Context, handlerErr error) {
 	if state.closeReason != nil {
 		return
@@ -167,7 +180,7 @@ func deriveCloseReason(state *turnState, ctx context.Context, handlerErr error) 
 			}
 			return
 		}
-		// 细分 LLM 协议层的 finish_reason 错误
+		// Narrow down a finish_reason error from the LLM protocol
 		code := CloseCodeAgentError
 		switch {
 		case errors.Is(handlerErr, ErrContentFilter):
@@ -182,16 +195,17 @@ func deriveCloseReason(state *turnState, ctx context.Context, handlerErr error) 
 		}
 		return
 	}
-	// handlerErr nil + 没 FinalAnswer → no_final_answer
+	// handlerErr nil with no FinalAnswer → no_final_answer
 	state.closeReason = &CloseReason{
 		Code: CloseCodeNoFinal,
 	}
 }
 
-// buildTurnSnapshot 从 state 构造对外的 Turn 快照(Items 深拷贝隔离)。
-// validationFailedTurn 给 Run 的入参校验失败路径返回一个最小 *Turn,
-// 保证 Run 的不变量"永远返回非 nil *Turn"。让调用方(以及静态分析器 nilaway)
-// 不用在 nil err 路径之外还要担心 turn 为 nil。
+// buildTurnSnapshot builds the public Turn snapshot from the state, deep-copying Items so
+// the two share no data.
+// validationFailedTurn returns a minimal *Turn for Run's argument-validation failure path,
+// which keeps Run's invariant that it always returns a non-nil *Turn. A caller, and a
+// static analyser, therefore never has to worry about a nil turn outside an error path.
 func validationFailedTurn(opts RunOptions, msg string) *Turn {
 	now := time.Now()
 	return &Turn{
@@ -226,7 +240,7 @@ func buildTurnSnapshot(state *turnState) *Turn {
 	}
 }
 
-// statusFromCloseReason CloseReason → TurnStatus 派生。
+// statusFromCloseReason derives a TurnStatus from a CloseReason.
 func statusFromCloseReason(cr *CloseReason) TurnStatus {
 	if cr == nil {
 		return TurnStatusInProgress
@@ -235,7 +249,7 @@ func statusFromCloseReason(cr *CloseReason) TurnStatus {
 	return status
 }
 
-// StatusFromCloseCode 把 CloseReason.Code 映射为 TurnStatus。
+// StatusFromCloseCode maps a CloseReason.Code to a TurnStatus.
 func StatusFromCloseCode(code CloseCode) (TurnStatus, bool) {
 	switch code {
 	case CloseCodeFinalAnswer:
@@ -253,7 +267,7 @@ func StatusFromCloseCode(code CloseCode) (TurnStatus, bool) {
 	}
 }
 
-// IsCancelError 判断 err 是否代表协作式取消。
+// IsCancelError reports whether err represents cooperative cancellation.
 func IsCancelError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrTurnClosed)
 }
@@ -278,7 +292,8 @@ func closeCodeFromContextCancelCause(err error) CloseCode {
 	return CloseCodeUserCancel
 }
 
-// copyItems 深拷贝 Items 树(避免业务方持有的 Turn 跟 state 内部数据共享)。
+// copyItems deep-copies the Items tree, so a Turn the caller holds shares nothing with
+// the state's internal data.
 func copyItems(items []Item) []Item {
 	if items == nil {
 		return nil

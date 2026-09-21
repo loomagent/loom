@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// mockClassifier 测试用 classifier。
+// mockClassifier is the classifier these tests use.
 type mockClassifier struct {
 	classify func(error) ErrorClass
 }
@@ -19,7 +19,7 @@ func (m mockClassifier) ClassifyError(err error) ErrorClass {
 	return m.classify(err)
 }
 
-// fastConfig 让单测跑得快(不等真 backoff)。
+// fastConfig keeps the tests quick by not waiting for real backoff.
 func fastConfig(maxRetries int) *RetryConfig {
 	return &RetryConfig{
 		MaxRetries:     maxRetries,
@@ -83,7 +83,8 @@ func TestChatWithRetry_TransientExhausted(t *testing.T) {
 	if !errors.Is(err, sentinel) {
 		t.Errorf("err chain missing sentinel: %v", err)
 	}
-	// MaxRetries=2 → 第 3 次后判定 exhausted(nonRateLimitAttempts > 2),所以总尝试 3 次
+	// MaxRetries=2 means exhausted after the third attempt, since nonRateLimitAttempts > 2,
+	// so there are three attempts in total
 	if attempts != 3 {
 		t.Errorf("attempts = %d, want 3 (1 initial + 2 retries)", attempts)
 	}
@@ -114,7 +115,8 @@ func TestChatWithRetry_RateLimitDoesNotConsumeTransientRetryCount(t *testing.T) 
 		}
 		return ErrorClassUnknown
 	}}
-	// MaxRetries=1 但 RateLimit 不计次数,在 elapsed budget 内第 10 次返回成功。
+	// MaxRetries=1, but RateLimit does not count, so the tenth attempt succeeds within the
+	// elapsed budget.
 	_, err := ChatWithRetry(context.Background(), c, fastConfig(1), func(context.Context) (*ChatResponse, error) {
 		attempts++
 		if attempts < 10 {
@@ -377,7 +379,7 @@ func TestStreamWithRetry_PrefetchSuccess(t *testing.T) {
 	if attempts != 1 {
 		t.Errorf("attempts = %d, want 1", attempts)
 	}
-	// 验证 prefetch 首帧能拿到
+	// Check that the prefetched first frame arrives
 	c1, _ := stream.Recv()
 	if c1 == nil || c1.ContentDelta != "hello" {
 		t.Errorf("first chunk = %+v, want hello", c1)
@@ -425,7 +427,7 @@ func TestStreamWithRetry_FirstFrameFailRetries(t *testing.T) {
 	stream, err := StreamWithRetry(context.Background(), c, fastConfig(3), func(context.Context) (Stream, error) {
 		attempts++
 		if attempts < 3 {
-			// stream 创建成功,但首帧失败
+			// The stream was created, but the first frame failed
 			return &fakeStream{firstErr: transient}, nil
 		}
 		return &fakeStream{chunks: []*Chunk{{ContentDelta: "good"}}}, nil
@@ -453,7 +455,7 @@ func TestStreamWithRetry_MidStreamFailNotRetried(t *testing.T) {
 		attempts++
 		return &fakeStream{
 			chunks:   []*Chunk{{ContentDelta: "first"}},
-			midErrAt: 1, // 拿完 first 后 Recv 返 transient,不再 retry
+			midErrAt: 1, // after the first frame, Recv returns transient and stops retrying
 			midErr:   transient,
 		}, nil
 	})
@@ -470,19 +472,19 @@ func TestStreamWithRetry_MidStreamFailNotRetried(t *testing.T) {
 	if first.ContentDelta != "first" {
 		t.Errorf("first = %+v", first)
 	}
-	// 第二次 Recv 应该透传 transient err,不 retry
+	// The second Recv should pass the transient error through without retrying
 	_, err = stream.Recv()
 	if !errors.Is(err, transient) {
 		t.Errorf("mid-stream err = %v, want transient (no retry)", err)
 	}
 }
 
-// fakeStream 简单的 Stream 实现,支持注入 firstErr / midErrAt。
+// fakeStream is a simple Stream that can inject firstErr and midErrAt.
 type fakeStream struct {
 	chunks   []*Chunk
 	idx      int
-	firstErr error // 非 nil 时,第一次 Recv 直接返此 err
-	midErrAt int   // 拿完前 midErrAt 帧后,下一次 Recv 返 midErr
+	firstErr error // when non-nil, the first Recv returns it directly
+	midErrAt int   // after midErrAt frames, the next Recv returns midErr
 	midErr   error
 	closed   bool
 }

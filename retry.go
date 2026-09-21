@@ -11,34 +11,40 @@ import (
 	backoff "github.com/cenkalti/backoff/v5"
 )
 
-// ErrorClass LLM provider 错误的语义分类。
+// ErrorClass is the semantic class of an LLM provider error.
 //
-// provider 实现 ErrorClassifier 把自己 transport 层错误(如 *goseek.APIError、
-// net error、ctx 错误)翻译成统一的 ErrorClass。框架据此决定 retry 策略。
+// A provider implements ErrorClassifier to translate its own transport errors, an
+// *goseek.APIError or a net or ctx error, into a common ErrorClass, which the framework
+// uses to decide its retry policy.
 //
-// 不暴露具体 status code — 因为不同 provider 的状态语义不一样,统一抽象到 4 类。
+// Specific status codes are not exposed, because providers disagree about what they
+// mean; everything is reduced to four classes.
 type ErrorClass int
 
 const (
-	// ErrorClassUnknown 未识别错误,等同 Transient 处理(保守 retry)。
+	// ErrorClassUnknown is an unrecognised error, treated like Transient and retried
+	// conservatively.
 	ErrorClassUnknown ErrorClass = iota
-	// ErrorClassTransient 暂时性错误,有限 retry(MaxRetries 控制次数)。
-	// 典型:5xx / 网络抖动 / DNS 临时失败 / connection reset。
+	// ErrorClassTransient is a temporary failure, retried a bounded number of times and
+	// capped by MaxRetries: a 5xx, a flaky network, a temporary DNS failure, a connection
+	// reset.
 	ErrorClassTransient
-	// ErrorClassRateLimit 限流,不计入 MaxRetries，但受独立 elapsed budget 和
-	// 父 ctx 双重约束。
-	// 典型:HTTP 429、provider 自定的 RateLimit 状态。
+	// ErrorClassRateLimit is throttling. It does not count against MaxRetries, but it is
+	// bounded by both a separate elapsed budget and the parent ctx: an HTTP 429, or a
+	// provider's own rate-limit status.
 	ErrorClassRateLimit
-	// ErrorClassPermanent 立即放弃,不 retry。
-	// 典型:401/402/403(auth / 余额不足)、400(bad request)、内容审核拒绝、
-	// 模型不存在;以及 ctx.Canceled / ctx.DeadlineExceeded(外层主动终止)。
+	// ErrorClassPermanent gives up at once, with no retry: 401, 402, and 403 for
+	// authentication or insufficient balance, a 400 bad request, a content-moderation
+	// refusal, a missing model, and ctx.Canceled or ctx.DeadlineExceeded, which mean the
+	// caller stopped it.
 	ErrorClassPermanent
 )
 
-// ErrorClassifier 把 provider 原生 error 翻译成 ErrorClass。
+// ErrorClassifier translates a provider's own error into an ErrorClass.
 //
-// 每个 provider 必须实现一份；没有默认分类，避免把鉴权/参数错误误识别为
-// 可恢复的 Transient。Provider 实现一般是:
+// Every provider must implement one. There is no default classification, which keeps an
+// authentication or argument error from being mistaken for a recoverable transient one.
+// A provider's implementation usually looks like:
 //
 //	type myClassifier struct{}
 //	func (myClassifier) ClassifyError(err error) loom.ErrorClass {
@@ -51,10 +57,11 @@ type ErrorClassifier interface {
 	ClassifyError(err error) ErrorClass
 }
 
-// RetryMode 控制 Transient / Unknown 错误的重试边界。
+// RetryMode bounds how Transient and Unknown errors are retried.
 //
-// RateLimit 受 RateLimitMaxElapsed 与 ctx 约束，Permanent 始终立即返回；
-// 本模式只影响 Transient / Unknown。零值等价 RetryModeFinite。
+// RateLimit is bounded by RateLimitMaxElapsed and ctx, and Permanent always returns at
+// once; this mode affects Transient and Unknown only. The zero value behaves as
+// RetryModeFinite.
 type RetryMode string
 
 const (
@@ -63,12 +70,14 @@ const (
 	RetryModeDisabled     RetryMode = "disabled"
 )
 
-// ErrAttemptTimeout 表示一次模型 attempt 的局部 deadline 已到，但调用方传入的
-// 父 ctx 仍然有效。它是可恢复错误，不能和整条 Turn 的总 deadline 混为一谈。
+// ErrAttemptTimeout means one attempt's own deadline expired while the parent ctx the
+// caller passed is still live. It is a recoverable error, and must not be confused with
+// the whole Turn's deadline.
 var ErrAttemptTimeout = errors.New("loom: model attempt timeout")
 
-// AttemptTimeoutError 保留单次超时的原始错误文本，同时通过 Unwrap 暴露
-// ErrAttemptTimeout，避免原始 context.DeadlineExceeded 再被误判成父级总超时。
+// AttemptTimeoutError keeps the original text of a single attempt's timeout and exposes
+// ErrAttemptTimeout through Unwrap, so the underlying context.DeadlineExceeded is not
+// mistaken for the parent's own deadline.
 type AttemptTimeoutError struct {
 	Timeout time.Duration
 	Cause   error
@@ -86,8 +95,9 @@ func (e *AttemptTimeoutError) Error() string {
 
 func (e *AttemptTimeoutError) Unwrap() error { return ErrAttemptTimeout }
 
-// ClassifiedError 是 retry 调度最终返回的类型化模型错误。上层编排器可据此决定
-// 是否切换模型、延长到业务总 deadline，避免解析 provider 文本或 SDK 私有类型。
+// ClassifiedError is the typed model error the retry schedule finally returns. An
+// orchestrator above it can decide whether to switch models or extend a business deadline
+// without parsing provider text or an SDK's private types.
 type ClassifiedError struct {
 	Class    ErrorClass
 	Attempts int
@@ -103,7 +113,7 @@ func (e *ClassifiedError) Error() string {
 
 func (e *ClassifiedError) Unwrap() error { return e.Err }
 
-// ErrorClassOf 从错误链读取统一模型错误分类。
+// ErrorClassOf reads the common error class from an error chain.
 func ErrorClassOf(err error) (ErrorClass, bool) {
 	var classified *ClassifiedError
 	if !errors.As(err, &classified) {
@@ -127,45 +137,50 @@ func (c ErrorClass) String() string {
 	}
 }
 
-// RetryConfig 通用 retry 调度配置。所有 provider 共享。
+// RetryConfig is the shared retry schedule configuration, used by every provider.
 //
-// 字段为零值时,DefaultRetryConfig 的默认值会在 ChatWithRetry / StreamWithRetry
-// 入口生效。
+// A zero field takes its default from DefaultRetryConfig when ChatWithRetry or
+// StreamWithRetry starts.
 type RetryConfig struct {
-	// Mode 控制 Transient / Unknown 错误是有限重试、重试到 ctx 结束，还是关闭重试。
-	// 零值按 RetryModeFinite 处理。
+	// Mode decides whether Transient and Unknown errors are retried a bounded number of
+	// times, retried until ctx ends, or not retried at all. The zero value means
+	// RetryModeFinite.
 	Mode RetryMode
 
-	// MaxRetries Transient 类错误的最大重试次数(首次调用不计)。
-	// 例 MaxRetries=2 表示最多尝试 3 次(1 次首调 + 2 次重试)。
-	// RateLimit 类不受次数限制但受 elapsed budget 约束，Permanent 类完全跳过。
+	// MaxRetries caps the retries of Transient errors; the first call does not count, so
+	// MaxRetries=2 means at most three attempts, one initial and two retries. RateLimit is
+	// unbounded by count but bounded by the elapsed budget, and Permanent is skipped
+	// entirely.
 	MaxRetries int
 
-	// RateLimitMaxElapsed 限制一个逻辑 LLM 调用从首次 429 起最多等待多久。
-	// 它与父 ctx 共同生效，先到者终止重试。
+	// RateLimitMaxElapsed bounds how long one logical call may wait from its first 429. It
+	// applies together with the parent ctx, and whichever comes first ends the retries.
 	RateLimitMaxElapsed time.Duration
 
-	// InitialBackoff 首次 backoff 间隔。指数退避从此起步。
+	// InitialBackoff is the first backoff interval, where exponential backoff starts.
 	InitialBackoff time.Duration
 
-	// MaxBackoff backoff 上限。指数退避不超过此值。
+	// MaxBackoff caps the backoff; exponential growth never exceeds it.
 	MaxBackoff time.Duration
 
-	// PerCallTimeout 每次单次 Chat 调用的 ctx 超时。
-	// 仅 ChatWithRetry 使用。StreamWithRetry 只负责建连和首帧重试；完整流的
-	// 生命周期由消费方控制，StreamLLMToStep 默认施加系统级单次流超时。
+	// PerCallTimeout bounds each single Chat call through ctx. Only ChatWithRetry uses
+	// it: StreamWithRetry covers connection setup and the first frame, and the consumer
+	// owns the rest of the stream's life. StreamLLMToStep applies its own per-stream
+	// timeout by default.
 	PerCallTimeout time.Duration
 
-	// AttemptLimiter 在每个真实 HTTP/流式 attempt 周围取得 permit。
-	// Backoff 期间不持有 permit；同一供应商凭据的模型应共享 AttemptMeta.QuotaKey。
+	// AttemptLimiter takes a permit around each real HTTP or streaming attempt. No permit
+	// is held during backoff. Models sharing one provider credential should share an
+	// AttemptMeta.QuotaKey.
 	AttemptLimiter AttemptLimiter
 	AttemptMeta    AttemptMeta
 }
 
-// DefaultRetryConfig 返回框架推荐默认值。
+// DefaultRetryConfig returns the defaults the framework recommends.
 //
-// 业务方一般不需要改这些值 — 这是基于"大多数 SaaS LLM 限流 / 抖动模式"的折中。
-// 真要调,例如 dev 环境想快速 fail 改 MaxRetries=0,或长 prompt 给更长 PerCallTimeout。
+// Product code rarely needs to change them; they are a compromise based on how most
+// hosted LLM APIs throttle and flake. When it does, a development environment that wants
+// to fail fast sets MaxRetries=0, and a long prompt deserves a longer PerCallTimeout.
 func DefaultRetryConfig() *RetryConfig {
 	return &RetryConfig{
 		Mode:                RetryModeFinite,
@@ -177,7 +192,7 @@ func DefaultRetryConfig() *RetryConfig {
 	}
 }
 
-// applyDefaults 对零值字段填默认值(就地修改)。
+// applyDefaults fills zero fields with their defaults, in place.
 func (c *RetryConfig) applyDefaults() {
 	def := DefaultRetryConfig()
 	if c.Mode == "" {
@@ -223,8 +238,8 @@ func normalizedRetryConfig(config *RetryConfig) (*RetryConfig, error) {
 	return config, nil
 }
 
-// newBackoff 构造 backoff 调度器。
-// backoff/v5 默认不限制总时长 — 总时长由外层 ctx + MaxRetries 控制。
+// newBackoff builds the backoff schedule. backoff/v5 bounds no total duration by default;
+// the outer ctx and MaxRetries do that.
 func (c *RetryConfig) newBackoff() *backoff.ExponentialBackOff {
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = c.InitialBackoff
@@ -232,7 +247,8 @@ func (c *RetryConfig) newBackoff() *backoff.ExponentialBackOff {
 	return bo
 }
 
-// ChatWithRetry 通用 retry 调度,wrap 一次同步 Chat 调用。Provider 在 Chat 内调:
+// ChatWithRetry is the shared retry schedule around one synchronous Chat call, which a
+// provider invokes inside its own Chat:
 //
 //	func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatResponse, error) {
 //	    return loom.ChatWithRetry(ctx, m.classifier, m.retryCfg, func(callCtx context.Context) (*loom.ChatResponse, error) {
@@ -240,12 +256,14 @@ func (c *RetryConfig) newBackoff() *backoff.ExponentialBackOff {
 //	    })
 //	}
 //
-// 行为:
-//   - 每次尝试 fn 都拿到一个 PerCallTimeout-wrap 的 callCtx
-//   - 错误分类:Transient 计数 retry / RateLimit 不计次数但有 elapsed budget / Permanent 立即放弃
-//   - 外层 ctx 取消立即放弃(把 ctx.Err 当 Permanent)
+// Behaviour:
+//   - every attempt of fn gets a callCtx wrapped with PerCallTimeout
+//   - errors are classified: Transient counts and retries, RateLimit does not count but
+//     runs against an elapsed budget, Permanent gives up at once
+//   - a cancelled outer ctx gives up at once, treating ctx.Err as Permanent
 //
-// classifier 不可为 nil — 框架不提供默认分类器,避免把永久错误错误重试。
+// classifier must not be nil. The framework provides no default classifier, which keeps a
+// permanent error from being retried.
 func ChatWithRetry(
 	ctx context.Context,
 	classifier ErrorClassifier,
@@ -253,7 +271,7 @@ func ChatWithRetry(
 	fn func(callCtx context.Context) (*ChatResponse, error),
 ) (*ChatResponse, error) {
 	if classifier == nil {
-		return nil, errors.New("loom.ChatWithRetry: classifier 不能为 nil")
+		return nil, errors.New("loom.ChatWithRetry: classifier must not be nil")
 	}
 	var err error
 	cfg, err = normalizedRetryConfig(cfg)
@@ -283,8 +301,8 @@ func ChatWithRetry(
 				finishAttempt(permit, AttemptResult{ErrorClass: lastClass, Err: parentCtxErr})
 				return nil, backoff.Permanent(parentCtxErr)
 			}
-			// 只要父 ctx 仍有效，模型调用内部出现的 deadline/cancel 就属于
-			// 本次 attempt，而不是整条任务的终止信号。
+			// While the parent ctx is still live, a deadline or cancellation inside the
+			// model call belongs to this attempt, not to the whole task.
 			if attemptCtxErr != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 				err = &AttemptTimeoutError{Timeout: cfg.PerCallTimeout, Cause: err}
 				lastClass = ErrorClassTransient
@@ -309,7 +327,8 @@ func ChatWithRetry(
 	return nil, &ClassifiedError{Class: lastClass, Attempts: totalAttempts, Err: err}
 }
 
-// StreamWithRetry 通用 retry 调度,wrap 一次 Stream 调用 + 首帧探活。Provider 在 Stream 内调:
+// StreamWithRetry is the shared retry schedule around one Stream call plus a first-frame
+// liveness probe, which a provider invokes inside its own Stream:
 //
 //	func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, error) {
 //	    return loom.StreamWithRetry(ctx, m.classifier, m.retryCfg, func(streamCtx context.Context) (loom.Stream, error) {
@@ -317,16 +336,19 @@ func ChatWithRetry(
 //	    })
 //	}
 //
-// 行为:
-//   - retry fn 直到拿到合法 Stream(Stream() 失败计入 retry)
-//   - 拿到 Stream 后 prefetch 第一帧探活:
-//   - 第一帧返非 EOF 错误 → Close 流,把错误当作 Stream() 失败 retry
-//   - 第一帧成功 / EOF → 用 prefixStream 包装,业务方 Recv 时先吐探活帧再继续 inner.Recv
-//   - 由 fn 创建的 Stream 不受 PerCallTimeout 控制；StreamLLMToStep 在更外层
-//     对一次完整流施加独立 timeout，避免 provider 内部重试重置总时限
+// Behaviour:
+//   - fn is retried until it returns a usable Stream; a Stream() failure counts as a retry
+//   - once there is a Stream, the first frame is prefetched as a liveness probe
+//   - a non-EOF error on the first frame closes the stream and retries as if Stream() had
+//     failed
+//   - a successful first frame, or EOF, is wrapped in prefixStream, so the consumer's
+//     first Recv returns the probed frame and later ones go through to inner.Recv
+//   - a Stream created by fn is not under PerCallTimeout; StreamLLMToStep applies its own
+//     timeout to a whole stream further out, so a provider's internal retry cannot reset
+//     the overall deadline
 //
-// 注:streamCtx 等于外层 ctx,不带额外 timeout。fn 实现内部应该负责 connect timeout
-// 等(走 HTTP client 配置)。
+// streamCtx equals the outer ctx, with no extra timeout. The fn implementation owns
+// connect timeouts and the like, through its HTTP client configuration.
 func StreamWithRetry(
 	ctx context.Context,
 	classifier ErrorClassifier,
@@ -334,7 +356,7 @@ func StreamWithRetry(
 	fn func(streamCtx context.Context) (Stream, error),
 ) (Stream, error) {
 	if classifier == nil {
-		return nil, errors.New("loom.StreamWithRetry: classifier 不能为 nil")
+		return nil, errors.New("loom.StreamWithRetry: classifier must not be nil")
 	}
 	var err error
 	cfg, err = normalizedRetryConfig(cfg)
@@ -364,8 +386,9 @@ func StreamWithRetry(
 			finishAttempt(permit, failedAttempt(classifier, lastClass, err))
 			return nil, classifyForBackoff(err, lastClass, cfg, &nonRateLimitAttempts, &rateLimitStarted)
 		}
-		// 探活第一帧:Stream() 不返 error 不代表服务端真接受了请求 —
-		// 部分 provider 在第一帧 chunk 才返 4xx/5xx body。
+		// Probe the first frame: Stream() not returning an error does not mean the server
+		// accepted the request, because some providers only return a 4xx or 5xx body with
+		// the first chunk.
 		first, recvErr := stream.Recv()
 		if recvErr != nil && !errors.Is(recvErr, io.EOF) {
 			_ = stream.Close()
@@ -396,14 +419,17 @@ func StreamWithRetry(
 	return nil, &ClassifiedError{Class: lastClass, Attempts: totalAttempts, Err: err}
 }
 
-// classifyForBackoff 把原始错误翻成 backoff 期望的"是否 permanent"语义。
+// classifyForBackoff turns the original error into the permanent-or-not answer backoff
+// wants.
 //
-//   - Permanent / ctx.Canceled / ctx.DeadlineExceeded → 立即放弃(backoff.Permanent)
-//   - RateLimit → 透传,不计数,由独立 elapsed budget 和 ctx 兜底
-//   - Transient → 计数,超过 MaxRetries 升级为 Permanent;否则透传 retry
-//   - Unknown → 按 Transient 处理
+//   - Permanent, ctx.Canceled, ctx.DeadlineExceeded → give up at once, backoff.Permanent
+//   - RateLimit → pass through without counting, bounded by the elapsed budget and ctx
+//   - Transient → count it, and escalate to Permanent past MaxRetries; otherwise pass
+//     through and retry
+//   - Unknown → treat as Transient
 //
-// nonRateLimitAttempts 是非 RateLimit 错误的累计次数(由调用方维护)。
+// nonRateLimitAttempts is the running count of non-RateLimit errors, maintained by the
+// caller.
 func classifyForBackoff(
 	err error,
 	class ErrorClass,
@@ -439,13 +465,10 @@ func classifyForBackoff(
 	}
 }
 
-// prefixStream 把 prefetch 的首帧挂在 inner stream 前。
+// prefixStream puts the prefetched first frame in front of the inner stream.
 //
-// 业务方 Recv 时:
-//  1. 首次 Recv → 返 prefetch 的首帧(或直接 EOF)
-//  2. 之后 Recv → 透传到 inner.Recv
-//
-// Close 透传给 inner。
+// The consumer's Recv returns the prefetched frame first, or EOF directly, and later
+// calls go through to inner.Recv. Close goes through to inner.
 type prefixStream struct {
 	inner         Stream
 	first         *Chunk
