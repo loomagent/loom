@@ -213,7 +213,8 @@ pattern 会在构建契约时被拒。有一处刻意偏离规范:`integer` 必�
 - `github.com/loomagent/loom/tools/calculator`:沙箱化的 Starlark 计算器
 - `github.com/loomagent/loom/tools/gettime`:固定北京时间的工具
 
-架构与最初的设计决策记录在 [DESIGN.md](DESIGN.md) 中。
+架构与最初的设计决策记录在 [DESIGN.md](DESIGN.md) 中,另有
+[英文版](DESIGN.en.md)。
 
 ## 模型工厂
 
@@ -429,9 +430,10 @@ CI 会执行以上全部命令。`golangci-lint` 承载了项目测试原则所�
 
 ### 文档语言
 
-README 保持中英双语:本文件是中文版,[README.md](README.md) 是英文版。两份都以
-指向对方的链接开头,并且在同一次改动里一起更新,读者不会落在一份过期的翻译上。
-`DESIGN.md` 目前只有中文版。
+README 保持中英双语:本文件是中文版,[README.md](README.md) 是英文版。设计文档
+同样如此:[DESIGN.md](DESIGN.md) 是中文原文,[DESIGN.en.md](DESIGN.en.md) 是
+英文版。每个文件都以指向另一语言版本的链接开头,并且两份在同一修改中一起更新,
+读者不会落在一份过期的翻译上。
 
 ## 智谱 AI(国内按量付费 API)
 
