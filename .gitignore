@@ -1,2 +1,4 @@
 # Coverage profiles from scripts/check-coverage.sh.
 coverage.out
+# Live provider credentials: fill in live.env from live.env.example.
+live.env

@@ -507,6 +507,42 @@ checks against a floor. The floor is a ratchet against regressions, not the
 branch-coverage target: `go test -cover` counts only each package's own tests, so
 the total understates packages whose API other packages exercise.
 
+### Live provider tests
+
+`livetest/` runs Loom against real provider endpoints. Copy `live.env.example`
+somewhere outside the repository, fill in an endpoint, a key, and one or more
+models per provider, then point the suite at it:
+
+```bash
+LOOM_LIVE_ENV=~/live.env go test ./livetest/
+```
+
+That path is the only switch: there is no default location, so `go test ./...`
+never reaches a provider, never spends a credential, and CI needs none.
+
+A block names a provider and lists its models, so one credential covers as many
+models as you want to watch:
+
+```ini
+LOOM_LIVE_PROVIDERS=deepseek,openrouter
+LOOM_LIVE_DEEPSEEK_URL=https://api.deepseek.com/v1
+LOOM_LIVE_DEEPSEEK_KEY=...
+LOOM_LIVE_DEEPSEEK_MODELS=<model>[,<model>...]
+```
+
+Every model runs the same three flows: a streamed tool-calling turn whose
+arguments are decoded against the tool's own contract, that assistant turn
+carried back into a second request, and a structured-output call. Those are what
+the suite asserts; what varies by model, such as how much reasoning came back or
+whether it arrived as structured blocks, is logged instead. Each provider is a
+subtest and each model a subtest of that, so `-run TestLiveProviders/openrouter`
+selects one provider and `-run TestLiveProviders/<provider>/<model>` one model.
+
+`livetest/env_test.go` covers the file's parsing and every error it reports. It
+also fails when this README or `live.env.example` names a model: the example ships
+the shape of the configuration and leaves the choice to the operator, because
+which models a credential may call is theirs.
+
 `internal/toolcontract` validates its subset against the official
 [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite):
 the draft2020-12 files for the supported keywords are vendored under
