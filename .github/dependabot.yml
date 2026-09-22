@@ -1,9 +1,8 @@
 version: 2
 
+# One pull request per ecosystem: module dependencies arrive as a single group, and the pinned
+# actions as another. Dependabot cannot combine the two, so the most a run opens is two.
 updates:
-  # The module's dependencies, read from go.mod. Each one lands as its own pull request, because a
-  # library's dependency bumps are worth reading one at a time and a broken one can then be
-  # reverted without touching the rest.
   - package-ecosystem: gomod
     directory: /
     schedule:
@@ -11,11 +10,13 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    groups:
+      go-modules:
+        patterns:
+          - "*"
 
-  # The actions both workflows run. They are pinned to a commit, and Dependabot understands the
-  # pin and its trailing version comment, so an upgrade arrives as a reviewed revision instead of
-  # a hash edited by hand. Grouped into one pull request: these bumps are mechanical, and they
-  # either all keep working or all need the same look.
+  # Dependabot understands the commit pins and their trailing version comments, so an upgrade
+  # arrives as a reviewed revision instead of a hash edited by hand.
   - package-ecosystem: github-actions
     directory: /
     schedule:
