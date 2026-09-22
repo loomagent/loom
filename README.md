@@ -202,12 +202,13 @@ through a `json_object` request when that is all the model declares. Loom never
 writes the schema, or anything else the caller did not write, into the prompt: a
 model that declares no structured-output support fails rather than being asked
 anyway, and a capability left undeclared sends the request exactly as written. In
-`json_object` mode the prompt has to ask for JSON itself, and to show the shape:
-DeepSeek [documents](https://api-docs.deepseek.com/guides/json_mode) that the system
-or user prompt must contain the word `json` and an example of the expected JSON, and
-answers `400 Prompt must contain the word 'json' in some form to use
-'response_format' of type 'json_object'` without it — a permanent request failure
-Loom does not retry. Two more points from that guide shape this path: `max_tokens`
+`json_object` mode the prompt has to ask for JSON itself, and to show the shape. That is
+the OpenAI-compatible convention rather than one vendor's quirk, and providers enforce it:
+DeepSeek [documents](https://api-docs.deepseek.com/guides/json_mode) that the system or
+user prompt must contain the word `json` and an example of the expected JSON, and the live
+suite shows DeepSeek and Ark both rejecting the request without it — `400 Prompt must
+contain the word 'json' in some form to use 'response_format' of type 'json_object'` — as
+a permanent failure Loom does not retry. Two more points from that guide shape this path: `max_tokens`
 has to leave room for the whole object, because a truncated response is reported as
 an invalid one, and the API may occasionally return empty content, which is reported
 the same way. Two methods carry the shape for such a request: `contract.Example()`
@@ -643,13 +644,12 @@ LOOM_LIVE_DEEPSEEK_KEY=...
 LOOM_LIVE_DEEPSEEK_MODELS=<model>[,<model>...]
 ```
 
-Every model runs the same four flows: a streamed tool-calling turn whose
-arguments are decoded against the tool's own contract, that assistant turn
-carried back into a second request, a structured-output call, and the `json_object`
-composition above — the contract's instruction in one message and the caller's task
-in another, which must satisfy the contract within one retry. Those are what the
-suite asserts; what varies by model, such as how much reasoning came back, whether
-it arrived as structured blocks, or how many attempts the `json_object` phase
+Every model runs three flows: a streamed tool-calling turn whose arguments are
+decoded against the tool's own contract, that assistant turn carried back into a
+second request, and a structured-output call made the only way `json_object` allows —
+the composition above, whose contract has to be satisfied within one retry. Those are
+what the suite asserts; what varies by model, such as how much reasoning came back,
+whether it arrived as structured blocks, or how many attempts that structured call
 needed, is logged instead. Each provider is a
 subtest and each model a subtest of that, so `-run TestLiveProviders/openrouter`
 selects one provider and `-run TestLiveProviders/<provider>/<model>` one model.

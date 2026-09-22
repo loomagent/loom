@@ -179,7 +179,8 @@ JSON **并给出期望的 JSON 样例**:DeepSeek 的
 [文档](https://api-docs.deepseek.com/zh-cn/guides/json_mode)要求 system 或 user prompt
 必须含有 json 字样、并给出样例,否则回
 `400 Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'`
-——loom 把它当作请求层永久失败,不会重试。那份文档还有两点影响这条路径:`max_tokens`
+——loom 把它当作请求层永久失败,不会重试。**这不是某家的怪癖,而是 OpenAI 兼容的通用约定**,
+而且各家真的强制:live 套件里 DeepSeek 与方舟都会这么回。那份文档还有两点影响这条路径:`max_tokens`
 要留够空间,截断的响应会按“非法输出”上报;API 有概率返回空的 content,上报方式相同。
 承载这份形状的是两个方法:`contract.Example()` 返回契约从声明的 `Example` 值组装并校验过的
 样例;`contract.JSONObjectPrompt()` 返回完整的那段引导语——
@@ -555,11 +556,11 @@ LOOM_LIVE_DEEPSEEK_KEY=...
 LOOM_LIVE_DEEPSEEK_MODELS=<model>[,<model>...]
 ```
 
-每个模型都跑同样四条链路:一轮流式工具调用(其参数会按工具自己的契约解码)、
-把该 assistant 轮回传进第二次请求、一次结构化输出调用,以及上面那段 `json_object` 拼法
-——契约引导语一条消息、调用方任务另一条消息——它必须在一次重试内满足契约。这四条是
-测试断言的对象;随模型而变的东西——拿回多少推理文本、是否以结构化块返回、`json_object`
-那相位用了几次尝试——只记日志不断言。每家
+每个模型都跑同样三条链路:一轮流式工具调用(其参数会按工具自己的契约解码)、
+把该 assistant 轮回传进第二次请求、以及一次"按 `json_object` 唯一可行方式"发的结构化
+调用——就是上面那段拼法,契约必须在一次重试内被满足。这三条是测试断言的对象;随模型
+而变的东西——拿回多少推理文本、是否以结构化块返回、那次结构化调用用了几次尝试——只记
+日志不断言。每家
 provider 是一个子测试、其下每个模型又是一个子测试,因此
 `-run TestLiveProviders/<provider>` 选中一家,`-run
 TestLiveProviders/<provider>/<model>` 选中一个模型。

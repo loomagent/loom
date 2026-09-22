@@ -156,40 +156,16 @@ func exerciseModel(t *testing.T, block liveBlock, model string) {
 	}
 	t.Logf("carried back: finish=%s content=%q", second.FinishReason, second.Content)
 
-	// The structured path declares its mode, so the provider uses the endpoint's own response
-	// format instead of relying on the prompt to ask for JSON.
-	built, err = modelfactory.Build(modelfactory.Config{
-		Provider:     block.Provider,
-		APIKey:       block.APIKey,
-		BaseURL:      block.BaseURL,
-		Model:        model,
-		Capabilities: &loom.ModelCapabilities{StructuredOutput: loom.StructuredOutputJSONObject},
-	})
-	if err != nil {
-		t.Fatalf("build %s/%s for structured output: %v", block.Provider, model, err)
-	}
-	answer := loom.String("answer").Required().Desc("The numeric answer.")
-	certain := loom.Bool("certain").Required().Desc("Whether you are certain of the answer.")
-	verdict := loom.MustArgsContract("verdict", answer, certain)
-	structured, response, err := loom.ChatStructuredArgs(ctx, "live", built, loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "What is 17*23?"}},
-		Reasoning: reasoning,
-	}, verdict)
-	if err != nil {
-		t.Fatalf("structured output: %v", err)
-	}
-	if !strings.Contains(answer.Get(structured), "391") {
-		t.Errorf("structured output answered %q, want an answer containing %q", answer.Get(structured), "391")
-	}
-	t.Logf("structured output: answer=%q certain=%v model=%s",
-		answer.Get(structured), certain.Get(structured), response.Model)
-
 	exerciseJSONObjectPrompt(t, ctx, block, model, reasoning)
 }
 
 // exerciseJSONObjectPrompt runs the composition the README recommends where no schema field
 // exists: the contract's own instruction in a system message, the caller's task in a user
 // message, and no format rules in the task.
+//
+// This is the only way a json_object request can work: the provider requires the prompt to contain
+// the word "json" and refuses the request with a 400 rather than answering, and the suite used to
+// pass only because Loom wrote that word into the prompt itself.
 //
 // It asserts the recipe, not one model's obedience. The first attempt satisfies the contract on
 // a compliant model; when a model does not comply, the documented retry — the rejected output,
@@ -198,10 +174,9 @@ func exerciseModel(t *testing.T, block liveBlock, model string) {
 // is exactly why the caller owns the retry in the first place.
 func exerciseJSONObjectPrompt(t *testing.T, ctx context.Context, block liveBlock, model string, reasoning loom.Reasoning) {
 	t.Helper()
-	verdict := loom.Enum("verdict", "positive", "negative", "mixed").Required().Example("mixed")
-	confidence := loom.Float("confidence").Required().Min(0).Max(1).Example(0.6)
-	notes := loom.String("notes").Required().MinLen(1).MaxLen(80).Example("fast but damaged")
-	contract := loom.MustArgsContract("sentiment", verdict, confidence, notes)
+	answer := loom.String("answer").Required().Desc("The numeric answer.").Example("17 × 23 = 391")
+	certain := loom.Bool("certain").Required().Desc("Whether you are certain of the answer.").Example(true)
+	contract := loom.MustArgsContract("verdict", answer, certain)
 	schemaJSON, err := jsonv2.Marshal(contract.Schema())
 	if err != nil {
 		t.Fatalf("marshal contract schema: %v", err)
@@ -225,14 +200,17 @@ func exerciseJSONObjectPrompt(t *testing.T, ctx context.Context, block liveBlock
 
 	messages := []loom.Message{
 		{Role: loom.RoleSystem, Content: contract.JSONObjectPrompt()},
-		{Role: loom.RoleUser, Content: "Judge the overall sentiment of this delivery review: 'The delivery was fast but the box was damaged.'"},
+		{Role: loom.RoleUser, Content: "What is 17*23?"},
 	}
 	for attempt := 1; attempt <= jsonObjectPromptAttempts; attempt++ {
-		args, _, callErr := loom.ChatStructuredArgs(ctx, "live.json_object", built,
+		args, response, callErr := loom.ChatStructuredArgs(ctx, "live.json_object", built,
 			loom.ChatRequest{Messages: messages, Reasoning: reasoning}, contract)
 		if callErr == nil {
-			t.Logf("json_object prompt: attempt %d/%d satisfied the contract (verdict=%q confidence=%v)",
-				attempt, jsonObjectPromptAttempts, verdict.Get(args), confidence.Get(args))
+			t.Logf("json_object prompt: attempt %d/%d satisfied the contract (model=%s)",
+				attempt, jsonObjectPromptAttempts, response.Model)
+			if !strings.Contains(answer.Get(args), "391") {
+				t.Errorf("json_object prompt answered %q, want an answer containing %q", answer.Get(args), "391")
+			}
 			return
 		}
 		var invalid *loom.StructuredOutputError
