@@ -35,3 +35,4 @@ jobs:
         run: |
           go run ./examples/quickstart
           go run ./examples/react
+          go run ./examples/structured
