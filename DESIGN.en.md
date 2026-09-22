@@ -495,6 +495,10 @@ contract. The schema is never written into the prompt: a request that constrains
 rewriting the conversation is a hidden one. Loom asks once — an invalid response returns as a
 `*StructuredOutputError` carrying it, and how many more times to ask, with what context, is the
 caller's decision (a react turn feeds the error back beside the rest of the conversation).
+In `json_object` mode the prompt belongs to the caller, and the contract hands over material it
+already validated: `contract.Example()` is an instance that satisfies the schema, and
+`contract.JSONObjectPrompt()` is the whole instruction — ask for JSON, show the example, name the
+fields. Loom never puts either of them into a request.
 
 ### 7.5 Synchronous calls and failover
 
@@ -507,6 +511,54 @@ failover. Providers still own transport retries. `ShouldFailover` and `GetFailov
 decide whether to switch and which model to switch to.
 
 ---
+
+### 7.6 The Responses API: evaluated, not adopted
+
+**Decision**: no Responses API adapter. What it uniquely offers we already receive over chat
+completions, and the part that is not portable is not worth binding to one provider.
+
+**What was measured** (four providers, over raw HTTP and through `openai-go/v3`)
+
+| provider | `/responses` | reasoning item | `message.phase` | tools | `text.format` | carrying history back |
+|---|---|---|---|---|---|---|
+| DeepSeek | ✓ `/v1/responses` | ✓ with `encrypted_content` | **✓ both `commentary` and `final_answer` observed** | ✓ | ✓ | ✓ |
+| Ark | ✓ `/api/v3/responses` | ✓ `summary` + encrypted | ✗ | ✓ | ✓ | ✓ |
+| Zhipu | ✓ `/api/v1/responses` | ✓ no summary, no encrypted | ✗ | ✓ | **✗ answers with Markdown** | **✗ 400: multi-turn needs `store` + `previous_response_id`** |
+| OpenRouter (grok) | ✓ `/api/v1/responses` | ✓ `summary` + encrypted | ✗ | ✓ | ✓ | ✓ |
+
+Only DeepSeek sets `phase`, and the SDK documents it as model-family behaviour ("For models like
+`gpt-5.3-codex` and beyond") rather than a platform guarantee. It also labels the **message**, not
+the text: a `final_answer` message can still carry commentary.
+
+**Why not**
+
+1. Its one uniquely useful ability, separating reasoning from message text structurally, is
+   already carried over chat completions: `ReasoningContent` plus `ReasoningDetails`, whose raw
+   JSON is exactly `summary` / `encrypted_content`.
+2. The other, `phase`, is not portable — one provider, and model behaviour rather than a contract.
+   A judgement resting on it is a judgement bound to a vendor.
+3. It leans towards server-side turns (`store`, `previous_response_id`), the opposite of this
+   design's "the caller holds history and the framework defines no Repository" (decision 20).
+4. The migration is real work: an items-shaped protocol, an event stream ending with
+   `response.completed` instead of `[DONE]`, and a per-provider divergence tax (Zhipu's Responses
+   is partial).
+5. Structured output gains nothing there and costs one more divergence (Zhipu ignores
+   `text.format`).
+
+**What this evaluation does not change**
+
+A tool round's content can arrive alongside tool calls and already contain conclusions (measured:
+one response holding `reasoning` + `content` + `tool_call`, where the content was the computed
+result). The answer can therefore only come from a round in which tools have been removed, and chat
+completions supports that fully: a terminal tool, physically removing the tools, and `tool_choice`.
+
+**When to revisit**
+
+1. the main models become OpenAI-family and single-vendor, where `phase` and typed reasoning items
+   are a stable gain;
+2. a client or toolchain that only speaks Responses has to be supported (compatibility, not
+   capability);
+3. a provider stops exposing chat completions.
 
 ## 8. Package layout
 
@@ -521,6 +573,7 @@ github.com/loomagent/loom/
   argument_guidance.go          the expected / example arguments summary
   schema.go schema_model.go     the loom.Schema model
   schema_error.go               violation -> model-facing wording
+  format_validation.go          format semantics (calendar / clock / leap second)
   structured_output.go          ChatStructuredArgs
 
   # The model abstraction and calling
@@ -551,6 +604,7 @@ github.com/loomagent/loom/
   # Validation and conformance
   internal/schema/               the schema model itself
   internal/toolcontract/         the validator plus the official JSON Schema Test Suite subset
+  testdata/format/               the suite's optional/format cases (date/time/date-time/uuid)
 
   # Surrounding frameworks
   modelprobe/                    behavioural model capability probing
@@ -602,6 +656,10 @@ github.com/loomagent/loom/
 | 26 | `ValidateSchema` compiles its schema on every call; nothing caches it, because a schema is a plain value its caller may edit | done |
 | 27 | The framework ships no throttling policy — windows, AIMD, circuit thresholds are deployment policy — only the per-attempt admission seam | done |
 | 28 | A provider's structured reasoning round-trips as the raw blocks it sent, in order: Message, ChatResponse, and Chunk each carry it opaquely, and a stream is concatenated frame by frame as the vendor documents | done |
+| 29 | the framework writes no prompt and performs no output retry: it asks once and hands back the response and the error; how many more attempts, and what they carry, is the caller's | landed |
+| 30 | in `json_object` mode the prompt belongs to the caller; the contract only hands over what it validated at build time (`Example()` / `JSONObjectPrompt()`) | landed |
+| 31 | an `integer` is judged by value (exact rational arithmetic); `format` is asserted in the contract while the schema keeps the specification's annotation semantics | landed |
+| 32 | the subset suite's skips are counted in three categories: unmodeled keywords (18, a policy), keyword spellings (4, a policy), unimplemented constructs (14, a gap) | landed |
 
 Dropped: the Note family (reasoning plus a label already carries process information);
 CloseDetector (external termination is a cancelled ctx with a cause); `Writer.RunTool`
