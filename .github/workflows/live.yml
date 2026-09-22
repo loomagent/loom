@@ -12,10 +12,9 @@ name: Live provider tests
 on:
   workflow_dispatch:
 
-# Uncomment to validate against the providers on a schedule. Every run spends the configured
-# models' credit, which is why it is off until an operator turns it on.
-#  schedule:
-#    - cron: "0 6 * * 1"
+# Manual only, by decision: every run spends the configured models' credit and this repository
+# does not want unattended spend. A schedule, if it is ever wanted, also wants an environment
+# protection rule so the run waits for approval rather than spending on its own.
 
 permissions:
   contents: read
