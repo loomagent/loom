@@ -290,10 +290,9 @@ func TestUintArgumentRange(t *testing.T) {
 func TestUintArgumentRejectsValuesThatDoNotFit(t *testing.T) {
 	n := Uint("n")
 	contract := MustArgsContract("count", n)
-	// These are integers to JSON Schema but exceed uint64 or are not written as
-	// integers, so they must be reported as type problems rather than reaching
-	// the handle.
-	for _, raw := range []string{`{"n":1e3}`, `{"n":18446744073709551616}`} {
+	// These integers exceed uint64, so they must be reported as type problems rather than
+	// reaching the handle, whatever spelling they arrive in.
+	for _, raw := range []string{`{"n":1e30}`, `{"n":18446744073709551616}`, `{"n":1.8446744073709552e19}`} {
 		_, err := contract.Decode(raw)
 		if _, ok := errors.AsType[*ToolArgumentError](err); !ok {
 			t.Fatalf("Decode(%s) error type = %T, want *ToolArgumentError", raw, err)
@@ -636,5 +635,49 @@ func TestArgsContractJSONObjectPrompt(t *testing.T) {
 	// A contract with no arguments says so with the empty object, not with "Fields: none".
 	if got, want := MustArgsContract("get_time").JSONObjectPrompt(), "Answer with JSON of exactly this shape:\n{}"; got != want {
 		t.Fatalf("prompt for a contract with no arguments = %q, want %q", got, want)
+	}
+}
+
+// The specification defines an integer by its value rather than its spelling, so the three ways
+// of writing five are one value, and a literal the handle cannot hold is a model-facing problem
+// instead of a panic when a handler reads it.
+func TestIntegerIsMatchedByValue(t *testing.T) {
+	t.Parallel()
+	count := Uint("count").Required()
+	contract := MustArgsContract("count", count)
+	for _, tc := range []struct {
+		name      string
+		arguments string
+		want      uint64
+	}{
+		{"integer", `{"count":5}`, 5},
+		{"fraction of zero", `{"count":5.0}`, 5},
+		{"exponent", `{"count":5e0}`, 5},
+		{"exponent scaling", `{"count":5e2}`, 500},
+		{"large but exact", `{"count":9007199254740993}`, 9007199254740993},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			args, err := contract.Decode(tc.arguments)
+			if err != nil {
+				t.Fatalf("decode %s: %v", tc.arguments, err)
+			}
+			if got := count.Get(args); got != tc.want {
+				t.Fatalf("read %s as %d, want %d", tc.arguments, got, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct{ name, arguments string }{
+		{"fractional part", `{"count":5.5}`},
+		{"beyond uint64", `{"count":1e30}`},
+		{"negative", `{"count":-1}`},
+		{"not a number", `{"count":"5"}`},
+	} {
+		t.Run("rejects "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := contract.Decode(tc.arguments); err == nil {
+				t.Fatalf("decode %s succeeded, want a rejection", tc.arguments)
+			}
+		})
 	}
 }

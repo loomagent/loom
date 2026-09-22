@@ -343,9 +343,14 @@ func matchesType(want string, value any) bool {
 		return ok
 	case "integer":
 		number, ok := value.(jsonNumber)
-		// A JSON number is an integer when it has neither a fraction nor an
-		// exponent, which is exact regardless of magnitude.
-		return ok && !strings.ContainsAny(string(number), ".eE")
+		if !ok {
+			return false
+		}
+		// The specification defines an integer by its value rather than its spelling, so 5,
+		// 5.0 and 5e0 are all integers. Exact rational arithmetic decides it without
+		// rounding a literal too large for a float64.
+		rational, ok := new(big.Rat).SetString(string(number))
+		return ok && rational.IsInt()
 	default:
 		return false
 	}

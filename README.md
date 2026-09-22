@@ -316,8 +316,18 @@ ignores.
 Some constraints are enforced through a projected `pattern` rather than the
 keyword itself: `Date`, `Time`, `DateTime`, and `UUID` set `format` *and* a
 matching shape pattern, and a `format` with no pattern is refused when the
-contract is built. One deliberate deviation from the specification: an
-`integer` must be written without a fraction or exponent, so `1.0` is rejected.
+contract is built. An `integer` is matched by value rather than by spelling, so `1.0` and
+`5e0` are integers; the read goes through exact rational arithmetic, so a literal too large
+for a `float64` still arrives exactly, and one out of `uint64` range is a model-facing type
+problem rather than a panic on read.
+
+`format` itself stays the specification's annotation, and `ValidateSchema` asserts no format,
+because the specification does not. What the contract adds is the part a shape cannot express:
+`Date` refuses a day the calendar does not have, `Time` and `DateTime` refuse a clock's
+impossible components and a leap second claimed anywhere but 23:59:60 UTC, and the shape pattern
+already decides `UUID`. Those are the specification's own cases, vendored under
+`testdata/format` and run by `TestFormatCases`. `Time` is RFC 3339 full-time, so it requires an
+offset.
 
 `loom.ValidateSchema(schema, value)` runs the same check a contract runs, for a
 value produced elsewhere, and `loom.ConstJSON(v)` renders a value as the raw JSON

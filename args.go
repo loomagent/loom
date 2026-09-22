@@ -2,7 +2,9 @@ package loom
 
 import (
 	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
+	"math/big"
 )
 
 // Args is the validated view of one tool call's arguments. Handlers read it
@@ -110,4 +112,42 @@ func (k argKind) decodeHint() string {
 	default:
 		return "a supported value"
 	}
+}
+
+// readUint reads a JSON number whose value is an integer into a uint64.
+//
+// The specification defines an integer by its value rather than its spelling, so 5, 5.0 and
+// 5e0 are all one. The parse goes through exact rational arithmetic, which rounds nothing and
+// therefore cannot turn a large literal into the wrong integer.
+func readUint(raw jsontext.Value) (uint64, error) {
+	rational, ok := new(big.Rat).SetString(string(raw))
+	if !ok {
+		return 0, fmt.Errorf("not a JSON number")
+	}
+	if !rational.IsInt() {
+		return 0, fmt.Errorf("has a fractional part")
+	}
+	integer := rational.Num()
+	if integer.Sign() < 0 {
+		return 0, fmt.Errorf("is negative")
+	}
+	if integer.BitLen() > 64 {
+		return 0, fmt.Errorf("is larger than %d", ^uint64(0))
+	}
+	return integer.Uint64(), nil
+}
+
+// readArgument decodes one argument into the handle's target. It exists so the integer path,
+// which reads a value rather than a spelling, is the same one the decode-time type check and
+// the handle's read use: Decode guarantees the read cannot fail.
+func readArgument(raw jsontext.Value, target any) error {
+	if out, ok := target.(*uint64); ok {
+		value, err := readUint(raw)
+		if err != nil {
+			return err
+		}
+		*out = value
+		return nil
+	}
+	return jsonv2.Unmarshal(raw, target)
 }
