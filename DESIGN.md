@@ -516,6 +516,39 @@ transport retry。failover 由 `ShouldFailover` / `GetFailoverModel` 决定切�
 
 ---
 
+### 7.6 Responses API 评估:暂不采用
+
+**结论**:不引入 Responses API 适配器——它独有的能力我们大多已经在 chat completions 上拿到,而它不可移植的那部分不值得绑定一家 provider。
+
+**实测矩阵**(四家;原始 HTTP 与 `openai-go/v3` 两条路径都验过)
+
+| provider | `/responses` | reasoning item | `message.phase` | 工具调用 | `text.format` | 回传历史(推理+调用+结果) |
+|---|---|---|---|---|---|---|
+| DeepSeek | ✓ `/v1/responses` | ✓ 含 `encrypted_content` | **✓ `commentary` 与 `final_answer` 都实测到** | ✓ | ✓ | ✓ |
+| 火山方舟 | ✓ `/api/v3/responses` | ✓ `summary` + encrypted | ✗ | ✓ | ✓ | ✓ |
+| 智谱 | ✓ `/api/v1/responses` | ✓ 无 summary / encrypted | ✗ | ✓ | **✗ 返回 Markdown** | **✗ 400(多轮需 `store` + `previous_response_id`)** |
+| OpenRouter(grok) | ✓ `/api/v1/responses` | ✓ `summary` + encrypted | ✗ | ✓ | ✓ | ✓ |
+
+`phase` 只有 DeepSeek 提供,且 SDK 注明它是模型族行为("For models like `gpt-5.3-codex` and beyond"),不是平台保证;它还是 **message 级**标记——`final_answer` 的消息里同样可能混着解说。
+
+**不采用的理由**
+
+1. 它唯一真正独有且对 loom 有用的能力是"reasoning 与正文结构分离",而 chat completions 路径**已经在承载同一份数据**:`ReasoningContent` 加 `ReasoningDetails`,后者保存的原始 JSON 就是 `summary` / `encrypted_content`。
+2. 第二个独有能力 `phase` **不可移植**(只有一家,且是模型行为),把判断压在它上面等于绑 provider。
+3. 它的架构倾向是服务端多轮(`store` + `previous_response_id`),与本设计"历史由调用方持有,框架不定义 Repository"(决策 20)相反。
+4. 迁移成本真实:items 化协议、事件流改为等 `response.completed`,以及四家的差异税(智谱的 Responses 残缺)。
+5. 结构化输出在其上没有增量,反而多一处差异(智谱 `text.format` 不生效)。
+
+**这个评估不改变的部分**(与 API 选择无关)
+
+工具轮的 `content` 可能与工具调用同现,且其中已经含有结论片段(实测:一个响应里 `reasoning` + `content` + `tool_call`,而 `content` 里是推算结果)。所以**交付正文只能来自"工具已被移除"的轮次**,而这一点 chat completions 完全支撑:终止工具 + 物理移除工具 + `tool_choice`。
+
+**何时重新评估**
+
+1. 主力模型换成 OpenAI 系且只走一家时(那时 `phase` 与 reasoning items 才有稳定收益);
+2. 需要接入只讲 Responses 协议的客户端/工具链时(兼容问题,不是能力问题);
+3. 某家不再暴露 chat completions、只剩 Responses 时。
+
 ## 8. 包结构
 
 ```
