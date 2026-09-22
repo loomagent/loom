@@ -486,12 +486,12 @@ func TestStructuredSchemaObject(t *testing.T) {
 	}
 }
 
-// A structured-output failure names how many attempts were made and stays unwrappable, because
-// a caller may want to test for the error underneath.
+// A structured-output failure carries the rejected response and stays unwrappable, because a
+// caller may want to test for the error underneath before it decides what to send next.
 func TestStructuredOutputError(t *testing.T) {
 	cause := errors.New("not json")
-	failure := &StructuredOutputError{Attempt: 2, Content: "not json", Err: cause}
-	if !strings.Contains(failure.Error(), "attempt 2") {
+	failure := &StructuredOutputError{Content: "not json", Err: cause}
+	if !strings.Contains(failure.Error(), "structured output invalid") || failure.Content != "not json" {
 		t.Fatalf("message = %q", failure.Error())
 	}
 	if !errors.Is(failure, cause) {

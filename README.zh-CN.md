@@ -191,8 +191,10 @@ summary.Get(args)
 约束违例都会被拒绝;JSON 空白符可以接受。不需要任何 strict 模式选项。schema 无法
 表达的业务规则请用 `WithStructuredValidator`。
 
-非法 JSON 或 schema 违例会走配置好的输出重试上限(`WithStructuredMaxAttempts`,
-默认两次)。
+非法响应——JSON 非法、约束违例或业务校验失败——会作为 `*StructuredOutputError` 带着那次
+响应内容返回,同时附上该次调用产生的同一个 `*ChatResponse`。Loom 只问一次:再试几次、
+下一次请求带什么,是调用方的策略;ReAct 轮次的做法就是把这条错误和它已知的其它信息
+一起放进对话。
 
 ### 两个方向共享的 schema
 

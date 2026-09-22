@@ -43,17 +43,18 @@ func reviewContract() (contract *ArgsContract, done *BoolArg, notes *StringArg) 
 	return MustArgsContract("structured_review_fixture", done, notes), done, notes
 }
 
-func TestChatStructuredArgs_JSONSchemaRetryThenSuccess(t *testing.T) {
-	contract, done, notes := reviewContract()
+// One call per invocation. What to do about an invalid response — how many more times to ask, and
+// what to send with it — is the caller's policy, so the failure comes back instead of being
+// retried here with feedback Loom wrote.
+func TestChatStructuredArgsReportsInvalidOutputWithoutRetrying(t *testing.T) {
+	contract, _, _ := reviewContract()
+	invalid := `{"overall_done":"no","notes":"bad type"}`
 	model := &fakeStructuredModel{
 		capabilities: ModelCapabilities{StructuredOutput: StructuredOutputJSONSchema},
-		responses: []string{
-			`{"overall_done":"no","notes":"bad type"}`,
-			`{"overall_done":true,"notes":"ok"}`,
-		},
+		responses:    []string{invalid, `{"overall_done":true,"notes":"ok"}`},
 	}
-	got, resp, err := ChatStructuredArgs(
-		context.Background(),
+	_, resp, err := ChatStructuredArgs(
+		t.Context(),
 		"test.structured",
 		model,
 		ChatRequest{Messages: []Message{{Role: RoleUser, Content: "review"}}},
@@ -61,30 +62,26 @@ func TestChatStructuredArgs_JSONSchemaRetryThenSuccess(t *testing.T) {
 		WithStructuredName("review-result"),
 		WithStructuredDescription("review decision"),
 	)
-	if err != nil {
-		t.Fatalf("ChatStructuredArgs() error = %v", err)
+	var outputErr *StructuredOutputError
+	if !errors.As(err, &outputErr) {
+		t.Fatalf("error = %v, want a StructuredOutputError", err)
 	}
-	if resp == nil || resp.Content == "" {
-		t.Fatalf("resp missing")
+	if outputErr.Content != invalid || resp == nil || resp.Content != invalid {
+		t.Fatalf("the invalid response must come back with the error: resp=%+v err=%+v", resp, outputErr)
 	}
-	if !done.Get(got) || notes.Get(got) != "ok" {
-		t.Fatalf("got = %#v", got)
-	}
-	if len(model.requests) != 2 {
-		t.Fatalf("requests = %d, want 2", len(model.requests))
+	if len(model.requests) != 1 {
+		t.Fatalf("requests = %d, want 1: the second response must stay unused", len(model.requests))
 	}
 	first := model.requests[0]
-	if first.StructuredOutput == nil {
-		t.Fatalf("StructuredOutput missing")
-	}
-	if first.StructuredOutput.Mode != StructuredOutputJSONSchema {
-		t.Fatalf("mode = %s", first.StructuredOutput.Mode)
+	if first.StructuredOutput == nil || first.StructuredOutput.Mode != StructuredOutputJSONSchema ||
+		first.StructuredOutput.Name != "review-result" || first.StructuredOutput.Description != "review decision" {
+		t.Fatalf("structured output = %+v", first.StructuredOutput)
 	}
 	if first.ResponseFormat != ResponseFormatDefault {
 		t.Fatalf("response format = %s", first.ResponseFormat)
 	}
-	if len(model.requests[1].Messages) <= len(first.Messages) {
-		t.Fatalf("retry request should include correction messages")
+	if len(first.Messages) != 1 || first.Messages[0].Content != "review" {
+		t.Fatalf("messages = %+v, want the caller's", first.Messages)
 	}
 }
 
@@ -221,13 +218,24 @@ func TestChatStructuredArgsProjectsContractConstraints(t *testing.T) {
 	contract := MustArgsContract("structured_notes", notes)
 	for _, mode := range []StructuredOutputMode{StructuredOutputJSONSchema, StructuredOutputJSONObject} {
 		t.Run(string(mode), func(t *testing.T) {
+			// Provider constraints and local validation must use the same schema, so a value the
+			// schema rejects is rejected here too, in both modes.
+			tooLong := &fakeStructuredModel{
+				capabilities: ModelCapabilities{StructuredOutput: mode},
+				responses:    []string{`{"notes":"too long"}`},
+			}
+			if _, _, err := ChatStructuredArgs(t.Context(), "test.tags", tooLong, ChatRequest{}, contract); err == nil {
+				t.Fatal("a value that violates maxLength must be rejected")
+			}
+			if len(tooLong.requests) != 1 {
+				t.Fatalf("requests = %d, want 1", len(tooLong.requests))
+			}
 			model := &fakeStructuredModel{
 				capabilities: ModelCapabilities{StructuredOutput: mode},
-				responses:    []string{`{"notes":"too long"}`, `{"notes":"ok"}`},
+				responses:    []string{`{"notes":"ok"}`},
 			}
-			// Provider constraints and local validation must use the same schema.
 			got, _, err := ChatStructuredArgs(t.Context(), "test.tags", model, ChatRequest{}, contract)
-			if err != nil || notes.Get(got) != "ok" || len(model.requests) != 2 {
+			if err != nil || notes.Get(got) != "ok" || len(model.requests) != 1 {
 				t.Fatalf("contract validation: got=%v err=%v calls=%d", notes.Get(got), err, len(model.requests))
 			}
 			req := model.requests[0]
@@ -239,12 +247,8 @@ func TestChatStructuredArgsProjectsContractConstraints(t *testing.T) {
 				if property.MinLength == nil || *property.MinLength != 1 || property.MaxLength == nil || *property.MaxLength != 3 {
 					t.Fatalf("provider schema lost contract constraints: %+v", property)
 				}
-			} else {
-				// json_object carries no schema, so the contract is enforced locally instead — the
-				// retry above already showed that — and the caller's messages stay untouched.
-				if req.ResponseFormat != ResponseFormatJSONObject || len(req.Messages) != 0 {
-					t.Fatalf("json_object must send no schema and add no messages: format=%s messages=%+v", req.ResponseFormat, req.Messages)
-				}
+			} else if req.ResponseFormat != ResponseFormatJSONObject || len(req.Messages) != 0 {
+				t.Fatalf("json_object must send no schema and add no messages: format=%s messages=%+v", req.ResponseFormat, req.Messages)
 			}
 		})
 	}
@@ -271,50 +275,74 @@ func TestChatStructuredArgsRejectsInvalidResponsesByDefault(t *testing.T) {
 			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
 				model := &fakeStructuredModel{capabilities: ModelCapabilities{StructuredOutput: mode},
 					responses: []string{tc.response, " \n{\"notes\":\"ok\"}\t "}}
-				got, _, err := ChatStructuredArgs(t.Context(), "test.strict", model, ChatRequest{}, contract)
-				if err != nil || notes.Get(got) != "ok" || len(model.requests) != 2 {
-					t.Fatalf("strict retry: got=%q err=%v calls=%d", notes.Get(got), err, len(model.requests))
+				got, resp, err := ChatStructuredArgs(t.Context(), "test.strict", model, ChatRequest{}, contract)
+				var outputErr *StructuredOutputError
+				if !errors.As(err, &outputErr) {
+					t.Fatalf("err = %v, want a StructuredOutputError", err)
 				}
-				if len(model.requests[1].Messages) <= len(model.requests[0].Messages) {
-					t.Fatal("retry must include feedback to correct the invalid response")
+				if resp == nil || resp.Content != tc.response || outputErr.Content != tc.response {
+					t.Fatalf("the rejected response must come back: resp=%+v err=%+v", resp, outputErr)
+				}
+				if got.JSON() != nil {
+					t.Fatalf("no arguments may be returned for a rejected response: %s", got.JSON())
+				}
+				if len(model.requests) != 1 {
+					t.Fatalf("requests = %d, want 1", len(model.requests))
 				}
 			})
 		}
 	}
 }
 
-func TestChatStructuredArgsInvalidResponseRespectsAttemptLimit(t *testing.T) {
+// A truncated response is reported like any other invalid one: whether a longer budget is worth
+// another call is the caller's decision.
+func TestChatStructuredArgsReportsATruncatedResponse(t *testing.T) {
 	contract, _, _ := reviewContract()
-	content := "```json\n{\"overall_done\":true,\"notes\":\"ok\"}\n```"
-	model := &fakeStructuredModel{capabilities: ModelCapabilities{StructuredOutput: StructuredOutputJSONObject}, responses: []string{content}}
-	_, response, err := ChatStructuredArgs(t.Context(), "test.strict_limit", model, ChatRequest{}, contract,
-		WithStructuredMaxAttempts(1))
+	model := &fakeCallModel{
+		name:         "fake/truncated",
+		capabilities: ModelCapabilities{StructuredOutput: StructuredOutputJSONSchema},
+		responses:    []*ChatResponse{{Content: `{"overall_done":true,"notes":"cut`, FinishReason: FinishReasonLength}},
+	}
+	_, resp, err := ChatStructuredArgs(t.Context(), "test.truncated", model, ChatRequest{}, contract)
 	var outputErr *StructuredOutputError
-	if !errors.As(err, &outputErr) || outputErr.Attempt != 1 || outputErr.Content != content || response == nil || response.Content != content || len(model.requests) != 1 {
-		t.Fatalf("expected final invalid response and structured error: response=%+v err=%v calls=%d", response, err, len(model.requests))
+	if !errors.As(err, &outputErr) || !strings.Contains(err.Error(), string(FinishReasonLength)) {
+		t.Fatalf("err = %v, want a structured error naming %s", err, FinishReasonLength)
+	}
+	if resp == nil || resp.FinishReason != FinishReasonLength || len(model.requests) != 1 {
+		t.Fatalf("resp=%+v requests=%d", resp, len(model.requests))
 	}
 }
 
 // Schema checks must run before business rules, including for providers claiming native schema support.
 func TestChatStructuredArgsValidatesSchemaBeforeBusinessRules(t *testing.T) {
 	contract, done, notes := reviewContract()
+	validator := func(validations *int) StructuredOption {
+		return WithStructuredValidator(func(value Args) error {
+			*validations++
+			if done.Get(value) || notes.Get(value) != "ok" {
+				t.Errorf("business validator received unexpected data")
+			}
+			return nil
+		})
+	}
 	for _, mode := range []StructuredOutputMode{StructuredOutputJSONSchema, StructuredOutputJSONObject} {
 		t.Run(string(mode), func(t *testing.T) {
-			model := &fakeStructuredModel{capabilities: ModelCapabilities{StructuredOutput: mode}, responses: []string{
-				`{"notes":"missing boolean"}`,
-				`{"overall_done":false,"notes":"ok"}`,
-			}}
+			// A schema-invalid response never reaches the business rules.
+			invalid := &fakeStructuredModel{capabilities: ModelCapabilities{StructuredOutput: mode},
+				responses: []string{`{"notes":"missing boolean"}`}}
 			validations := 0
-			got, _, err := ChatStructuredArgs(t.Context(), "test.validation_order", model, ChatRequest{}, contract,
-				WithStructuredValidator(func(value Args) error {
-					validations++
-					if done.Get(value) || notes.Get(value) != "ok" {
-						t.Errorf("business validator received unexpected data")
-					}
-					return nil
-				}))
-			if err != nil || done.Get(got) || notes.Get(got) != "ok" || validations != 1 || len(model.requests) != 2 {
-				t.Fatalf("validation order: got=%v/%q err=%v validations=%d calls=%d", done.Get(got), notes.Get(got), err, validations, len(model.requests))
+			if _, _, err := ChatStructuredArgs(t.Context(), "test.validation_order", invalid, ChatRequest{}, contract, validator(&validations)); err == nil {
+				t.Fatal("a schema-invalid response must be rejected")
+			}
+			if validations != 0 {
+				t.Fatalf("business rules ran %d times on a schema-invalid response, want 0", validations)
+			}
+			// A schema-valid one does, exactly once.
+			valid := &fakeStructuredModel{capabilities: ModelCapabilities{StructuredOutput: mode},
+				responses: []string{`{"overall_done":false,"notes":"ok"}`}}
+			got, _, err := ChatStructuredArgs(t.Context(), "test.validation_order", valid, ChatRequest{}, contract, validator(&validations))
+			if err != nil || done.Get(got) || notes.Get(got) != "ok" || validations != 1 || len(valid.requests) != 1 {
+				t.Fatalf("validation order: got=%v/%q err=%v validations=%d calls=%d", done.Get(got), notes.Get(got), err, validations, len(valid.requests))
 			}
 		})
 	}
