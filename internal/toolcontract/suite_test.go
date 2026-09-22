@@ -5,6 +5,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/loomagent/loom/internal/schema"
@@ -21,12 +22,26 @@ import (
 // logged so the supported surface is visible when it changes.
 func TestJSONSchemaSuiteSubset(t *testing.T) {
 	var decoded, skippedDecode, skippedCompile, cases, deviations int
+	var skippedUnmodeled, skippedSpelling, skippedUnimplemented int
 	hit := make(map[string]bool, len(knownDeviations))
 
 	for _, file := range suiteFiles(t) {
 		for _, group := range readSuiteFile(t, file) {
 			var s schema.Schema
 			if err := jsonv2.Unmarshal(group.Schema, &s); err != nil {
+				// A skipped group is one of three things, and they are not alike: a keyword
+				// Loom refuses to model at all, a keyword value written in a form Loom
+				// refuses although the specification allows it, and a construct Loom does
+				// not implement. The first two are deliberate, and the counts below are
+				// asserted so that changing either one has to update this record.
+				switch {
+				case strings.Contains(err.Error(), "unknown object member name"):
+					skippedUnmodeled++
+				case strings.Contains(err.Error(), "into Go int"):
+					skippedSpelling++
+				default:
+					skippedUnimplemented++
+				}
 				skippedDecode++
 				continue
 			}
@@ -70,6 +85,26 @@ func TestJSONSchemaSuiteSubset(t *testing.T) {
 	}
 	t.Logf("files=%d decodedGroups=%d skippedDecode=%d skippedCompile=%d cases=%d knownDeviations=%d",
 		len(suiteFiles(t)), decoded, skippedDecode, skippedCompile, cases, deviations)
+	t.Logf("skipped groups: unmodeledKeyword=%d keywordSpelling=%d unimplementedConstruct=%d",
+		skippedUnmodeled, skippedSpelling, skippedUnimplemented)
+
+	// The deliberate part of the skipped set, pinned. An unmodeled keyword is refused with an
+	// error although the specification says unknown keywords should be treated as annotations,
+	// and an integer-valued keyword must be written as an integer, so minLength: 2.0 is refused
+	// although the specification defines 2.0 as an integer. Both are policies, and both are
+	// described in README.md and in the fixtures README; a change here has to update them.
+	if skippedUnmodeled != 18 {
+		t.Errorf("unmodeled keywords refused = %d, want 18: the closed-vocabulary policy changed", skippedUnmodeled)
+	}
+	if skippedSpelling != 4 {
+		t.Errorf("keyword values refused for their spelling = %d, want 4: the integer-keyword policy changed", skippedSpelling)
+	}
+	// The rest are constructs Loom does not implement — boolean schemas, a type union, a
+	// schema-valued additionalProperties — which are gaps rather than policies. The count is
+	// recorded for the same reason: implementing one should be a visible change.
+	if skippedUnimplemented != 14 {
+		t.Errorf("unimplemented constructs skipped = %d, want 14: a construct was implemented or removed", skippedUnimplemented)
+	}
 }
 
 // knownDeviations records where Loom's deliberately narrower subset disagrees
