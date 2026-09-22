@@ -210,9 +210,40 @@ answers `400 Prompt must contain the word 'json' in some form to use
 Loom does not retry. Two more points from that guide shape this path: `max_tokens`
 has to leave room for the whole object, because a truncated response is reported as
 an invalid one, and the API may occasionally return empty content, which is reported
-the same way. `contract.Example()` returns an example the contract assembled from
-the declared `Example` values and validated, for a prompt that has to show one. The
-response is always validated against the same contract locally, so what the
+the same way. Two methods carry the shape for such a request: `contract.Example()`
+returns an example the contract assembled from the declared `Example` values and
+validated, and `contract.JSONObjectPrompt()` returns the whole instruction —
+
+```text
+Answer with JSON of exactly this shape:
+{"confidence":0.6,"notes":"fast but damaged","verdict":"mixed"}
+
+Fields: confidence=<number, required, 0..1>; notes=<string, required, min length 1, max length 80>; verdict=<string, required, one of ["positive","negative","mixed"]>
+```
+
+Loom still never places either in a request: the caller asks and decides. That is why a
+task description joins them without anything being rewritten —
+
+```go
+messages := []loom.Message{
+    {Role: loom.RoleSystem, Content: contract.JSONObjectPrompt()},
+    {Role: loom.RoleUser, Content: "Judge the overall sentiment of this delivery review."},
+}
+```
+
+— and why it is worth keeping the format rules in one place. The task description
+should say what to decide, what to weigh, and which business rules apply; the shape comes
+from the contract. Three live runs against a `json_object` model show why. With the
+instruction in its own message, the first attempt satisfied the contract. A task that also
+demanded a one-line explanation had that demand silently dropped: `response_format:
+json_object` already forces a single JSON value, so the task lost without producing any
+error to notice it by. And a prompt that never showed the shape at all got an object the
+model invented (`sentiment`, `text`, `details`), which the contract rejected — that is the
+failure the instruction above prevents. Content requirements travel fine either way:
+asking for Chinese produced Chinese field values and still passed. A model with native
+`json_schema` support needs none of this, because the endpoint enforces the shape instead.
+
+The response is always validated against the same contract locally, so what the
 provider was told and what is enforced cannot drift:
 
 ```go

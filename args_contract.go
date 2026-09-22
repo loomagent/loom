@@ -108,6 +108,34 @@ func (c *ArgsContract) Schema() *Schema { return cloneSchema(c.schema) }
 // from what Decode enforces, which a hand-written sample can.
 func (c *ArgsContract) Example() string { return c.guidance.example }
 
+// JSONObjectPrompt returns the instruction a json_object request cannot carry as a
+// schema: it asks for JSON, shows the example the contract assembled and validated,
+// and names the fields with their constraints.
+//
+// Loom never places it in a request. The caller asks for it and decides where it goes,
+// which is what keeps a json_object call honest: the endpoint receives no schema, so the
+// shape has to be in the prompt the caller wrote. Prefer a model with native json_schema
+// support, which needs none of this. When a task description accompanies this text, the
+// task should say what to produce, not what shape to produce it in — two sets of format
+// rules in one request are a conflict the model has to guess its way out of.
+func (c *ArgsContract) JSONObjectPrompt() string {
+	fields := truncateDiagnostic(summarizeExpectedArguments(c.schema), maxExpectedArgumentRunes)
+	var b strings.Builder
+	if example := c.guidance.example; example != "" {
+		b.WriteString("Answer with JSON of exactly this shape:\n")
+		b.WriteString(example)
+	} else {
+		b.WriteString("Answer with JSON.")
+	}
+	// "none" is the summary of a contract with no arguments, which the empty example
+	// already says more plainly.
+	if fields != "" && fields != "none" {
+		b.WriteString("\n\nFields: ")
+		b.WriteString(fields)
+	}
+	return b.String()
+}
+
 // Decode parses and validates one tool call with a background context.
 func (c *ArgsContract) Decode(argumentsJSON string) (Args, error) {
 	return c.DecodeContext(context.Background(), argumentsJSON)
