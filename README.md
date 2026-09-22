@@ -643,11 +643,14 @@ LOOM_LIVE_DEEPSEEK_KEY=...
 LOOM_LIVE_DEEPSEEK_MODELS=<model>[,<model>...]
 ```
 
-Every model runs the same three flows: a streamed tool-calling turn whose
+Every model runs the same four flows: a streamed tool-calling turn whose
 arguments are decoded against the tool's own contract, that assistant turn
-carried back into a second request, and a structured-output call. Those are what
-the suite asserts; what varies by model, such as how much reasoning came back or
-whether it arrived as structured blocks, is logged instead. Each provider is a
+carried back into a second request, a structured-output call, and the `json_object`
+composition above — the contract's instruction in one message and the caller's task
+in another, which must satisfy the contract within one retry. Those are what the
+suite asserts; what varies by model, such as how much reasoning came back, whether
+it arrived as structured blocks, or how many attempts the `json_object` phase
+needed, is logged instead. Each provider is a
 subtest and each model a subtest of that, so `-run TestLiveProviders/openrouter`
 selects one provider and `-run TestLiveProviders/<provider>/<model>` one model.
 

@@ -12,6 +12,7 @@ package livetest
 
 import (
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +33,9 @@ const (
 	liveCallBudget = 4 * time.Minute
 	// defaultEffort is the reasoning effort a block sends unless it overrides it.
 	defaultEffort = "low"
+	// jsonObjectPromptAttempts bounds the json_object phase: the documented retry gets one
+	// chance to compensate for a model that did not follow the instruction first time.
+	jsonObjectPromptAttempts = 2
 	// livePrompt asks for the two things the flow needs in one turn: a tool call and an answer
 	// worth reasoning about.
 	livePrompt = "Echo the word 'chain', then say what 17*23 is."
@@ -179,6 +183,72 @@ func exerciseModel(t *testing.T, block liveBlock, model string) {
 	}
 	t.Logf("structured output: answer=%q certain=%v model=%s",
 		answer.Get(structured), certain.Get(structured), response.Model)
+
+	exerciseJSONObjectPrompt(t, ctx, block, model, reasoning)
+}
+
+// exerciseJSONObjectPrompt runs the composition the README recommends where no schema field
+// exists: the contract's own instruction in a system message, the caller's task in a user
+// message, and no format rules in the task.
+//
+// It asserts the recipe, not one model's obedience. The first attempt satisfies the contract on
+// a compliant model; when a model does not comply, the documented retry — the rejected output,
+// the error, and the schema — gets one chance to, and the attempts that were needed are logged
+// either way. Asserting "first attempt" would make this a coin flip on the model's mood, which
+// is exactly why the caller owns the retry in the first place.
+func exerciseJSONObjectPrompt(t *testing.T, ctx context.Context, block liveBlock, model string, reasoning loom.Reasoning) {
+	t.Helper()
+	verdict := loom.Enum("verdict", "positive", "negative", "mixed").Required().Example("mixed")
+	confidence := loom.Float("confidence").Required().Min(0).Max(1).Example(0.6)
+	notes := loom.String("notes").Required().MinLen(1).MaxLen(80).Example("fast but damaged")
+	contract := loom.MustArgsContract("sentiment", verdict, confidence, notes)
+	schemaJSON, err := jsonv2.Marshal(contract.Schema())
+	if err != nil {
+		t.Fatalf("marshal contract schema: %v", err)
+	}
+	if example := contract.Example(); example == "" {
+		t.Fatal("a contract whose arguments all declare examples must assemble one")
+	}
+
+	// json_object is what this checks: the endpoint receives no schema, so the prompt carries the
+	// shape and Loom adds nothing to it.
+	built, err := modelfactory.Build(modelfactory.Config{
+		Provider:     block.Provider,
+		APIKey:       block.APIKey,
+		BaseURL:      block.BaseURL,
+		Model:        model,
+		Capabilities: &loom.ModelCapabilities{StructuredOutput: loom.StructuredOutputJSONObject},
+	})
+	if err != nil {
+		t.Fatalf("build %s/%s for json_object: %v", block.Provider, model, err)
+	}
+
+	messages := []loom.Message{
+		{Role: loom.RoleSystem, Content: contract.JSONObjectPrompt()},
+		{Role: loom.RoleUser, Content: "Judge the overall sentiment of this delivery review: 'The delivery was fast but the box was damaged.'"},
+	}
+	for attempt := 1; attempt <= jsonObjectPromptAttempts; attempt++ {
+		args, _, callErr := loom.ChatStructuredArgs(ctx, "live.json_object", built,
+			loom.ChatRequest{Messages: messages, Reasoning: reasoning}, contract)
+		if callErr == nil {
+			t.Logf("json_object prompt: attempt %d/%d satisfied the contract (verdict=%q confidence=%v)",
+				attempt, jsonObjectPromptAttempts, verdict.Get(args), confidence.Get(args))
+			return
+		}
+		var invalid *loom.StructuredOutputError
+		if !errors.As(callErr, &invalid) {
+			t.Fatalf("json_object prompt: request-level failure on attempt %d: %v", attempt, callErr)
+		}
+		t.Logf("json_object prompt: attempt %d/%d rejected: %v", attempt, jsonObjectPromptAttempts, callErr)
+		if attempt == jsonObjectPromptAttempts {
+			break
+		}
+		messages = append(messages,
+			loom.Message{Role: loom.RoleAssistant, Content: invalid.Content},
+			loom.Message{Role: loom.RoleUser, Content: fmt.Sprintf(
+				"Your previous output was rejected: %v\nReturn one JSON value matching:\n%s", callErr, schemaJSON)})
+	}
+	t.Errorf("json_object prompt: the contract was still unsatisfied after %d attempts", jsonObjectPromptAttempts)
 }
 
 // loadLiveBlocks reads path as KEY=VALUE lines and returns the provider blocks that
