@@ -439,6 +439,39 @@ CI 会执行以上全部命令。`golangci-lint` 承载了项目测试原则所�
 这个下限是防止回退的棘轮,而不是分支覆盖率目标:`go test -cover` 只统计各包自己的
 测试,所以总量会低估那些被其它包调用的 API。
 
+### 真实端点测试
+
+`livetest/` 让 Loom 打真实 provider 端点。把 `live.env.example` 复制到仓库之外的
+地方，为每家 provider 填上端点、key 和一到多个模型，再把套件指过去：
+
+```bash
+LOOM_LIVE_ENV=~/live.env go test ./livetest/
+```
+
+这个路径是唯一的开关：没有默认位置，所以 `go test ./...` 永远不会碰到 provider、
+不会意外花掉凭据，CI 也不需要任何凭据。
+
+一个块声明一家 provider 并列出它的模型，一份凭据就能覆盖你想观察的任意多个模型：
+
+```ini
+LOOM_LIVE_PROVIDERS=deepseek,openrouter
+LOOM_LIVE_DEEPSEEK_URL=https://api.deepseek.com/v1
+LOOM_LIVE_DEEPSEEK_KEY=...
+LOOM_LIVE_DEEPSEEK_MODELS=<model>[,<model>...]
+```
+
+每个模型都跑同样三条链路:一轮流式工具调用(其参数会按工具自己的契约解码)、
+把该 assistant 轮回传进第二次请求、以及一次结构化输出调用。这三条是测试断言的对象;
+随模型而变的东西——拿回多少推理文本、是否以结构化块返回——只记日志不断言。每家
+provider 是一个子测试、其下每个模型又是一个子测试,因此
+`-run TestLiveProviders/<provider>` 选中一家,`-run
+TestLiveProviders/<provider>/<model>` 选中一个模型。
+
+没有 `LOOM_LIVE_ENV` 时该测试整体跳过，所以 `go test ./...` 保持自足、CI 不需要任何凭据。
+`livetest/env_test.go` 覆盖了文件解析和它报出的每一种配置错误，并且在
+`live.env.example` 或文档里出现具体模型名时会失败：示例只承载配置的形状，选择留给
+操作者——一份凭据能调用哪些模型，是操作者的决定。
+
 `internal/toolcontract` 会用官方
 [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
 校验它所支持的子集:draft2020-12 中与已支持关键字对应的文件被放在

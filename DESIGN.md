@@ -555,6 +555,7 @@ github.com/loomagent/loom/
 
   # 周边框架
   modelprobe/                    基于真实行为的模型能力探测
+  livetest/                      由 live.env 驱动的真实端点 E2E
   contextpolicy/                 可组合的上下文构建策略
   react/ react/review/           与 provider 无关的 ReAct 运行时与质量闸门
   prompttemplate/                占位符校验与渲染

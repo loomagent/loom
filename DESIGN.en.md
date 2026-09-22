@@ -550,6 +550,7 @@ github.com/loomagent/loom/
 
   # Surrounding frameworks
   modelprobe/                    behavioural model capability probing
+  livetest/                      live-endpoint E2E driven by live.env
   contextpolicy/                 composable context-construction policies
   react/ react/review/           the provider-neutral ReAct runtime and quality gate
   prompttemplate/                placeholder validation and rendering
