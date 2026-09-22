@@ -221,8 +221,12 @@ arguments, and constraint violations are rejected; JSON whitespace is accepted.
 No strict-mode option is required. Use `WithStructuredValidator` for business
 rules that a schema cannot express.
 
-Invalid JSON or schema violations use the configured output retry limit
-(`WithStructuredMaxAttempts`, two attempts by default).
+An invalid response — invalid JSON, a constraint violation, or a failed business
+rule — comes back as `*StructuredOutputError` carrying the response, alongside the
+same `*ChatResponse` the call produced. Loom asks once: how many more times to try,
+and what to send with the next request, is the caller's policy, and a ReAct turn
+answers it by putting the error into the conversation beside everything else it
+knows.
 
 ### The schema both directions share
 

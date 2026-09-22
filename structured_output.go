@@ -11,22 +11,16 @@ import (
 	"strings"
 )
 
-const defaultStructuredOutputAttempts uint64 = 2
-
 // maxStructuredOutputNameLen is deliberately an untyped constant, so it can be
-// compared with int values. Do not give it an explicit uint64 type, which will not
-// compile, and do not fold it into the typed constant group above, which trips
-// SA9004.
+// compared with int values.
 const maxStructuredOutputNameLen = 64
 
-// StructuredOption configures the structured output and output retry of
-// ChatStructuredArgs.
+// StructuredOption configures the structured output call of ChatStructuredArgs.
 type StructuredOption func(*structuredConfig)
 
 type structuredConfig struct {
 	name        string
 	description string
-	maxAttempts uint64
 	validate    func(Args) error
 	callOptions []CallModelOption
 }
@@ -47,16 +41,8 @@ func WithStructuredDescription(description string) StructuredOption {
 	}
 }
 
-// WithStructuredMaxAttempts sets how many attempts are made when the output does
-// not satisfy the contract.
-func WithStructuredMaxAttempts(maxAttempts uint64) StructuredOption {
-	return func(cfg *structuredConfig) {
-		cfg.maxAttempts = maxAttempts
-	}
-}
-
-// WithStructuredValidator adds a business check after contract validation; a
-// failure there also triggers an output retry.
+// WithStructuredValidator adds a business check after contract validation. A
+// failure there is reported like any other invalid output.
 func WithStructuredValidator(validate func(Args) error) StructuredOption {
 	return func(cfg *structuredConfig) {
 		cfg.validate = validate
@@ -77,15 +63,18 @@ func WithStructuredFailover(cfg FailoverConfig) StructuredOption {
 }
 
 // StructuredOutputError means the model's output was incomplete, was not valid
-// JSON, or failed the local contract or a business check.
+// JSON, or failed the local contract or a business check. It carries the response
+// so the caller decides what happens next: how many times to ask again, and what
+// context and feedback to send with it, is the caller's policy. A react turn
+// answers that by putting the error into the conversation beside everything else
+// that is known.
 type StructuredOutputError struct {
-	Attempt uint64
 	Content string
 	Err     error
 }
 
 func (e *StructuredOutputError) Error() string {
-	return fmt.Sprintf("structured output attempt %d invalid: %v", e.Attempt, e.Err)
+	return fmt.Sprintf("structured output invalid: %v", e.Err)
 }
 
 func (e *StructuredOutputError) Unwrap() error {
@@ -108,8 +97,8 @@ func (e *StructuredOutputError) Unwrap() error {
 // constrains the model by rewriting the conversation is a hidden one. So on a model
 // that declares no structured-output support this fails, and on a model whose
 // capability is undeclared the request goes out as the caller wrote it — the output
-// is still validated locally against the contract, and a retry reports what did not
-// satisfy it.
+// is still validated locally against the contract, and an invalid response comes
+// back with the response attached so the caller can decide what to send next.
 func ChatStructuredArgs(
 	ctx context.Context,
 	purpose string,
@@ -125,14 +114,11 @@ func ChatStructuredArgs(
 		return Args{}, nil, errors.New("loom.ChatStructuredArgs: contract must not be nil")
 	}
 
-	cfg := structuredConfig{maxAttempts: defaultStructuredOutputAttempts}
+	cfg := structuredConfig{}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
 		}
-	}
-	if cfg.maxAttempts == 0 {
-		cfg.maxAttempts = 1
 	}
 	if cfg.name == "" {
 		cfg.name = contract.Name()
@@ -146,43 +132,31 @@ func ChatStructuredArgs(
 	// its own copy, so a provider SDK cannot mutate what DecodeContext enforces.
 	schema := contract.Schema()
 
-	var lastResp *ChatResponse
-	var lastErr error
-	for attempt := uint64(1); attempt <= cfg.maxAttempts; attempt++ {
-		callOptions := append([]CallModelOption{}, cfg.callOptions...)
-		callOptions = append(callOptions, withCallModelRequestForModel(func(current ChatModel) (ChatRequest, error) {
-			callReq, err := withStructuredOutputRequest(req, current.Capabilities(), cfg.name, cfg.description, schema)
-			if err != nil {
-				return ChatRequest{}, err
-			}
-			if attempt > 1 {
-				callReq.Messages = withStructuredRetryMessages(callReq.Messages, lastResp, lastErr)
-			}
-			return callReq, nil
-		}))
-		resp, err := CallModel(ctx, purpose, model, req, callOptions...)
-		if err != nil {
-			return Args{}, resp, err
-		}
-		lastResp = resp
-		if resp.FinishReason == FinishReasonLength {
-			lastErr = &StructuredOutputError{
-				Attempt: attempt,
-				Content: resp.Content,
-				Err:     fmt.Errorf("finish_reason=%s", resp.FinishReason),
-			}
-			continue
-		}
-		args, err := contract.DecodeContext(ctx, resp.Content)
-		if err == nil && cfg.validate != nil {
-			err = cfg.validate(args)
-		}
-		if err == nil {
-			return args, resp, nil
-		}
-		lastErr = &StructuredOutputError{Attempt: attempt, Content: resp.Content, Err: err}
+	// One call. A failure is reported rather than retried, because how many times to ask
+	// again, and what to send the second time, is the caller's policy: a react turn answers
+	// that by putting the error into the conversation beside everything else it knows.
+	callOptions := append([]CallModelOption{}, cfg.callOptions...)
+	callOptions = append(callOptions, withCallModelRequestForModel(func(current ChatModel) (ChatRequest, error) {
+		return withStructuredOutputRequest(req, current.Capabilities(), cfg.name, cfg.description, schema)
+	}))
+	resp, err := CallModel(ctx, purpose, model, req, callOptions...)
+	if err != nil {
+		return Args{}, resp, err
 	}
-	return Args{}, lastResp, lastErr
+	if resp.FinishReason == FinishReasonLength {
+		return Args{}, resp, &StructuredOutputError{
+			Content: resp.Content,
+			Err:     fmt.Errorf("finish_reason=%s", resp.FinishReason),
+		}
+	}
+	args, err := contract.DecodeContext(ctx, resp.Content)
+	if err == nil && cfg.validate != nil {
+		err = cfg.validate(args)
+	}
+	if err != nil {
+		return Args{}, resp, &StructuredOutputError{Content: resp.Content, Err: err}
+	}
+	return args, resp, nil
 }
 
 // NormalizeStructuredOutputName builds a response_format name a provider accepts.
@@ -272,34 +246,10 @@ func withStructuredOutputRequest(req ChatRequest, caps ModelCapabilities, name, 
 	default:
 		// Undeclared capability: the request goes out exactly as the caller wrote it, the
 		// same way an undeclared capability passes through everywhere else. The contract
-		// still validates the response locally, and a retry reports what did not satisfy it.
+		// still validates the response locally, and an invalid response is returned with the
+		// response attached, for the caller to decide what to send next.
 		req.ResponseFormat = ResponseFormatDefault
 		req.StructuredOutput = nil
 	}
 	return req, nil
-}
-
-func withStructuredRetryMessages(messages []Message, resp *ChatResponse, err error) []Message {
-	out := append([]Message{}, messages...)
-	if resp != nil && strings.TrimSpace(resp.Content) != "" {
-		out = append(out, Message{
-			Role:    RoleAssistant,
-			Content: trimForRetry(resp.Content, 4000),
-		})
-	}
-	out = append(out, Message{
-		Role: RoleUser,
-		Content: fmt.Sprintf(`The previous output did not satisfy the structured-output requirements: %v
-
-Output the complete JSON again. Output JSON only, with no Markdown and no explanation.`, err),
-	})
-	return out
-}
-
-func trimForRetry(s string, limit int) string {
-	runes := []rune(strings.TrimSpace(s))
-	if len(runes) <= limit {
-		return string(runes)
-	}
-	return string(runes[:limit]) + "\n...(truncated)"
 }
