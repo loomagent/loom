@@ -7,6 +7,8 @@ name: Live provider tests
 #
 # Secrets are the credentials. Endpoints and model lists are repository variables, because
 # which models a credential may call is the operator's decision and can change without a commit.
+# The credentials themselves live in the `live-providers` environment, so only a job that
+# declares that environment receives them.
 on:
   workflow_dispatch:
 
@@ -25,6 +27,7 @@ jobs:
   live:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: live-providers
     env:
       LOOM_LIVE_PROVIDERS: ${{ vars.LOOM_LIVE_PROVIDERS }}
       LOOM_LIVE_DEEPSEEK_URL: ${{ vars.LOOM_LIVE_DEEPSEEK_URL }}
@@ -40,8 +43,11 @@ jobs:
       LOOM_LIVE_OPENROUTER_KEY: ${{ secrets.LOOM_LIVE_OPENROUTER_KEY }}
       LOOM_LIVE_OPENROUTER_MODELS: ${{ vars.LOOM_LIVE_OPENROUTER_MODELS }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      # Pinned to a commit rather than a moving major tag: this job holds live credentials, so
+      # what runs beside them should be a reviewed revision rather than whatever the tag points
+      # to today.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
@@ -49,6 +55,8 @@ jobs:
         run: |
           umask 077
           env | grep '^LOOM_LIVE_' | sort > "$RUNNER_TEMP/live.env"
-          sed -E 's/^(_?LOOM_LIVE_[A-Z0-9]+_KEY)=.*/\1=***/' "$RUNNER_TEMP/live.env"
+          # Mask only a value that is present, so an empty line shows that a credential did not
+          # arrive instead of showing a placeholder for something that is not there.
+          sed -E 's/^(_?LOOM_LIVE_[A-Z0-9]+_KEY)=.+$/\1=***/' "$RUNNER_TEMP/live.env"
       - name: Live provider tests
         run: LOOM_LIVE_ENV="$RUNNER_TEMP/live.env" go test ./livetest/ -v -timeout 25m
