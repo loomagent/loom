@@ -181,8 +181,35 @@ JSON **并给出期望的 JSON 样例**:DeepSeek 的
 `400 Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'`
 ——loom 把它当作请求层永久失败,不会重试。那份文档还有两点影响这条路径:`max_tokens`
 要留够空间,截断的响应会按“非法输出”上报;API 有概率返回空的 content,上报方式相同。
-`contract.Example()` 返回契约从声明的 `Example` 值组装并校验过的样例,供必须展示样例的
-提示词使用。响应始终在本地对照同一份契约校验,所以
+承载这份形状的是两个方法:`contract.Example()` 返回契约从声明的 `Example` 值组装并校验过的
+样例;`contract.JSONObjectPrompt()` 返回完整的那段引导语——
+
+```text
+Answer with JSON of exactly this shape:
+{"confidence":0.6,"notes":"fast but damaged","verdict":"mixed"}
+
+Fields: confidence=<number, required, 0..1>; notes=<string, required, min length 1, max length 80>; verdict=<string, required, one of ["positive","negative","mixed"]>
+```
+
+loom 依然不会自己把它放进请求:**由调用方索取、由调用方决定放哪**——所以用户自己的任务描述
+和它拼在一起时,没有任何东西被改写:
+
+```go
+messages := []loom.Message{
+    {Role: loom.RoleSystem, Content: contract.JSONObjectPrompt()},
+    {Role: loom.RoleUser, Content: "判断这条配送评价的整体情绪。"},
+}
+```
+
+也正因如此,**格式要求只应写在一处**。任务描述该说**判断什么、权衡什么、适用哪些业务规则**;
+**形状由契约给**。对 `json_object` 模型的三次真跑说明了原因:引导语单独成一条消息时,第一次
+就满足契约;而任务里又要求"先用一句话说明理由"的那次,那句要求被**静默丢弃**——
+`response_format: json_object` 本来就强制单个 JSON 值,于是任务无声地输了,连个错误都
+看不到;根本没有展示过形状的那次,模型自创了一个对象(`sentiment`、`text`、`details`),
+被契约拒绝——这正是上面那段引导语防止的事故。**内容**类要求则两不冲突:要求中文时字段值
+就是中文,照样通过。若模型原生支持 `json_schema`,这些都不需要:端点会强制形状。
+
+响应始终在本地对照同一份契约校验,所以
 provider 被告知的内容与实际强制执行的内容不会各行其是:
 
 ```go

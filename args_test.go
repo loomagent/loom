@@ -599,3 +599,42 @@ func TestArgsContractExample(t *testing.T) {
 		t.Fatal("an example outside the enum must be refused when the contract is built")
 	}
 }
+
+// JSONObjectPrompt is the shape a json_object request cannot carry in schema form, so its
+// wording is pinned here and its example must be one Decode accepts.
+func TestArgsContractJSONObjectPrompt(t *testing.T) {
+	t.Parallel()
+	verdict := Enum("verdict", "positive", "negative", "mixed").Required().Example("mixed")
+	confidence := Float("confidence").Required().Min(0).Max(1).Example(0.6)
+	notes := String("notes").Required().MinLen(1).MaxLen(80).Example("fast but damaged")
+	contract := MustArgsContract("sentiment", verdict, confidence, notes)
+
+	example := contract.Example()
+	got := contract.JSONObjectPrompt()
+	want := "Answer with JSON of exactly this shape:\n" + example + "\n\nFields: " + summarizeExpectedArguments(contract.Schema())
+	if got != want {
+		t.Fatalf("prompt =\n%s\nwant\n%s", got, want)
+	}
+	// The constraints a shape alone cannot show must reach the model, and the example it
+	// is told to copy must be one the contract accepts.
+	for _, fragment := range []string{"max length 80", `one of ["positive","negative","mixed"]`, "0..1"} {
+		if !strings.Contains(got, fragment) {
+			t.Errorf("prompt omits %q:\n%s", fragment, got)
+		}
+	}
+	if _, err := contract.Decode(example); err != nil {
+		t.Fatalf("the example in the prompt must satisfy the contract: %v", err)
+	}
+
+	// Without a declared example there is nothing to copy, so the prompt asks for JSON and
+	// falls back to the field list alone.
+	bare := MustArgsContract("sentiment", Enum("verdict", "positive", "negative").Required())
+	if got := bare.JSONObjectPrompt(); !strings.HasPrefix(got, "Answer with JSON.\n\nFields: ") || strings.Contains(got, "this shape") {
+		t.Fatalf("prompt without an example = %q", got)
+	}
+
+	// A contract with no arguments says so with the empty object, not with "Fields: none".
+	if got, want := MustArgsContract("get_time").JSONObjectPrompt(), "Answer with JSON of exactly this shape:\n{}"; got != want {
+		t.Fatalf("prompt for a contract with no arguments = %q, want %q", got, want)
+	}
+}
