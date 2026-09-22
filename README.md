@@ -201,7 +201,11 @@ model sends. The provider receives that schema through native `json_schema`, or
 through a `json_object` request when that is all the model declares. Loom never
 writes the schema, or anything else the caller did not write, into the prompt: a
 model that declares no structured-output support fails rather than being asked
-anyway, and a capability left undeclared sends the request exactly as written. The
+anyway, and a capability left undeclared sends the request exactly as written. In
+`json_object` mode the prompt has to ask for JSON itself: some providers refuse the
+request without it — DeepSeek answers
+`400 Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'`
+— and Loom treats that as a permanent request failure rather than retrying it. The
 response is always validated against the same contract locally, so what the
 provider was told and what is enforced cannot drift:
 
@@ -227,6 +231,41 @@ same `*ChatResponse` the call produced. Loom asks once: how many more times to t
 and what to send with the next request, is the caller's policy, and a ReAct turn
 answers it by putting the error into the conversation beside everything else it
 knows.
+
+### Retrying a structured call
+
+A retry needs the caller for a reason: the useful part is *what to send the second
+time* — the rejected output, why it was rejected, and whatever context the caller
+holds. In `json_object` mode the first prompt must already ask for JSON, since the
+provider can refuse the request without it; the retry is where the schema itself
+usually gets added. Both halves are already in hand, so the loop is a few lines:
+
+```go
+schemaJSON, _ := jsonv2.Marshal(contract.Schema())
+messages := base
+for attempt := 1; ; attempt++ {
+    args, _, err := loom.ChatStructuredArgs(ctx, "summary", model,
+        loom.ChatRequest{Messages: messages}, contract)
+    if err == nil {
+        break
+    }
+    var invalid *loom.StructuredOutputError
+    if !errors.As(err, &invalid) || attempt == 3 || ctx.Err() != nil {
+        return err // a request-level failure, which the provider already retried
+    }
+    messages = append(messages,
+        loom.Message{Role: loom.RoleAssistant, Content: invalid.Content},
+        loom.Message{Role: loom.RoleUser, Content: fmt.Sprintf(
+            "Your previous output was rejected: %v\nReturn one JSON value matching:\n%s",
+            err, schemaJSON)})
+}
+```
+
+Reaching a `*StructuredOutputError` means the model answered and the answer was
+unusable; any other error came from the request itself, where the provider's retry
+schedule already did its work. Only the caller can tell those apart, and only the
+caller decides whether the next attempt repeats the request, adds the schema, or
+gives up.
 
 ### The schema both directions share
 
@@ -441,6 +480,34 @@ extend it without forking the loop through three small policy interfaces:
 `contextpolicy.ReactStepPolicy` adapts composable context builders to the loop.
 `react/review.Policy` supplies a stateful quality gate while leaving the actual
 reviewer, criteria, and instructions to the application.
+
+### Structured output inside a ReAct loop
+
+Two shapes are idiomatic, and neither needs a retry loop written by hand:
+
+- **A terminal tool carries the contract.** Declare the tool the loop must call to
+  finish and put the contract on its arguments. A call whose arguments do not
+  satisfy it comes back to the model as a tool result naming what was expected
+  (`expected arguments: …`), and the loop continues with that in context — the
+  schema was already in `tools[].function.parameters`, so nothing had to be said
+  twice.
+- **A `FinishPolicy` accepts or rejects the finish.** `react/review.Policy` is the
+  worked example: when its reviewer is not satisfied it returns
+  `react.FinishDecision{Continue: true, Instruction: …}`, which turns "the model
+  wants to stop" into one more round carrying feedback. A contract check is the
+  same shape:
+
+```go
+func (p answerContract) BeforeFinish(_ context.Context, _ react.State, resp *loom.ChatResponse) (react.FinishDecision, error) {
+    if _, err := p.contract.Decode(resp.Content); err == nil {
+        return react.FinishDecision{}, nil // the answer satisfies the contract
+    }
+    return react.FinishDecision{Continue: true, Instruction: "Answer with the required JSON object."}, nil
+}
+```
+
+Both keep the feedback in the conversation, where the caller can see it, instead of
+in a request the framework rewrote.
 
 ## Web tools
 
