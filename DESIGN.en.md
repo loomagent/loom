@@ -628,6 +628,11 @@ round happens" needs to be a checkable commit point.
 - Boundaries: there is a window between the terminal tool succeeding and the state being committed
   (does a restart re-run it?), so the terminal tool is best side-effect free or idempotent, and
   "nothing in the batch executed" only covers tools the framework runs, not provider-hosted ones.
+- Choices made in the implementation: a marked tool is **exempt from tool budgets** (exempted in
+  exactly two places, `availableTools` and `reserveTool`, because the phase could not end
+  otherwise); a mixed batch is refused with a new error code, `terminal_tool_not_alone`, beside the
+  existing `tool_budget_exhausted`, and the message travels back to the model inside the tool
+  result; `Config.ToolPhaseEndedPrompt` overrides the sentence announcing the change.
 
 **Delivery belongs to the caller.** The framework owns the irreversible phase, the execution
 boundary, generation state, errors and usage, and the atomic final commit and seal; the caller owns

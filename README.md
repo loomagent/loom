@@ -563,6 +563,43 @@ func (p answerContract) BeforeFinish(_ context.Context, _ react.State, resp *loo
 Both keep the feedback in the conversation, where the caller can see it, instead of
 in a request the framework rewrote.
 
+### Ending the tool phase
+
+A tool can be marked as ending the tool phase, which is how a run reaches a round whose
+content is the answer by construction rather than by inference:
+
+```go
+finalize := loom.NewArgsTool(loom.MustArgsContract("finalize_answer"),
+    "End the tool-using phase, on its own, when no more tools are needed.",
+    func(context.Context, loom.Args) (string, error) { return `{"ok":true}`, nil },
+    loom.WithEndsToolPhase())
+```
+
+Once that call **succeeds**, every later request carries no tools, so the answer cannot be
+interleaved with a tool call; the phase is irreversible, and the final answer is written once.
+A failed call comes back as a tool result and the phase stays open. The name belongs to the
+caller: the framework has no phase enum, so `start_report` and `finalize_answer` are the same
+mechanism with different names. A marked tool is never withheld by a tool budget, because the
+phase could not end otherwise, and `Config.ToolPhaseEndedPrompt` overrides the sentence that
+tells the model what changed.
+
+A batch that contains the marked tool must contain **exactly one call**. When it is mixed,
+nothing in the batch executes, every call still gets an error result naming what to do next,
+and the phase stays open:
+
+```
+finalize_answer must be called on its own, and this batch also called lookup. Every call in this
+batch was skipped and the tool phase is still open. Re-send the normal calls you still need first,
+then call finalize_answer alone once you need no tool. Do not treat anything in this batch as done.
+```
+
+Refusing the whole batch is what makes "nothing happened" true: rejecting only the terminal call
+would let a side-effecting tool in the same batch run, be read as part of a failed batch, and run
+again. In nine measured runs the mixed case occurred once, and it was a model bundling its last
+normal call with the finish — which is exactly why the rule is stated as a call count. A tool call
+in the final phase is not executed either: `react.ErrToolCallInFinalPhase` comes back and the caller
+decides whether to ask for the answer again.
+
 ## Web tools
 
 The `tools/web` package defines normalized `WebSearcher` and `WebReader` interfaces
