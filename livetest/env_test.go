@@ -160,6 +160,20 @@ LOOM_LIVE_OPENROUTER_STRUCTURED_OUTPUT=json
 			wantErr: "LOOM_LIVE_OPENROUTER_STRUCTURED_OUTPUT",
 		},
 		{
+			name: "an unset structured-output variable arrives empty and means the default",
+			file: `
+LOOM_LIVE_PROVIDERS=deepseek
+LOOM_LIVE_DEEPSEEK_URL=https://api.deepseek.com/v1
+LOOM_LIVE_DEEPSEEK_KEY=secret
+LOOM_LIVE_DEEPSEEK_MODELS=model-a
+LOOM_LIVE_DEEPSEEK_STRUCTURED_OUTPUT=
+`,
+			want: []liveBlock{{
+				Provider: "deepseek", BaseURL: "https://api.deepseek.com/v1",
+				APIKey: "secret", Effort: "low", StructuredOutput: "json_object", Models: []string{"model-a"},
+			}},
+		},
+		{
 			name: "json_schema reaches the block it was declared for",
 			file: `
 LOOM_LIVE_PROVIDERS=ark
