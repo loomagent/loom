@@ -273,9 +273,14 @@ func loadLiveBlocks(path string) ([]liveBlock, error) {
 		}
 		block.StructuredOutput = loom.StructuredOutputJSONObject
 		if mode, declared := values[prefix+"_STRUCTURED_OUTPUT"]; declared {
-			switch loom.StructuredOutputMode(strings.TrimSpace(mode)) {
-			case loom.StructuredOutputJSONObject, loom.StructuredOutputJSONSchema:
-				block.StructuredOutput = loom.StructuredOutputMode(strings.TrimSpace(mode))
+			// A workflow passes every variable it knows about, so one left unset arrives empty
+			// rather than absent: empty means the default, and only a value nobody recognizes
+			// is a mistake.
+			switch mode = strings.TrimSpace(mode); loom.StructuredOutputMode(mode) {
+			case "", loom.StructuredOutputJSONObject:
+				// the default
+			case loom.StructuredOutputJSONSchema:
+				block.StructuredOutput = loom.StructuredOutputJSONSchema
 			default:
 				return nil, fmt.Errorf("%s_STRUCTURED_OUTPUT is %q, want %q or %q",
 					prefix, mode, loom.StructuredOutputJSONObject, loom.StructuredOutputJSONSchema)
