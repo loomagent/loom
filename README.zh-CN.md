@@ -174,10 +174,15 @@ schema 通过之后,所有校验器都会执行,问题会被收集起来,模型�
 约束的是模型返回什么,而不是模型发送什么。provider 通过原生 `json_schema` 收到这份
 schema;若它只声明支持 `json_object`,则发出一条 `json_object` 请求。Loom 绝不把
 schema(或任何调用方没写的东西)写进提示词:声明“不支持结构化输出”的模型会直接报错
-而不是照样发出去,能力未声明时则原样发出。在 `json_object` 模式下,提示词必须自己
-提出 JSON:有些供应商不提到就拒绝请求——DeepSeek 会回
-`400 Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'`,
-loom 把它当作请求层永久失败,不会重试。响应始终在本地对照同一份契约校验,所以
+而不是照样发出去,能力未声明时则原样发出。在 `json_object` 模式下,提示词得自己提出
+JSON **并给出期望的 JSON 样例**:DeepSeek 的
+[文档](https://api-docs.deepseek.com/zh-cn/guides/json_mode)要求 system 或 user prompt
+必须含有 json 字样、并给出样例,否则回
+`400 Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'`
+——loom 把它当作请求层永久失败,不会重试。那份文档还有两点影响这条路径:`max_tokens`
+要留够空间,截断的响应会按“非法输出”上报;API 有概率返回空的 content,上报方式相同。
+`contract.Example()` 返回契约从声明的 `Example` 值组装并校验过的样例,供必须展示样例的
+提示词使用。响应始终在本地对照同一份契约校验,所以
 provider 被告知的内容与实际强制执行的内容不会各行其是:
 
 ```go
@@ -203,8 +208,8 @@ summary.Get(args)
 
 重试必须由调用方做,原因在“重试的关键不是再问一次,而是第二次带什么”——被拒的输出、
 被拒的原因,以及调用方手上那些上下文。`json_object` 模式下第一次的提示词就必须提到
-JSON(供应商可能不提到就 400),而 schema 本身通常是**重试时**才补进去的。两样都在
-手里,所以循环就是几行:
+JSON 并给出样例(供应商可能不提到就 400),而 schema 与契约样例通常是**重试时**才补
+进去的。两样都在手里,所以循环就是几行:
 
 ```go
 schemaJSON, _ := jsonv2.Marshal(contract.Schema())

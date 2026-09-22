@@ -202,10 +202,16 @@ through a `json_object` request when that is all the model declares. Loom never
 writes the schema, or anything else the caller did not write, into the prompt: a
 model that declares no structured-output support fails rather than being asked
 anyway, and a capability left undeclared sends the request exactly as written. In
-`json_object` mode the prompt has to ask for JSON itself: some providers refuse the
-request without it — DeepSeek answers
-`400 Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'`
-— and Loom treats that as a permanent request failure rather than retrying it. The
+`json_object` mode the prompt has to ask for JSON itself, and to show the shape:
+DeepSeek [documents](https://api-docs.deepseek.com/guides/json_mode) that the system
+or user prompt must contain the word `json` and an example of the expected JSON, and
+answers `400 Prompt must contain the word 'json' in some form to use
+'response_format' of type 'json_object'` without it — a permanent request failure
+Loom does not retry. Two more points from that guide shape this path: `max_tokens`
+has to leave room for the whole object, because a truncated response is reported as
+an invalid one, and the API may occasionally return empty content, which is reported
+the same way. `contract.Example()` returns an example the contract assembled from
+the declared `Example` values and validated, for a prompt that has to show one. The
 response is always validated against the same contract locally, so what the
 provider was told and what is enforced cannot drift:
 
@@ -236,9 +242,10 @@ knows.
 
 A retry needs the caller for a reason: the useful part is *what to send the second
 time* — the rejected output, why it was rejected, and whatever context the caller
-holds. In `json_object` mode the first prompt must already ask for JSON, since the
-provider can refuse the request without it; the retry is where the schema itself
-usually gets added. Both halves are already in hand, so the loop is a few lines:
+holds. In `json_object` mode the first prompt must already ask for JSON and show the
+shape, since the provider can refuse the request otherwise; the retry is where the
+schema and the contract's example usually get added. Both halves are already in
+hand, so the loop is a few lines:
 
 ```go
 schemaJSON, _ := jsonv2.Marshal(contract.Schema())
