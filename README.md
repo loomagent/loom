@@ -197,10 +197,13 @@ free, and safe to run even when another validator has already failed.
 `ChatStructuredArgs` uses the same `ArgsContract` as tool arguments — the same
 `String` / `Uint` / `Enum` declarations, the same schema, the same typed handles
 — only here the contract constrains what the model returns instead of what the
-model sends. The provider receives the contract's schema through native
-`json_schema` or a `json_object` prompt, and the response is always validated
-against the same contract locally, so provider guidance and local enforcement
-cannot drift:
+model sends. The provider receives that schema through native `json_schema`, or
+through a `json_object` request when that is all the model declares. Loom never
+writes the schema, or anything else the caller did not write, into the prompt: a
+model that declares no structured-output support fails rather than being asked
+anyway, and a capability left undeclared sends the request exactly as written. The
+response is always validated against the same contract locally, so what the
+provider was told and what is enforced cannot drift:
 
 ```go
 summary := loom.String("summary").Required().MinLen(1).MaxLen(200).Desc("Summary of the result.")
@@ -211,8 +214,9 @@ summary.Get(args)
 ```
 
 Every response must be one complete JSON value that satisfies the contract,
-regardless of whether the model supports `json_schema`, `json_object`, or only
-text output. Markdown fences, surrounding prose, multiple JSON values, unknown
+whichever way the model was constrained — `json_schema`, a `json_object` request,
+or not at all because the capability is undeclared. Markdown fences, surrounding
+prose, multiple JSON values, unknown
 arguments, and constraint violations are rejected; JSON whitespace is accepted.
 No strict-mode option is required. Use `WithStructuredValidator` for business
 rules that a schema cannot express.

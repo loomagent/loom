@@ -14,7 +14,7 @@ type CallModelOption func(*callModelConfig)
 type callModelConfig struct {
 	failover        *FailoverConfig
 	captureContent  bool
-	requestForModel func(ChatModel) ChatRequest
+	requestForModel func(ChatModel) (ChatRequest, error)
 }
 
 // FailoverConfig follows Eino's failover shape: the caller decides whether to
@@ -48,7 +48,7 @@ func WithCallModelCaptureContent(capture bool) CallModelOption {
 	}
 }
 
-func withCallModelRequestForModel(fn func(ChatModel) ChatRequest) CallModelOption {
+func withCallModelRequestForModel(fn func(ChatModel) (ChatRequest, error)) CallModelOption {
 	return func(c *callModelConfig) {
 		c.requestForModel = fn
 	}
@@ -96,7 +96,11 @@ func CallModel(
 	for attemptNum := uint64(1); ; attemptNum++ {
 		callReq := req
 		if cfg.requestForModel != nil {
-			callReq = cfg.requestForModel(current)
+			built, err := cfg.requestForModel(current)
+			if err != nil {
+				return nil, err
+			}
+			callReq = built
 		}
 		resp, err := callModelOnce(ctx, purpose, current, callReq, cfg.captureContent)
 		attempt := FailoverAttempt{

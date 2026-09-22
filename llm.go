@@ -254,8 +254,9 @@ type ResolvedReasoning struct {
 // failing a request.
 //
 // Note the division of labour with ChatStructured: it downgrades deliberately
-// according to the declared capability (json_schema → json_object → prompt), so a
-// request it builds never exceeds the declaration. This check catches the
+// according to the declared capability (json_schema → json_object, and an error
+// when a capability is declared as none), so a request it builds never exceeds the
+// declaration. This check catches the
 // out-of-bounds request written by hand, bypassing ChatStructured.
 func CheckRequestAgainstCapabilities(caps ModelCapabilities, req ChatRequest) error {
 	if req.StructuredOutput != nil {

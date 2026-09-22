@@ -5,7 +5,6 @@ package loom
 
 import (
 	"context"
-	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -104,10 +103,13 @@ func (e *StructuredOutputError) Unwrap() error {
 //	summary := loom.String("summary").MinLen(1).MaxLen(200).Desc("review summary")
 //
 // A provider with native json_schema support receives this same schema; one that
-// only supports json_object falls back to a JSON object plus a prompt constraint.
-// The output is always validated locally against the contract, and the whole
-// response must be a single valid JSON value. Business constraints a schema cannot
-// express go through WithStructuredValidator.
+// only supports json_object receives a JSON object request. Loom never writes the
+// schema, or anything else the caller did not write, into the prompt: a request that
+// constrains the model by rewriting the conversation is a hidden one. So on a model
+// that declares no structured-output support this fails, and on a model whose
+// capability is undeclared the request goes out as the caller wrote it — the output
+// is still validated locally against the contract, and a retry reports what did not
+// satisfy it.
 func ChatStructuredArgs(
 	ctx context.Context,
 	purpose string,
@@ -148,12 +150,15 @@ func ChatStructuredArgs(
 	var lastErr error
 	for attempt := uint64(1); attempt <= cfg.maxAttempts; attempt++ {
 		callOptions := append([]CallModelOption{}, cfg.callOptions...)
-		callOptions = append(callOptions, withCallModelRequestForModel(func(current ChatModel) ChatRequest {
-			callReq := withStructuredOutputRequest(req, current.Capabilities(), cfg.name, cfg.description, schema)
+		callOptions = append(callOptions, withCallModelRequestForModel(func(current ChatModel) (ChatRequest, error) {
+			callReq, err := withStructuredOutputRequest(req, current.Capabilities(), cfg.name, cfg.description, schema)
+			if err != nil {
+				return ChatRequest{}, err
+			}
 			if attempt > 1 {
 				callReq.Messages = withStructuredRetryMessages(callReq.Messages, lastResp, lastErr)
 			}
-			return callReq
+			return callReq, nil
 		}))
 		resp, err := CallModel(ctx, purpose, model, req, callOptions...)
 		if err != nil {
@@ -246,7 +251,7 @@ func StructuredSchemaObject(schema *Schema) (map[string]any, error) {
 	return out, nil
 }
 
-func withStructuredOutputRequest(req ChatRequest, caps ModelCapabilities, name, description string, schema *Schema) ChatRequest {
+func withStructuredOutputRequest(req ChatRequest, caps ModelCapabilities, name, description string, schema *Schema) (ChatRequest, error) {
 	switch caps.StructuredOutput {
 	case StructuredOutputJSONSchema:
 		req.ResponseFormat = ResponseFormatDefault
@@ -259,36 +264,19 @@ func withStructuredOutputRequest(req ChatRequest, caps ModelCapabilities, name, 
 	case StructuredOutputJSONObject:
 		req.ResponseFormat = ResponseFormatJSONObject
 		req.StructuredOutput = &StructuredOutput{Mode: StructuredOutputJSONObject}
-		req.Messages = appendStructuredPrompt(req.Messages, schema, description)
-	case StructuredOutputNone, StructuredOutputUnsupported:
-		// Explicitly unsupported, or undeclared: both fall back to writing the schema
-		// into the prompt as plain text
-		req.ResponseFormat = ResponseFormatDefault
-		req.StructuredOutput = nil
-		req.Messages = appendStructuredPrompt(req.Messages, schema, description)
+	case StructuredOutputNone:
+		// A model that declares no structured-output support cannot be constrained by this
+		// call, and rewriting the prompt to compensate would hide the request from whoever
+		// wrote the conversation. Fail instead of calling more quietly.
+		return ChatRequest{}, fmt.Errorf("loom: model declares structured_output=%q, so it cannot be asked for structured output", caps.StructuredOutput)
 	default:
+		// Undeclared capability: the request goes out exactly as the caller wrote it, the
+		// same way an undeclared capability passes through everywhere else. The contract
+		// still validates the response locally, and a retry reports what did not satisfy it.
 		req.ResponseFormat = ResponseFormatDefault
 		req.StructuredOutput = nil
-		req.Messages = appendStructuredPrompt(req.Messages, schema, description)
 	}
-	return req
-}
-
-func appendStructuredPrompt(messages []Message, schema *Schema, description string) []Message {
-	schemaJSON, err := jsonv2.Marshal(schema, jsontext.WithIndent("  "))
-	if err != nil {
-		schemaJSON = []byte("{}")
-	}
-	content := fmt.Sprintf(`Output only one JSON value that satisfies the JSON Schema below. Do not output Markdown or an explanation.
-
-Description:
-%s
-
-JSON Schema:
-%s`, description, string(schemaJSON))
-	out := append([]Message{}, messages...)
-	out = append(out, Message{Role: RoleSystem, Content: content})
-	return out
+	return req, nil
 }
 
 func withStructuredRetryMessages(messages []Message, resp *ChatResponse, err error) []Message {
