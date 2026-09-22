@@ -75,9 +75,7 @@ func TestJSONSchemaSuiteSubset(t *testing.T) {
 // knownDeviations records where Loom's deliberately narrower subset disagrees
 // with the specification. Keyed by "file|group|case" and asserted to be hit, so
 // a deviation that is fixed fails the test until its entry is removed.
-var knownDeviations = map[string]string{
-	"type.json|integer type matches integers|a float with zero fractional part is an integer": "Loom reads an integer as a number written without a fraction or exponent, so 1.0 must be sent as 1",
-}
+var knownDeviations = map[string]string{}
 
 type suiteGroup struct {
 	Description string         `json:"description"`

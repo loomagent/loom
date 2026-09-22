@@ -47,7 +47,7 @@ func (a *Arg[T]) Get(args Args) T {
 		args.requireDeclared(a.spec.name)
 		return out
 	}
-	if err := jsonv2.Unmarshal(raw, &out); err != nil {
+	if err := readArgument(raw, &out); err != nil {
 		// Decode checked every present argument against its Go type, so a
 		// failure here means the contract and this handle disagree.
 		panic(fmt.Sprintf("loom: read tool argument %q: %v", a.spec.name, err))
@@ -151,7 +151,7 @@ func (v wholeValidator) declare(b *argsBuilder) error {
 // format and get both.
 var formatPatterns = map[string]string{
 	"date":      `^\d{4}-\d{2}-\d{2}$`,
-	"time":      `^\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$`,
+	"time":      `^\d{2}:\d{2}:\d{2}(\.\d+)?(Z|z|[+-]\d{2}:\d{2})$`,
 	"date-time": `^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|z|[+-]\d{2}:\d{2})$`,
 	"uuid":      `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`,
 }
@@ -177,18 +177,21 @@ func Enum(name string, values ...string) *StringArg {
 
 // Date declares a string argument holding an ISO 8601 calendar date
 // (YYYY-MM-DD). It is shorthand for Format("date").
-func Date(name string) *StringArg { return String(name).Format("date") }
+func Date(name string) *StringArg { return String(name).Format("date").Validate(validateCalendarDate) }
 
-// Time declares a string argument holding an ISO 8601 time of day. It is
-// shorthand for Format("time").
-func Time(name string) *StringArg { return String(name).Format("time") }
+// Time declares a string argument holding an RFC 3339 full-time, offset included. It is
+// Format("time") plus the clock check the shape cannot make: impossible components, and a leap
+// second anywhere but 23:59:60 UTC, are refused.
+func Time(name string) *StringArg { return String(name).Format("time").Validate(validateClockTime) }
 
 // DateTime declares a string argument holding an RFC 3339 timestamp. It is
-// shorthand for Format("date-time").
-func DateTime(name string) *StringArg { return String(name).Format("date-time") }
+// Format("date-time") plus the calendar and clock checks above.
+func DateTime(name string) *StringArg {
+	return String(name).Format("date-time").Validate(validateOffsetDateTime)
+}
 
-// UUID declares a string argument holding a UUID. It is shorthand for
-// Format("uuid").
+// UUID declares a string argument holding a UUID. It is Format("uuid"), whose shape pattern is
+// the whole format: no version or variant is required.
 func UUID(name string) *StringArg { return String(name).Format("uuid") }
 
 // StringArg declares and configures a string argument.

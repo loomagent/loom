@@ -224,7 +224,7 @@ func (s *argSpec) decodeInto(raw jsontext.Value) error {
 	case argKindStrings:
 		target = new([]string)
 	}
-	return jsonv2.Unmarshal(raw, target)
+	return readArgument(raw, target)
 }
 
 // runValidators executes every declared validator and collects the model-facing

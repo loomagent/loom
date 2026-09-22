@@ -272,8 +272,15 @@ for attempt := 1; ; attempt++ {
 
 有些约束不是通过关键字本身,而是通过投影出来的 `pattern` 强制的:`Date`、`Time`、
 `DateTime`、`UUID` 既设置 `format`,也设置匹配的形状 pattern;而只给 `format` 不给
-pattern 会在构建契约时被拒。有一处刻意偏离规范:`integer` 必须写成不带小数和指数的
-形式,因此 `1.0` 会被拒绝。
+pattern 会在构建契约时被拒。`integer` 按**值**判定而不是按写法:因此 `1.0`、`5e0` 都是
+整数;读取走精确有理数运算——大到 `float64` 装不下的字面量也不会被舍入,而超出 `uint64`
+范围的会变成面向模型的类型问题,而不是读取时 panic。
+
+`format` 本身保持规范的**注解**语义:`ValidateSchema` 不断言任何 format,因为规范不要求。
+契约补上的是"形状表达不了的那部分":`Date` 拒绝日历上不存在的日子,`Time`/`DateTime` 拒绝
+时钟不可能的分量、以及落在 UTC 23:59:60 以外任何时刻的闰秒,而 `UUID` 的形状 pattern 已经
+说清了全部。这些用例就是规范自带的那批,放在 `testdata/format` 下、由 `TestFormatCases`
+运行。`Time` 是 RFC 3339 full-time,因此**必须有偏移量**。
 
 `loom.ValidateSchema(schema, value)` 对别处产生的值执行与契约相同的校验;
 `loom.ConstJSON(v)` 把一个值渲染成 `const` 所持有的原始 JSON。
