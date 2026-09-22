@@ -543,6 +543,12 @@ also fails when this README or `live.env.example` names a model: the example shi
 the shape of the configuration and leaves the choice to the operator, because
 which models a credential may call is theirs.
 
+In this repository the keys live in Actions secrets and the endpoints and model
+lists in Actions variables, and `.github/workflows/live.yml` runs the suite on
+demand: never on a push or a pull request, because a manual or scheduled run uses
+the default branch's copy of the workflow, so a branch cannot run modified
+workflow code with the repository's credentials.
+
 `internal/toolcontract` validates its subset against the official
 [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite):
 the draft2020-12 files for the supported keywords are vendored under
