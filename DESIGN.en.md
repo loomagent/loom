@@ -495,6 +495,10 @@ contract. The schema is never written into the prompt: a request that constrains
 rewriting the conversation is a hidden one. Loom asks once — an invalid response returns as a
 `*StructuredOutputError` carrying it, and how many more times to ask, with what context, is the
 caller's decision (a react turn feeds the error back beside the rest of the conversation).
+In `json_object` mode the prompt belongs to the caller, and the contract hands over material it
+already validated: `contract.Example()` is an instance that satisfies the schema, and
+`contract.JSONObjectPrompt()` is the whole instruction — ask for JSON, show the example, name the
+fields. Loom never puts either of them into a request.
 
 ### 7.5 Synchronous calls and failover
 
@@ -521,6 +525,7 @@ github.com/loomagent/loom/
   argument_guidance.go          the expected / example arguments summary
   schema.go schema_model.go     the loom.Schema model
   schema_error.go               violation -> model-facing wording
+  format_validation.go          format semantics (calendar / clock / leap second)
   structured_output.go          ChatStructuredArgs
 
   # The model abstraction and calling
@@ -551,6 +556,7 @@ github.com/loomagent/loom/
   # Validation and conformance
   internal/schema/               the schema model itself
   internal/toolcontract/         the validator plus the official JSON Schema Test Suite subset
+  testdata/format/               the suite's optional/format cases (date/time/date-time/uuid)
 
   # Surrounding frameworks
   modelprobe/                    behavioural model capability probing
@@ -602,6 +608,10 @@ github.com/loomagent/loom/
 | 26 | `ValidateSchema` compiles its schema on every call; nothing caches it, because a schema is a plain value its caller may edit | done |
 | 27 | The framework ships no throttling policy — windows, AIMD, circuit thresholds are deployment policy — only the per-attempt admission seam | done |
 | 28 | A provider's structured reasoning round-trips as the raw blocks it sent, in order: Message, ChatResponse, and Chunk each carry it opaquely, and a stream is concatenated frame by frame as the vendor documents | done |
+| 29 | the framework writes no prompt and performs no output retry: it asks once and hands back the response and the error; how many more attempts, and what they carry, is the caller's | landed |
+| 30 | in `json_object` mode the prompt belongs to the caller; the contract only hands over what it validated at build time (`Example()` / `JSONObjectPrompt()`) | landed |
+| 31 | an `integer` is judged by value (exact rational arithmetic); `format` is asserted in the contract while the schema keeps the specification's annotation semantics | landed |
+| 32 | the subset suite's skips are counted in three categories: unmodeled keywords (18, a policy), keyword spellings (4, a policy), unimplemented constructs (14, a gap) | landed |
 
 Dropped: the Note family (reasoning plus a label already carries process information);
 CloseDetector (external termination is a cancelled ctx with a cause); `Writer.RunTool`

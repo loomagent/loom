@@ -500,6 +500,10 @@ func ChatStructuredArgs(ctx context.Context, purpose string, model ChatModel, re
 带着响应内容返回,再试几次、带什么上下文由调用方决定(react 轮次会把错误连同其余对话
 一起反馈给模型)。
 
+`json_object` 模式下提示词由调用方持有,契约只交出**构建时已校验过**的材料:`contract.Example()`
+给出满足 schema 的样例,`contract.JSONObjectPrompt()` 给出"要 JSON + 样例 + 字段约束"的完整
+引导语。框架从不自行把其中任何一段放进请求。
+
 ### 7.5 同步调用与 failover
 
 ```go
@@ -525,6 +529,7 @@ github.com/loomagent/loom/
   argument_guidance.go          expected / example arguments 摘要
   schema.go schema_model.go     loom.Schema 模型
   schema_error.go               violation → 面向模型的文案
+  format_validation.go          format 语义检查(日历 / 时钟 / 闰秒)
   structured_output.go          ChatStructuredArgs
 
   # 模型抽象与调用
@@ -555,6 +560,7 @@ github.com/loomagent/loom/
   # 校验与对照
   internal/schema/               schema 模型本体
   internal/toolcontract/         校验器 + 官方 JSON Schema Test Suite 子集
+  testdata/format/               官方 optional/format 用例(date/time/date-time/uuid)
 
   # 周边框架
   modelprobe/                    基于真实行为的模型能力探测
@@ -606,6 +612,10 @@ github.com/loomagent/loom/
 | 26 | `ValidateSchema` 每次调用重新编译 schema;不缓存,因为 schema 是调用方可能修改的普通值 | 已落实 |
 | 27 | 框架不内置节流策略(并发窗口 / AIMD / 熔断阈值都是部署策略),只提供每次物理尝试的准入缝 | 已落实 |
 | 28 | provider 自己的结构化推理以原始 JSON 按序往返;Message / ChatResponse / Chunk 各带一个不透明载体,loom 不解释,流式按官方规则逐帧拼接 | 已落实 |
+| 29 | 框架不写提示词、不做输出重试:只问一次,把响应与错误原样交回;重试次数与第二次带什么由调用方决定 | 已落实 |
+| 30 | `json_object` 模式下提示词由调用方持有;契约只交出构建时校验过的样例与字段引导语(`Example()` / `JSONObjectPrompt()`) | 已落实 |
+| 31 | `integer` 按值判定(精确有理数运算);`format` 的断言在契约层,schema 层保持规范的注解语义 | 已落实 |
+| 32 | 子集套件的跳过分三类并各自断言:未建模关键字(策略 18)/ 关键字写法(策略 4)/ 未实现构造(缺口 14) | 已落实 |
 
 已放弃:Note 系列(reasoning 与 label 足以表达过程信息)、CloseDetector(外部终结
 由调用方取消带 cause 的 ctx 表达)、`Writer.RunTool`(由 `RunToolByName` 与
