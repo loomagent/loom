@@ -1,0 +1,54 @@
+name: Live provider tests
+
+# These tests call real endpoints and spend real credit, so nothing here runs on a push or a
+# pull request. `workflow_dispatch` and `schedule` both use this file from the default branch,
+# so a branch cannot run modified workflow code with the repository's credentials, and a fork
+# pull request never sees them at all.
+#
+# Secrets are the credentials. Endpoints and model lists are repository variables, because
+# which models a credential may call is the operator's decision and can change without a commit.
+on:
+  workflow_dispatch:
+
+# Uncomment to validate against the providers on a schedule. Every run spends the configured
+# models' credit, which is why it is off until an operator turns it on.
+#  schedule:
+#    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-provider-tests
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LOOM_LIVE_PROVIDERS: ${{ vars.LOOM_LIVE_PROVIDERS }}
+      LOOM_LIVE_DEEPSEEK_URL: ${{ vars.LOOM_LIVE_DEEPSEEK_URL }}
+      LOOM_LIVE_DEEPSEEK_KEY: ${{ secrets.LOOM_LIVE_DEEPSEEK_KEY }}
+      LOOM_LIVE_DEEPSEEK_MODELS: ${{ vars.LOOM_LIVE_DEEPSEEK_MODELS }}
+      LOOM_LIVE_ZHIPUAI_URL: ${{ vars.LOOM_LIVE_ZHIPUAI_URL }}
+      LOOM_LIVE_ZHIPUAI_KEY: ${{ secrets.LOOM_LIVE_ZHIPUAI_KEY }}
+      LOOM_LIVE_ZHIPUAI_MODELS: ${{ vars.LOOM_LIVE_ZHIPUAI_MODELS }}
+      LOOM_LIVE_ARK_URL: ${{ vars.LOOM_LIVE_ARK_URL }}
+      LOOM_LIVE_ARK_KEY: ${{ secrets.LOOM_LIVE_ARK_KEY }}
+      LOOM_LIVE_ARK_MODELS: ${{ vars.LOOM_LIVE_ARK_MODELS }}
+      LOOM_LIVE_OPENROUTER_URL: ${{ vars.LOOM_LIVE_OPENROUTER_URL }}
+      LOOM_LIVE_OPENROUTER_KEY: ${{ secrets.LOOM_LIVE_OPENROUTER_KEY }}
+      LOOM_LIVE_OPENROUTER_MODELS: ${{ vars.LOOM_LIVE_OPENROUTER_MODELS }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Write the live configuration
+        run: |
+          umask 077
+          env | grep '^LOOM_LIVE_' | sort > "$RUNNER_TEMP/live.env"
+          sed -E 's/^(_?LOOM_LIVE_[A-Z0-9]+_KEY)=.*/\1=***/' "$RUNNER_TEMP/live.env"
+      - name: Live provider tests
+        run: LOOM_LIVE_ENV="$RUNNER_TEMP/live.env" go test ./livetest/ -v -timeout 25m

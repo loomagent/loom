@@ -472,6 +472,10 @@ TestLiveProviders/<provider>/<model>` 选中一个模型。
 `live.env.example` 或文档里出现具体模型名时会失败：示例只承载配置的形状，选择留给
 操作者——一份凭据能调用哪些模型，是操作者的决定。
 
+在本仓库里，key 存在 Actions secrets，端点与模型列表存在 Actions variables；
+`.github/workflows/live.yml` 按需手动运行：不在 push 或 pull request 上运行，因为手动或
+定时触发用到的是默认分支上的那份工作流文件，分支无法用改了代码的工作流拿到仓库凭据。
+
 `internal/toolcontract` 会用官方
 [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
 校验它所支持的子集:draft2020-12 中与已支持关键字对应的文件被放在
