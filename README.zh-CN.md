@@ -487,6 +487,29 @@ func (p answerContract) BeforeFinish(_ context.Context, _ react.State, resp *loo
 
 两种做法都把反馈留在对话里、留在调用方看得见的地方,而不是放在一个由框架改写的请求里。
 
+### 结束工具阶段
+
+工具可以标记为"结束工具阶段"——这是一次运行能到达"content 按构造就是正文"那一轮的方式,而不是靠推断:
+
+```go
+finalize := loom.NewArgsTool(loom.MustArgsContract("finalize_answer"),
+    "End the tool-using phase, on its own, when no more tools are needed.",
+    func(context.Context, loom.Args) (string, error) { return `{"ok":true}`, nil },
+    loom.WithEndsToolPhase())
+```
+
+该调用**成功**之后,此后每次请求都不带工具,所以正文不可能与工具调用交错;阶段不可逆,最终答案只写一次。调用失败则错误作为工具结果回来,阶段保持开放。名字属于调用方:框架没有阶段枚举,`start_report` 与 `finalize_answer` 是同一机制的两种命名。带标记的工具**不会被工具预算扣住**(否则阶段无法结束),`Config.ToolPhaseEndedPrompt` 可覆盖那句告知模型"工具阶段已结束"的提示。
+
+含标记工具的批次必须**恰好一个 call**;混批时**整批都不执行**,但每个 call 仍会拿到一条说明下一步的错误结果,阶段保持开放:
+
+```
+finalize_answer must be called on its own, and this batch also called lookup. Every call in this
+batch was skipped and the tool phase is still open. Re-send the normal calls you still need first,
+then call finalize_answer alone once you need no tool. Do not treat anything in this batch as done.
+```
+
+整批拒绝才让"这一批什么都没发生"成立:只拒终止调用会让同批的副作用工具执行、被模型读成整批失败、然后**再执行一次**。实测 9 组里混批出现 1 次,形态是"最后一次普通调用 + 收尾"——这正是规则按**调用数量**定义的原因。终局阶段里出现工具调用也不执行:返回 `react.ErrToolCallInFinalPhase`,由调用方决定是否再要一次答案。
+
 ## Web 工具
 
 `tools/web` 包定义了归一化的 `WebSearcher` 与 `WebReader` 接口,以及 Loom 的工具

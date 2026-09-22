@@ -32,6 +32,9 @@ type Config struct {
 	ToolCallLimits map[string]uint64
 	// SoftLandingPrompt is appended as a system message before the final call.
 	SoftLandingPrompt string
+	// ToolPhaseEndedPrompt is appended as a system message once the tool phase has ended, so the
+	// model knows its next reply is the answer. Empty uses a default sentence.
+	ToolPhaseEndedPrompt string
 	// SoftLandingReserve forces the final tool-free call when the context
 	// deadline is this close. Zero disables deadline-based soft landing.
 	SoftLandingReserve time.Duration
@@ -66,6 +69,9 @@ type State struct {
 	ToolInfos     []*loom.ToolInfo
 	ToolCallsUsed uint64
 	ToolUses      map[string]uint64
+	// ToolPhaseEnded reports that a terminal tool has succeeded: no tool is available from the
+	// next call on, and its content is the final answer.
+	ToolPhaseEnded bool
 }
 
 // StepPlan describes the next model call and may be modified by StepPolicy.
@@ -132,7 +138,17 @@ type Result struct {
 	Messages     []loom.Message
 	SoftLanded   bool
 	Steps        uint64
+	// ToolPhaseEnded reports that the run ended in the final phase, either because a terminal
+	// tool succeeded or because a budget forced the soft landing.
+	ToolPhaseEnded bool
+	// EndedByTool names the terminal tool that ended the phase, and is empty when a budget did.
+	EndedByTool string
 }
+
+// ErrToolCallInFinalPhase reports a model that asked for a tool in a round that has none. The
+// final phase removes tools precisely so the answer cannot be interleaved with one, so the call
+// is not executed: the caller decides whether to ask for the answer again.
+var ErrToolCallInFinalPhase = errors.New("react: the model called a tool in the final phase")
 
 // Run executes a ReAct loop, streaming model output and tool events through w.
 // It does not call Writer.FinalAnswer; the caller owns the surrounding Turn's
@@ -160,12 +176,15 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: list tools: %w", purpose, err)
 	}
+	terminalTools := terminalToolNames(allTools)
+	var toolPhaseEnded bool
+	var endedByTool string
 	msgs := append([]loom.Message(nil), cfg.Messages...)
 	uses := make(map[string]uint64, len(cfg.ToolCallLimits))
 	var totalUses uint64
 
 	for step := uint64(0); ; step++ {
-		state := snapshotState(step, msgs, allTools, totalUses, uses)
+		state := snapshotState(step, msgs, allTools, totalUses, uses, toolPhaseEnded)
 		plan := StepPlan{
 			Messages: append([]loom.Message(nil), msgs...),
 			Tools:    availableTools(allTools, cfg, totalUses, uses),
@@ -175,7 +194,19 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 		if deadline, ok := ctx.Deadline(); ok && cfg.SoftLandingReserve > 0 {
 			deadlineNear = time.Until(deadline) <= cfg.SoftLandingReserve
 		}
-		if loopLimitReached || deadlineNear {
+		switch {
+		case toolPhaseEnded:
+			// The tool phase is over: every later request carries no tools, so its content is
+			// the answer by construction, and the phase cannot be reopened.
+			plan.IsFinalStep = true
+			plan.Tools = nil
+			plan.ToolChoice = &loom.ToolChoice{Mode: loom.ToolChoiceNone}
+			prompt := strings.TrimSpace(cfg.ToolPhaseEndedPrompt)
+			if prompt == "" {
+				prompt = defaultToolPhaseEndedPrompt
+			}
+			plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Content: prompt})
+		case loopLimitReached || deadlineNear:
 			plan.IsFinalStep = true
 			plan.Tools = nil
 			plan.ToolChoice = &loom.ToolChoice{Mode: loom.ToolChoiceNone}
@@ -214,7 +245,19 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 			return nil, fmt.Errorf("%s: step %d: %w", purpose, step+1, err)
 		}
 		if plan.IsFinalStep {
-			return &Result{FinalContent: response.Content, Messages: appendResponse(plan.Messages, response), SoftLanded: true, Steps: step + 1}, nil
+			// A final phase has no tools to call: a tool call here is not executed, and the
+			// caller decides whether to ask for the answer again.
+			if len(response.ToolCalls) > 0 {
+				return nil, fmt.Errorf("%s: step %d: %w", purpose, step+1, ErrToolCallInFinalPhase)
+			}
+			return &Result{
+				FinalContent:   response.Content,
+				Messages:       appendResponse(plan.Messages, response),
+				SoftLanded:     !toolPhaseEnded,
+				Steps:          step + 1,
+				ToolPhaseEnded: true,
+				EndedByTool:    endedByTool,
+			}, nil
 		}
 
 		if len(response.ToolCalls) == 0 {
@@ -243,20 +286,40 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 		}
 
 		results := make([]loom.ToolExecResult, 0, len(response.ToolCalls))
-		for _, call := range response.ToolCalls {
-			if reason := reserveTool(call.Name, cfg, &totalUses, uses); reason != "" {
-				result, err := rejectToolCall(ctx, w, call, reason)
+		if reason := mixedTerminalBatch(response.ToolCalls, terminalTools); reason != "" {
+			// Nothing in this batch runs; every call still gets a result, because the next
+			// request is invalid without one per call id.
+			for _, call := range response.ToolCalls {
+				result, err := rejectToolCall(ctx, w, call, "terminal_tool_not_alone", reason)
 				if err != nil {
-					return nil, fmt.Errorf("%s: step %d reject tool: %w", purpose, step+1, err)
+					return nil, fmt.Errorf("%s: step %d reject batch: %w", purpose, step+1, err)
 				}
 				results = append(results, result)
-				continue
 			}
-			one, err := loom.ExecuteToolCalls(ctx, w, cfg.Tools, []loom.ToolCall{call})
-			if err != nil {
-				return nil, fmt.Errorf("%s: step %d execute tool: %w", purpose, step+1, err)
+		} else {
+			for _, call := range response.ToolCalls {
+				if reason := reserveTool(call.Name, cfg, &totalUses, uses, terminalTools); reason != "" {
+					result, err := rejectToolCall(ctx, w, call, "tool_budget_exhausted", reason)
+					if err != nil {
+						return nil, fmt.Errorf("%s: step %d reject tool: %w", purpose, step+1, err)
+					}
+					results = append(results, result)
+					continue
+				}
+				one, err := loom.ExecuteToolCalls(ctx, w, cfg.Tools, []loom.ToolCall{call})
+				if err != nil {
+					return nil, fmt.Errorf("%s: step %d execute tool: %w", purpose, step+1, err)
+				}
+				for _, result := range one {
+					// Only success ends the phase; a failure comes back as a tool result and the
+					// loop continues.
+					if result.Err == nil && terminalTools[result.Call.Name] {
+						toolPhaseEnded = true
+						endedByTool = result.Call.Name
+					}
+				}
+				results = append(results, one...)
 			}
-			results = append(results, one...)
 		}
 		promptResults := results
 		if cfg.TransformToolResults != nil {
@@ -264,7 +327,7 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 		}
 		msgs = loom.AppendAssistantTurn(plan.Messages, response, promptResults)
 
-		state = snapshotState(step, msgs, allTools, totalUses, uses)
+		state = snapshotState(step, msgs, allTools, totalUses, uses, toolPhaseEnded)
 		for _, policy := range cfg.AfterToolsPolicies {
 			if policy == nil {
 				continue
@@ -383,19 +446,71 @@ func writeFallbackNote(
 	return nil
 }
 
-func snapshotState(step uint64, messages []loom.Message, tools []*loom.ToolInfo, total uint64, uses map[string]uint64) State {
+func snapshotState(step uint64, messages []loom.Message, tools []*loom.ToolInfo, total uint64, uses map[string]uint64, phaseEnded bool) State {
 	useCopy := make(map[string]uint64, len(uses))
 	maps.Copy(useCopy, uses)
-	return State{Step: step, Messages: append([]loom.Message(nil), messages...), ToolInfos: append([]*loom.ToolInfo(nil), tools...), ToolCallsUsed: total, ToolUses: useCopy}
+	return State{Step: step, Messages: append([]loom.Message(nil), messages...), ToolInfos: append([]*loom.ToolInfo(nil), tools...), ToolCallsUsed: total, ToolUses: useCopy, ToolPhaseEnded: phaseEnded}
 }
 
-func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[string]uint64) []*loom.ToolInfo {
-	if cfg.MaxToolCalls > 0 && total >= cfg.MaxToolCalls {
-		return nil
+// terminalToolNames returns the tools marked as ending the tool phase. The marker comes from the
+// registry, never from a name a model printed.
+func terminalToolNames(tools []*loom.ToolInfo) map[string]bool {
+	names := make(map[string]bool)
+	for _, info := range tools {
+		if info != nil && info.EndsToolPhase {
+			names[info.Name] = true
+		}
 	}
+	return names
+}
+
+// mixedTerminalBatch reports why a batch that contains a terminal tool together with anything else
+// is refused, and returns an empty string when the batch may run. The rule is a call count: a batch
+// containing a terminal tool has exactly one call. Refusing the whole batch, rather than only the
+// terminal call, is what makes "nothing happened" true: a side-effecting tool in the same batch
+// would otherwise run, be read by the model as part of a failed batch, and run again.
+func mixedTerminalBatch(calls []loom.ToolCall, terminalTools map[string]bool) string {
+	if len(calls) < 2 {
+		return ""
+	}
+	var terminals, others []string
+	for _, call := range calls {
+		if terminalTools[call.Name] {
+			terminals = append(terminals, call.Name)
+			continue
+		}
+		others = append(others, call.Name)
+	}
+	if len(terminals) == 0 {
+		return ""
+	}
+	const skipped = "Every call in this batch was skipped and the tool phase is still open."
+	if len(terminals) > 1 {
+		return fmt.Sprintf("%s were called in one batch. %s Call exactly one of them, on its own, once you need no tool.",
+			strings.Join(terminals, " and "), skipped)
+	}
+	return fmt.Sprintf("%s must be called on its own, and this batch also called %s. %s Re-send the normal calls you still need first, then call %s alone once you need no tool. Do not treat anything in this batch as done.",
+		terminals[0], strings.Join(others, ", "), skipped, terminals[0])
+}
+
+// defaultToolPhaseEndedPrompt says what changed once the tool phase ended: tools are gone, so the
+// next reply can only be the answer.
+const defaultToolPhaseEndedPrompt = "The tool phase is over: no tool is available any more. Write the final answer now."
+
+func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[string]uint64) []*loom.ToolInfo {
+	outOfBudget := cfg.MaxToolCalls > 0 && total >= cfg.MaxToolCalls
 	out := make([]*loom.ToolInfo, 0, len(all))
 	for _, info := range all {
 		if info == nil {
+			continue
+		}
+		// A terminal tool is not a research tool: it is the only way the phase can end, so no
+		// budget withholds it.
+		if info.EndsToolPhase {
+			out = append(out, info)
+			continue
+		}
+		if outOfBudget {
 			continue
 		}
 		if limit := cfg.ToolCallLimits[info.Name]; limit > 0 && uses[info.Name] >= limit {
@@ -406,7 +521,12 @@ func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[str
 	return out
 }
 
-func reserveTool(name string, cfg Config, total *uint64, uses map[string]uint64) string {
+func reserveTool(name string, cfg Config, total *uint64, uses map[string]uint64, terminalTools map[string]bool) string {
+	// A terminal tool is not a research tool: no budget withholds it, or the phase could never
+	// end.
+	if terminalTools[name] {
+		return ""
+	}
 	if cfg.MaxToolCalls > 0 && *total >= cfg.MaxToolCalls {
 		return fmt.Sprintf("total tool call limit %d reached", cfg.MaxToolCalls)
 	}
@@ -418,12 +538,12 @@ func reserveTool(name string, cfg Config, total *uint64, uses map[string]uint64)
 	return ""
 }
 
-func rejectToolCall(ctx context.Context, w loom.Writer, call loom.ToolCall, reason string) (loom.ToolExecResult, error) {
+func rejectToolCall(ctx context.Context, w loom.Writer, call loom.ToolCall, code, reason string) (loom.ToolExecResult, error) {
 	err := errors.New(reason)
 	if writeErr := w.WriteToolCall(ctx, call.Name, call); writeErr != nil {
 		return loom.ToolExecResult{}, writeErr
 	}
-	if writeErr := w.WriteToolResult(ctx, call.Name, loom.ToolResult{CallID: call.ID, ToolName: call.Name, Err: &loom.ItemError{Code: "tool_budget_exhausted", Message: reason}}); writeErr != nil {
+	if writeErr := w.WriteToolResult(ctx, call.Name, loom.ToolResult{CallID: call.ID, ToolName: call.Name, Err: &loom.ItemError{Code: code, Message: reason}}); writeErr != nil {
 		return loom.ToolExecResult{}, writeErr
 	}
 	return loom.ToolExecResult{Call: call, Err: err}, nil

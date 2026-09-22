@@ -41,6 +41,11 @@ type ToolInfo struct {
 	Description     string
 	Parameters      *Schema
 	RequiresNetwork bool
+	// EndsToolPhase marks a tool whose successful execution ends the tool phase: every later
+	// request carries no tools, so that call's content is the final answer by construction. A
+	// batch that calls it must call nothing else, and it is never withheld by a tool budget —
+	// the phase could not end otherwise.
+	EndsToolPhase bool
 }
 
 // Tool is one callable tool.
@@ -78,6 +83,14 @@ type Tool interface {
 type invokeFunc func(ctx context.Context, argumentsJSON string) (string, error)
 
 type ToolOption func(*ToolInfo)
+
+// WithEndsToolPhase marks a tool as ending the tool phase. The name is the caller's: the
+// framework has no phase enum, and a caller that wants a different name writes a different tool.
+func WithEndsToolPhase() ToolOption {
+	return func(info *ToolInfo) {
+		info.EndsToolPhase = true
+	}
+}
 
 func WithRequiresNetwork() ToolOption {
 	return func(info *ToolInfo) {
