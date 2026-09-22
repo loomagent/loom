@@ -494,8 +494,9 @@ func ChatStructuredArgs(ctx context.Context, purpose string, model ChatModel, re
 ```
 
 用与工具参数**同一套** `ArgsContract` 约束模型返回值:provider 原生支持
-`json_schema` 时传同一份 schema,仅支持 `json_object` 时退化为 JSON object + 提示词
-约束,本地始终按契约校验并支持输出重试。
+`json_schema` 时传同一份 schema,只支持 `json_object` 时发出一条 JSON object 请求,
+声明不支持的模型直接报错,本地始终按契约校验并支持输出重试。schema 绝不写进提示词:
+靠改写对话来约束模型,是一种隐藏请求。
 
 ### 7.5 同步调用与 failover
 

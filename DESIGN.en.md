@@ -489,8 +489,10 @@ func ChatStructuredArgs(ctx context.Context, purpose string, model ChatModel, re
 
 The **same** `ArgsContract` that constrains tool arguments constrains what the model
 returns: a provider with native `json_schema` support receives the same schema, one that
-only supports `json_object` falls back to a JSON object plus a prompt constraint, and the
-output is always validated locally against the contract, with output retries.
+only supports `json_object` receives a JSON object request, a model that declares no
+structured-output support fails, and the output is always validated locally against the
+contract, with output retries. The schema is never written into the prompt: a request that
+constrains the model by rewriting the conversation is a hidden one.
 
 ### 7.5 Synchronous calls and failover
 

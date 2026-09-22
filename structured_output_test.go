@@ -3,6 +3,7 @@ package loom
 
 import (
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
 	"strings"
@@ -87,37 +88,68 @@ func TestChatStructuredArgs_JSONSchemaRetryThenSuccess(t *testing.T) {
 	}
 }
 
-func TestChatStructuredArgs_JSONObjectAddsSchemaPrompt(t *testing.T) {
+// The rules belong in the structured-output field, never in the conversation: a prompt the caller
+// did not write is a hidden request. This covers every capability, including the undeclared one.
+func TestChatStructuredArgsDoesNotTouchThePrompt(t *testing.T) {
 	contract, done, notes := reviewContract()
-	model := &fakeStructuredModel{
-		capabilities: ModelCapabilities{StructuredOutput: StructuredOutputJSONObject},
-		responses:    []string{`{"overall_done":false,"notes":"need more"}`},
+	caller := []Message{{Role: RoleUser, Content: "review"}}
+	for _, mode := range []StructuredOutputMode{StructuredOutputJSONSchema, StructuredOutputJSONObject, StructuredOutputUnsupported} {
+		t.Run(string(mode), func(t *testing.T) {
+			model := &fakeStructuredModel{
+				capabilities: ModelCapabilities{StructuredOutput: mode},
+				responses:    []string{`{"overall_done":false,"notes":"need more"}`},
+			}
+			got, _, err := ChatStructuredArgs(
+				t.Context(),
+				"test.structured",
+				model,
+				ChatRequest{Messages: caller},
+				contract,
+			)
+			if err != nil {
+				t.Fatalf("ChatStructuredArgs() error = %v", err)
+			}
+			if done.Get(got) || notes.Get(got) != "need more" {
+				t.Fatalf("got = %#v", got)
+			}
+			if len(model.requests) != 1 {
+				t.Fatalf("requests = %d, want 1", len(model.requests))
+			}
+			sent, err := jsonv2.Marshal(model.requests[0].Messages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := jsonv2.Marshal(caller)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(sent) != string(want) {
+				t.Fatalf("messages = %s, want exactly the caller's %s", sent, want)
+			}
+		})
 	}
-	got, _, err := ChatStructuredArgs(
-		context.Background(),
-		"test.structured",
+}
+
+// A model that declares it cannot produce structured output is a contradiction with this call,
+// and saying so is better than calling it and hoping the conversation compensates.
+func TestChatStructuredArgsRejectsAModelWithoutStructuredOutput(t *testing.T) {
+	contract, _, _ := reviewContract()
+	model := &fakeStructuredModel{
+		capabilities: ModelCapabilities{StructuredOutput: StructuredOutputNone},
+		responses:    []string{`{"overall_done":true,"notes":"ok"}`},
+	}
+	_, _, err := ChatStructuredArgs(
+		t.Context(),
+		"test.structured_none",
 		model,
 		ChatRequest{Messages: []Message{{Role: RoleUser, Content: "review"}}},
 		contract,
 	)
-	if err != nil {
-		t.Fatalf("ChatStructuredArgs() error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "structured_output") {
+		t.Fatalf("error = %v, want a complaint about the declared structured output", err)
 	}
-	if done.Get(got) || notes.Get(got) != "need more" {
-		t.Fatalf("got = %#v", got)
-	}
-	if len(model.requests) != 1 {
-		t.Fatalf("requests = %d, want 1", len(model.requests))
-	}
-	req := model.requests[0]
-	if req.StructuredOutput == nil || req.StructuredOutput.Mode != StructuredOutputJSONObject {
-		t.Fatalf("structured output = %#v", req.StructuredOutput)
-	}
-	if req.ResponseFormat != ResponseFormatJSONObject {
-		t.Fatalf("response format = %s", req.ResponseFormat)
-	}
-	if len(req.Messages) != 2 || !strings.Contains(req.Messages[1].Content, "JSON Schema") {
-		t.Fatalf("schema prompt missing: %#v", req.Messages)
+	if len(model.requests) != 0 {
+		t.Fatalf("requests = %d, want none: the call must not go out", len(model.requests))
 	}
 }
 
@@ -172,8 +204,8 @@ func TestChatStructuredArgs_FailoverRebuildsRequestForFallbackCapabilities(t *te
 	if fallback.requests[0].ResponseFormat != ResponseFormatJSONObject {
 		t.Fatalf("fallback response format = %s", fallback.requests[0].ResponseFormat)
 	}
-	if len(fallback.requests[0].Messages) != 2 || !strings.Contains(fallback.requests[0].Messages[1].Content, "JSON Schema") {
-		t.Fatalf("fallback schema prompt missing: %#v", fallback.requests[0].Messages)
+	if len(fallback.requests[0].Messages) != 1 || fallback.requests[0].Messages[0].Content != "review" {
+		t.Fatalf("fallback must receive the caller's messages untouched: %#v", fallback.requests[0].Messages)
 	}
 }
 
@@ -207,8 +239,12 @@ func TestChatStructuredArgsProjectsContractConstraints(t *testing.T) {
 				if property.MinLength == nil || *property.MinLength != 1 || property.MaxLength == nil || *property.MaxLength != 3 {
 					t.Fatalf("provider schema lost contract constraints: %+v", property)
 				}
-			} else if len(req.Messages) != 1 || !strings.Contains(req.Messages[0].Content, `"maxLength": 3`) {
-				t.Fatalf("JSON object prompt lost schema constraints: %+v", req.Messages)
+			} else {
+				// json_object carries no schema, so the contract is enforced locally instead — the
+				// retry above already showed that — and the caller's messages stay untouched.
+				if req.ResponseFormat != ResponseFormatJSONObject || len(req.Messages) != 0 {
+					t.Fatalf("json_object must send no schema and add no messages: format=%s messages=%+v", req.ResponseFormat, req.Messages)
+				}
 			}
 		})
 	}
@@ -217,7 +253,7 @@ func TestChatStructuredArgsProjectsContractConstraints(t *testing.T) {
 func TestChatStructuredArgsRejectsInvalidResponsesByDefault(t *testing.T) {
 	notes := String("notes").Required()
 	contract := MustArgsContract("structured_strict", notes)
-	for _, mode := range []StructuredOutputMode{StructuredOutputJSONSchema, StructuredOutputJSONObject, StructuredOutputNone} {
+	for _, mode := range []StructuredOutputMode{StructuredOutputJSONSchema, StructuredOutputJSONObject} {
 		for _, tc := range []struct{ name, response string }{
 			{"fenced", "```json\n{\"notes\":\"bad\"}\n```"},
 			{"leading prose", `Here is the result: {"notes":"bad"}`},

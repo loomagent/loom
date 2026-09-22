@@ -171,9 +171,11 @@ schema 通过之后,所有校验器都会执行,问题会被收集起来,模型�
 
 `ChatStructuredArgs` 使用与工具参数完全相同的 `ArgsContract`——相同的
 `String` / `Uint` / `Enum` 声明、相同的 schema、相同的类型化句柄——只是在这里契约
-约束的是模型返回什么,而不是模型发送什么。provider 通过原生 `json_schema` 或
-`json_object` 提示词收到契约的 schema,而响应始终在本地对照同一份契约校验,所以
-provider 侧的引导和本地的强制不会各行其是:
+约束的是模型返回什么,而不是模型发送什么。provider 通过原生 `json_schema` 收到这份
+schema;若它只声明支持 `json_object`,则发出一条 `json_object` 请求。Loom 绝不把
+schema(或任何调用方没写的东西)写进提示词:声明“不支持结构化输出”的模型会直接报错
+而不是照样发出去,能力未声明时则原样发出。响应始终在本地对照同一份契约校验,所以
+provider 被告知的内容与实际强制执行的内容不会各行其是:
 
 ```go
 summary := loom.String("summary").Required().MinLen(1).MaxLen(200).Desc("Summary of the result.")
@@ -183,8 +185,9 @@ args, response, err := loom.ChatStructuredArgs(ctx, "summary", model, request, c
 summary.Get(args)
 ```
 
-无论模型支持 `json_schema`、`json_object`,还是只能输出文本,每个响应都必须是满足
-契约的完整 JSON 值。Markdown 代码围栏、前后包裹的散文、多个 JSON 值、未知参数和
+无论模型是按 `json_schema` 约束、按 `json_object` 请求约束,还是在能力未声明时不受
+约束,每个响应都必须是满足契约的完整 JSON 值。Markdown 代码围栏、前后包裹的散文、
+多个 JSON 值、未知参数和
 约束违例都会被拒绝;JSON 空白符可以接受。不需要任何 strict 模式选项。schema 无法
 表达的业务规则请用 `WithStructuredValidator`。
 
