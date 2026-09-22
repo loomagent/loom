@@ -99,6 +99,15 @@ func (c *ArgsContract) Name() string { return c.name }
 // Schema returns an independent copy of the model-facing argument schema.
 func (c *ArgsContract) Schema() *Schema { return cloneSchema(c.schema) }
 
+// Example returns an example instance that satisfies the contract, as JSON, or an
+// empty string when the contract cannot assemble one.
+//
+// A provider that only takes a json_object request is sent no schema, and such an API
+// may require the prompt to show the shape instead. An example assembled from the
+// declared Example values and validated against the schema at build time cannot drift
+// from what Decode enforces, which a hand-written sample can.
+func (c *ArgsContract) Example() string { return c.guidance.example }
+
 // Decode parses and validates one tool call with a background context.
 func (c *ArgsContract) Decode(argumentsJSON string) (Args, error) {
 	return c.DecodeContext(context.Background(), argumentsJSON)

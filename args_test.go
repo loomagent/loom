@@ -569,3 +569,33 @@ func TestFormatAndNotBlankBothApply(t *testing.T) {
 		t.Fatalf("summary = %s", argumentError.ExpectedArguments)
 	}
 }
+
+// The example a contract can show a model must be one Decode accepts, since a prompt
+// sample that the contract rejects would teach the model the wrong shape.
+func TestArgsContractExample(t *testing.T) {
+	t.Parallel()
+	verdict := Enum("verdict", "positive", "negative").Required().Example("positive")
+	confidence := Float("confidence").Required().Min(0).Max(1).Example(0.5)
+	notes := String("notes").Example("fast but damaged")
+	withExamples := MustArgsContract("sentiment", verdict, confidence, notes)
+	example := withExamples.Example()
+	if example == "" {
+		t.Fatal("a contract whose required arguments declare examples must assemble one")
+	}
+	if _, err := withExamples.Decode(example); err != nil {
+		t.Fatalf("the assembled example must satisfy its own contract: %v (example=%s)", err, example)
+	}
+
+	// A required argument with no declared example leaves the contract without one,
+	// rather than showing the model a shape the contract would reject.
+	bare := MustArgsContract("sentiment", Enum("verdict", "positive", "negative").Required())
+	if got := bare.Example(); got != "" {
+		t.Fatalf("example = %q, want none", got)
+	}
+
+	// A declared example that violates its own schema is an authoring mistake, caught
+	// when the contract is built rather than when a model copies it.
+	if _, err := NewArgsContract("sentiment", Enum("verdict", "positive", "negative").Required().Example("mixed")); err == nil {
+		t.Fatal("an example outside the enum must be refused when the contract is built")
+	}
+}
