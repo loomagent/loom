@@ -560,6 +560,88 @@ completions supports that fully: a terminal tool, physically removing the tools,
    capability);
 3. a provider stops exposing chat completions.
 
+### 7.7 The terminal tool and the final phase
+
+**The problem** (measured): a tool round's `content` can arrive alongside tool calls and already
+contain conclusions, while "there is no tool call" carries two different meanings at once — the run
+finished, or it did not do what the protocol required (a stall, a plan, a refusal, a call written as
+markup). So **the answer can only come from a round whose tools have been removed**, and "when that
+round happens" needs to be a checkable commit point.
+
+**The design**
+
+1. **A data marker, not a policy**: a tool carries `EndsToolPhase` (API: `WithEndsToolPhase()`). The
+   name belongs to the caller; the framework introduces no phase enum.
+2. **Only success ends the phase**: a failed execution returns its error to the model as a tool
+   result, and the phase stays open.
+3. **The guarantees**: once the marked tool succeeds, tools are physically removed; every later
+   request carries none, so its `content` is the answer by construction; the phase is irreversible;
+   the final answer is written once.
+4. **A mixed batch is rejected whole**: if a response contains a **valid** terminal tool, the batch
+   must be **exactly one call**. When it is mixed, **nothing in the batch executes**, every call gets
+   an error result (the protocol requires a result per `call_id`, or the next request is invalid),
+   and the phase stays open.
+
+   Evidence (nine runs, ~30 calls; three models × three task shapes):
+
+   | batch shape | count |
+   |---|---|
+   | normal tools only | 8 |
+   | terminal tool alone ✓ | seen in 8 of 9 runs |
+   | **mixed ✗** | **1** (grok: `[calculator, finalize_answer]`, the last computation bundled with the finish) |
+   | terminal tool twice ✗ | 0 |
+   | an answer written after tools were removed | 9 of 9 |
+
+   The runs also show a model bundling its **last normal call** with the terminal one, and that
+   rejecting only the terminal call lets a side-effecting tool in the same batch run twice (the model
+   reads the batch as failed and re-sends it). A pre-check over the whole batch is the only rule that
+   can promise nothing happened in it.
+
+5. **The error must point somewhere useful**: "Every call in this batch was skipped and the tool
+   phase is still open. Re-send the normal calls you still need first; once you need none, call
+   `{terminal tool}` on its own. Do not treat anything in this batch as done." Telling the model to
+   call the terminal tool next would invite it to drop the evidence it was about to gather.
+6. **No recovery policy inside the framework**: a missed or premature call, retries, retraction, and
+   switching models belong to the caller. The product added automatic recovery and then narrowed it
+   away, which matches "the framework provides atomic interfaces and guarantees; the policy is the
+   caller's".
+
+**Implementation conditions** (from review)
+
+- The pre-check must run **before any execution**, and before budget deduction, execution hooks, and
+  concurrency scheduling.
+- The rule is defined by **call count** (a batch containing a valid terminal tool has exactly one
+  call), and the marker must come from the registry's tool definition rather than from the name the
+  model output.
+- **A repeated mixed batch must consume model rounds, tokens, and time.** It is not progress;
+  otherwise consecutive rejections slip past the idle protection.
+- **The error has to reach the model**: an internal error field is not enough, the tool result's
+  content must carry the message.
+- **Three events, kept apart**: the tool phase ending, a candidate answer being produced, and the
+  Turn being sealed. Removing tools only guarantees that generation happens without tools; it does
+  not make the content deliverable. A soft landing and a terminal tool enter the same phase but keep
+  different close reasons.
+- **"Written once" cannot rest on `ErrTurnClosed` alone**: before sealing there are two windows (two
+  concurrent commits passing the check, and a failed streaming closure followed by a retry), so it
+  needs an atomic commit placeholder or a narrowed promise — the caller commits serially and does not
+  reopen a streamed candidate.
+- Boundaries: there is a window between the terminal tool succeeding and the state being committed
+  (does a restart re-run it?), so the terminal tool is best side-effect free or idempotent, and
+  "nothing in the batch executed" only covers tools the framework runs, not provider-hosted ones.
+
+**Delivery belongs to the caller.** The framework owns the irreversible phase, the execution
+boundary, generation state, errors and usage, and the atomic final commit and seal; the caller owns
+whole-text review, draft replacement, presentation, and which candidate is committed. That is what
+separates **producing a candidate** from **committing the answer**: after the tool phase ends a
+caller may generate or review drafts without tools as often as it likes and commit exactly one
+canonical answer, and rewriting a draft does not reopen the tool phase. If the framework ever
+streams a final answer itself, that must be an explicit choice: once the first delta is public, whole
+-text replacement can no longer be promised without a retraction mechanism.
+
+**Still open**: whether whole-batch rejection should be the product default, and whether rejecting
+only the terminal call is better in a product whose tools are mostly read-only, needs more mixed
+-batch samples comparing completion rate against extra rounds.
+
 ## 8. Package layout
 
 ```
