@@ -50,7 +50,12 @@ type liveBlock struct {
 	// Effort is sent with every reasoning request this block makes. The empty value enables
 	// reasoning without naming an effort, which is what a model that accepts no effort needs.
 	Effort loom.ReasoningEffort
-	Models []string
+	// StructuredOutput is the capability this block declares for its structured call:
+	// json_object by default, or json_schema for a model whose endpoint enforces a schema.
+	// Declaring the stronger one is a claim the run checks: an endpoint that refuses
+	// json_schema fails the model it was declared for.
+	StructuredOutput loom.StructuredOutputMode
+	Models           []string
 }
 
 // TestLiveProviders exercises every model configured by LOOM_LIVE_ENV.
@@ -156,7 +161,7 @@ func exerciseModel(t *testing.T, block liveBlock, model string) {
 	}
 	t.Logf("carried back: finish=%s content=%q", second.FinishReason, second.Content)
 
-	exerciseJSONObjectPrompt(t, ctx, block, model, reasoning)
+	exerciseStructuredOutput(t, ctx, block, model, reasoning)
 }
 
 // exerciseJSONObjectPrompt runs the composition the README recommends where no schema field
@@ -172,7 +177,7 @@ func exerciseModel(t *testing.T, block liveBlock, model string) {
 // the error, and the schema — gets one chance to, and the attempts that were needed are logged
 // either way. Asserting "first attempt" would make this a coin flip on the model's mood, which
 // is exactly why the caller owns the retry in the first place.
-func exerciseJSONObjectPrompt(t *testing.T, ctx context.Context, block liveBlock, model string, reasoning loom.Reasoning) {
+func exerciseStructuredOutput(t *testing.T, ctx context.Context, block liveBlock, model string, reasoning loom.Reasoning) {
 	t.Helper()
 	answer := loom.String("answer").Required().Desc("The numeric answer.").Example("17 × 23 = 391")
 	certain := loom.Bool("certain").Required().Desc("Whether you are certain of the answer.").Example(true)
@@ -185,40 +190,47 @@ func exerciseJSONObjectPrompt(t *testing.T, ctx context.Context, block liveBlock
 		t.Fatal("a contract whose arguments all declare examples must assemble one")
 	}
 
-	// json_object is what this checks: the endpoint receives no schema, so the prompt carries the
-	// shape and Loom adds nothing to it.
+	// The declared mode decides what goes out, and each mode asserts its own claim: json_object
+	// carries no schema, so the prompt has to, while json_schema has to be accepted by the
+	// endpoint because the declaration said it would be.
 	built, err := modelfactory.Build(modelfactory.Config{
 		Provider:     block.Provider,
 		APIKey:       block.APIKey,
 		BaseURL:      block.BaseURL,
 		Model:        model,
-		Capabilities: &loom.ModelCapabilities{StructuredOutput: loom.StructuredOutputJSONObject},
+		Capabilities: &loom.ModelCapabilities{StructuredOutput: block.StructuredOutput},
 	})
 	if err != nil {
 		t.Fatalf("build %s/%s for json_object: %v", block.Provider, model, err)
 	}
 
-	messages := []loom.Message{
-		{Role: loom.RoleSystem, Content: contract.JSONObjectPrompt()},
-		{Role: loom.RoleUser, Content: "What is 17*23?"},
+	messages := []loom.Message{{Role: loom.RoleUser, Content: "What is 17*23?"}}
+	attempts := jsonObjectPromptAttempts
+	if block.StructuredOutput == loom.StructuredOutputJSONObject {
+		// The provider refuses a json_object request whose prompt never asks for JSON, so the
+		// contract's own instruction leads.
+		messages = append([]loom.Message{{Role: loom.RoleSystem, Content: contract.JSONObjectPrompt()}}, messages...)
+	} else {
+		// The endpoint enforces the schema, so the first attempt is the assertion.
+		attempts = 1
 	}
-	for attempt := 1; attempt <= jsonObjectPromptAttempts; attempt++ {
+	for attempt := 1; attempt <= attempts; attempt++ {
 		args, response, callErr := loom.ChatStructuredArgs(ctx, "live.json_object", built,
 			loom.ChatRequest{Messages: messages, Reasoning: reasoning}, contract)
 		if callErr == nil {
-			t.Logf("json_object prompt: attempt %d/%d satisfied the contract (model=%s)",
-				attempt, jsonObjectPromptAttempts, response.Model)
+			t.Logf("%s: attempt %d/%d satisfied the contract (model=%s)",
+				block.StructuredOutput, attempt, attempts, response.Model)
 			if !strings.Contains(answer.Get(args), "391") {
-				t.Errorf("json_object prompt answered %q, want an answer containing %q", answer.Get(args), "391")
+				t.Errorf("%s answered %q, want an answer containing %q", block.StructuredOutput, answer.Get(args), "391")
 			}
 			return
 		}
 		var invalid *loom.StructuredOutputError
 		if !errors.As(callErr, &invalid) {
-			t.Fatalf("json_object prompt: request-level failure on attempt %d: %v", attempt, callErr)
+			t.Fatalf("%s: request-level failure on attempt %d: %v", block.StructuredOutput, attempt, callErr)
 		}
-		t.Logf("json_object prompt: attempt %d/%d rejected: %v", attempt, jsonObjectPromptAttempts, callErr)
-		if attempt == jsonObjectPromptAttempts {
+		t.Logf("%s: attempt %d/%d rejected: %v", block.StructuredOutput, attempt, attempts, callErr)
+		if attempt == attempts {
 			break
 		}
 		messages = append(messages,
@@ -226,7 +238,7 @@ func exerciseJSONObjectPrompt(t *testing.T, ctx context.Context, block liveBlock
 			loom.Message{Role: loom.RoleUser, Content: fmt.Sprintf(
 				"Your previous output was rejected: %v\nReturn one JSON value matching:\n%s", callErr, schemaJSON)})
 	}
-	t.Errorf("json_object prompt: the contract was still unsatisfied after %d attempts", jsonObjectPromptAttempts)
+	t.Errorf("%s: the contract was still unsatisfied after %d attempts", block.StructuredOutput, attempts)
 }
 
 // loadLiveBlocks reads path as KEY=VALUE lines and returns the provider blocks that
@@ -258,6 +270,16 @@ func loadLiveBlocks(path string) ([]liveBlock, error) {
 			APIKey:   strings.TrimSpace(values[prefix+"_KEY"]),
 			Effort:   defaultEffort,
 			Models:   splitList(values[prefix+"_MODELS"]),
+		}
+		block.StructuredOutput = loom.StructuredOutputJSONObject
+		if mode, declared := values[prefix+"_STRUCTURED_OUTPUT"]; declared {
+			switch loom.StructuredOutputMode(strings.TrimSpace(mode)) {
+			case loom.StructuredOutputJSONObject, loom.StructuredOutputJSONSchema:
+				block.StructuredOutput = loom.StructuredOutputMode(strings.TrimSpace(mode))
+			default:
+				return nil, fmt.Errorf("%s_STRUCTURED_OUTPUT is %q, want %q or %q",
+					prefix, mode, loom.StructuredOutputJSONObject, loom.StructuredOutputJSONSchema)
+			}
 		}
 		if effort, declared := values[prefix+"_EFFORT"]; declared {
 			block.Effort = loom.ReasoningEffort(strings.TrimSpace(effort))

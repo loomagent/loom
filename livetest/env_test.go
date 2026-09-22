@@ -27,11 +27,12 @@ LOOM_LIVE_DEEPSEEK_KEY=secret
 LOOM_LIVE_DEEPSEEK_MODELS=model-a, model-b
 `,
 			want: []liveBlock{{
-				Provider: "deepseek",
-				BaseURL:  "https://api.deepseek.com/v1",
-				APIKey:   "secret",
-				Effort:   "low",
-				Models:   []string{"model-a", "model-b"},
+				Provider:         "deepseek",
+				BaseURL:          "https://api.deepseek.com/v1",
+				APIKey:           "secret",
+				Effort:           "low",
+				StructuredOutput: "json_object",
+				Models:           []string{"model-a", "model-b"},
 			}},
 		},
 		{
@@ -49,8 +50,8 @@ LOOM_LIVE_ARK_KEY=secret
 LOOM_LIVE_ARK_MODELS=model-d
 `,
 			want: []liveBlock{
-				{Provider: "zhipuai", BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "secret", Effort: "low", Models: []string{"model-c"}},
-				{Provider: "ark", BaseURL: "https://ark.cn-beijing.volces.com/api/v3", APIKey: "secret", Effort: "low", Models: []string{"model-d"}},
+				{Provider: "zhipuai", BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "secret", Effort: "low", StructuredOutput: "json_object", Models: []string{"model-c"}},
+				{Provider: "ark", BaseURL: "https://ark.cn-beijing.volces.com/api/v3", APIKey: "secret", Effort: "low", StructuredOutput: "json_object", Models: []string{"model-d"}},
 			},
 		},
 		{
@@ -67,8 +68,8 @@ LOOM_LIVE_ARK_MODELS=model-d
 LOOM_LIVE_ARK_EFFORT=
 `,
 			want: []liveBlock{
-				{Provider: "deepseek", BaseURL: "https://api.deepseek.com/v1", APIKey: "secret", Effort: "xhigh", Models: []string{"model-a"}},
-				{Provider: "ark", BaseURL: "https://ark.cn-beijing.volces.com/api/v3", APIKey: "secret", Effort: "", Models: []string{"model-d"}},
+				{Provider: "deepseek", BaseURL: "https://api.deepseek.com/v1", APIKey: "secret", Effort: "xhigh", StructuredOutput: "json_object", Models: []string{"model-a"}},
+				{Provider: "ark", BaseURL: "https://ark.cn-beijing.volces.com/api/v3", APIKey: "secret", Effort: "", StructuredOutput: "json_object", Models: []string{"model-d"}},
 			},
 		},
 		{
@@ -82,11 +83,12 @@ LOOM_LIVE_DEEPSEEK_KEY='sk=a=b'
 LOOM_LIVE_DEEPSEEK_MODELS=model-a,
 `,
 			want: []liveBlock{{
-				Provider: "deepseek",
-				BaseURL:  "https://api.deepseek.com/v1",
-				APIKey:   "sk=a=b",
-				Effort:   "low",
-				Models:   []string{"model-a"},
+				Provider:         "deepseek",
+				BaseURL:          "https://api.deepseek.com/v1",
+				APIKey:           "sk=a=b",
+				Effort:           "low",
+				StructuredOutput: "json_object",
+				Models:           []string{"model-a"},
 			}},
 		},
 		{
@@ -141,6 +143,35 @@ LOOM_LIVE_DEEPSEEK_KEY=secret
 LOOM_LIVE_DEEPSEEK_MODELS=,
 `,
 			wantErr: "LOOM_LIVE_DEEPSEEK_MODELS names no model",
+		},
+		{
+			name: "a declared structured-output mode is read, and a wrong one is an error",
+			file: `
+LOOM_LIVE_PROVIDERS=ark,openrouter
+LOOM_LIVE_ARK_URL=https://ark.cn-beijing.volces.com/api/v3
+LOOM_LIVE_ARK_KEY=secret
+LOOM_LIVE_ARK_MODELS=model-d
+LOOM_LIVE_ARK_STRUCTURED_OUTPUT=json_schema
+LOOM_LIVE_OPENROUTER_URL=https://openrouter.ai/api/v1
+LOOM_LIVE_OPENROUTER_KEY=secret
+LOOM_LIVE_OPENROUTER_MODELS=model-e
+LOOM_LIVE_OPENROUTER_STRUCTURED_OUTPUT=json
+`,
+			wantErr: "LOOM_LIVE_OPENROUTER_STRUCTURED_OUTPUT",
+		},
+		{
+			name: "json_schema reaches the block it was declared for",
+			file: `
+LOOM_LIVE_PROVIDERS=ark
+LOOM_LIVE_ARK_URL=https://ark.cn-beijing.volces.com/api/v3
+LOOM_LIVE_ARK_KEY=secret
+LOOM_LIVE_ARK_MODELS=model-d
+LOOM_LIVE_ARK_STRUCTURED_OUTPUT=json_schema
+`,
+			want: []liveBlock{{
+				Provider: "ark", BaseURL: "https://ark.cn-beijing.volces.com/api/v3",
+				APIKey: "secret", Effort: "low", StructuredOutput: "json_schema", Models: []string{"model-d"},
+			}},
 		},
 		{
 			name: "an effort that is not a token is an error",

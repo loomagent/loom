@@ -4,6 +4,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -187,5 +188,24 @@ func TestDecodesAllOf(t *testing.T) {
 	}
 	if s.AllOf[0].Pattern != "\\S" || s.AllOf[1].MinLength == nil || *s.AllOf[1].MinLength != 1 {
 		t.Fatalf("branches = %+v", s.AllOf)
+	}
+}
+
+// A keyword value the specification defines as an integer has to be written as one. The test
+// suite contains minLength: 2.0 because the specification defines 2.0 as an integer, and Loom
+// refuses it: that is a deliberate policy, recorded with the other two categories of skipped
+// cases in internal/toolcontract/suite_test.go and described in README.md.
+func TestIntegerKeywordValuesMustBeWrittenAsIntegers(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{`{"minLength":2.0}`, `{"maxItems":1e2}`, `{"maxLength":0.0}`} {
+		var s Schema
+		err := jsonv2.Unmarshal([]byte(raw), &s)
+		if err == nil {
+			t.Errorf("decoded %s, want the integer keyword value to be refused", raw)
+			continue
+		}
+		if !strings.Contains(err.Error(), "into Go int") {
+			t.Errorf("error for %s = %v, want the strict number error", raw, err)
+		}
 	}
 }

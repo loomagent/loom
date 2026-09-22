@@ -311,7 +311,11 @@ gives up.
 Both directions build on one schema model. `loom.Schema` carries exactly the
 keywords the declared-argument builder emits, and decoding rejects any other
 keyword, so a schema cannot advertise a constraint the validator silently
-ignores.
+ignores. A keyword value the specification defines as an integer has to be written as
+one: `minLength: 2.0` is refused, although an *instance* of `2.0` is an integer and
+is read as one. `internal/toolcontract` records all three categories of test-suite
+cases Loom skips — unmodeled keywords, keyword spellings, unimplemented constructs — with
+their counts asserted, so changing one has to update the record.
 
 Some constraints are enforced through a projected `pattern` rather than the
 keyword itself: `Date`, `Time`, `DateTime`, and `UUID` set `format` *and* a
@@ -656,8 +660,11 @@ LOOM_LIVE_DEEPSEEK_MODELS=<model>[,<model>...]
 
 Every model runs three flows: a streamed tool-calling turn whose arguments are
 decoded against the tool's own contract, that assistant turn carried back into a
-second request, and a structured-output call made the only way `json_object` allows —
-the composition above, whose contract has to be satisfied within one retry. Those are
+second request, and a structured-output call. That last one follows the capability the
+block declares: `json_object` by default, where the composition above carries the shape
+and the contract has to be satisfied within one retry, or `json_schema`, where the
+endpoint gets the schema in `response_format` and the run asserts it accepts it — a
+declared capability that the model does not have fails here rather than in production. Those are
 what the suite asserts; what varies by model, such as how much reasoning came back,
 whether it arrived as structured blocks, or how many attempts that structured call
 needed, is logged instead. Each provider is a
