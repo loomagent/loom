@@ -174,7 +174,10 @@ schema 通过之后,所有校验器都会执行,问题会被收集起来,模型�
 约束的是模型返回什么,而不是模型发送什么。provider 通过原生 `json_schema` 收到这份
 schema;若它只声明支持 `json_object`,则发出一条 `json_object` 请求。Loom 绝不把
 schema(或任何调用方没写的东西)写进提示词:声明“不支持结构化输出”的模型会直接报错
-而不是照样发出去,能力未声明时则原样发出。响应始终在本地对照同一份契约校验,所以
+而不是照样发出去,能力未声明时则原样发出。在 `json_object` 模式下,提示词必须自己
+提出 JSON:有些供应商不提到就拒绝请求——DeepSeek 会回
+`400 Prompt must contain the word 'json' in some form to use 'response_format' of type 'json_object'`,
+loom 把它当作请求层永久失败,不会重试。响应始终在本地对照同一份契约校验,所以
 provider 被告知的内容与实际强制执行的内容不会各行其是:
 
 ```go
@@ -195,6 +198,38 @@ summary.Get(args)
 响应内容返回,同时附上该次调用产生的同一个 `*ChatResponse`。Loom 只问一次:再试几次、
 下一次请求带什么,是调用方的策略;ReAct 轮次的做法就是把这条错误和它已知的其它信息
 一起放进对话。
+
+### 重试一次结构化调用
+
+重试必须由调用方做,原因在“重试的关键不是再问一次,而是第二次带什么”——被拒的输出、
+被拒的原因,以及调用方手上那些上下文。`json_object` 模式下第一次的提示词就必须提到
+JSON(供应商可能不提到就 400),而 schema 本身通常是**重试时**才补进去的。两样都在
+手里,所以循环就是几行:
+
+```go
+schemaJSON, _ := jsonv2.Marshal(contract.Schema())
+messages := base
+for attempt := 1; ; attempt++ {
+    args, _, err := loom.ChatStructuredArgs(ctx, "summary", model,
+        loom.ChatRequest{Messages: messages}, contract)
+    if err == nil {
+        break
+    }
+    var invalid *loom.StructuredOutputError
+    if !errors.As(err, &invalid) || attempt == 3 || ctx.Err() != nil {
+        return err // 请求本身的失败,provider 层已经重试过了
+    }
+    messages = append(messages,
+        loom.Message{Role: loom.RoleAssistant, Content: invalid.Content},
+        loom.Message{Role: loom.RoleUser, Content: fmt.Sprintf(
+            "Your previous output was rejected: %v\nReturn one JSON value matching:\n%s",
+            err, schemaJSON)})
+}
+```
+
+走到 `*StructuredOutputError` 意味着模型给出了回答、但那个回答不可用;其它错误都来自请求
+本身,而 provider 的重试调度已经在那里做过它该做的事。只有调用方能区分两者,也只有
+调用方能决定下一次是原样重发、补上 schema,还是放弃。
 
 ### 两个方向共享的 schema
 
@@ -384,6 +419,29 @@ func TestStoreContract(t *testing.T) {
 `contextpolicy.ReactStepPolicy` 把可组合的上下文构建器适配到该循环。
 `react/review.Policy` 提供有状态的质量闸门,而把真正的评审方、评审标准和指令留给
 应用。
+
+### ReAct 循环里的结构化输出
+
+有两种惯用形状,而且都不需要手写重试循环:
+
+- **用一个终止工具承载契约。** 把循环必须调用来结束的那个工具的**参数**写成契约:
+  参数不满足契约的调用会作为 tool result 回到模型,并说明期望什么
+  (`expected arguments: …`),循环就带着它在上下文里继续下去——schema 本来就已经在
+  `tools[].function.parameters` 里了,不需要说第二遍。
+- **用 `FinishPolicy` 接受或拒绝结束。** `react/review.Policy` 就是现成范例:评审不满足时
+  返回 `react.FinishDecision{Continue: true, Instruction: …}`,把“模型想停”变成带着反馈
+  多跑一轮。契约校验是同一个形状:
+
+```go
+func (p answerContract) BeforeFinish(_ context.Context, _ react.State, resp *loom.ChatResponse) (react.FinishDecision, error) {
+    if _, err := p.contract.Decode(resp.Content); err == nil {
+        return react.FinishDecision{}, nil // 回答满足契约
+    }
+    return react.FinishDecision{Continue: true, Instruction: "Answer with the required JSON object."}, nil
+}
+```
+
+两种做法都把反馈留在对话里、留在调用方看得见的地方,而不是放在一个由框架改写的请求里。
 
 ## Web 工具
 
