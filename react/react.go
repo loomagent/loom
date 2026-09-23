@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"slices"
 	"strings"
 	"time"
 
@@ -58,10 +57,12 @@ type Config struct {
 	ExecuteTools ToolExecutor
 	// MaxTokens is applied to every request, including final delivery.
 	MaxTokens *int
-	// BudgetExemptTools are host control tools; unlike EndsToolPhase they may
-	// share a batch and remain available at budget exhaustion instead of
-	// automatically finalizing. An AfterToolsPolicy can end the phase on success.
-	BudgetExemptTools []string
+	// TerminalToolName gives an existing registered tool the terminal protocol:
+	// call alone, exempt from research budgets, end the phase only on success.
+	// The name is arbitrary; no business tool names are built into the runtime.
+	// A configured terminal remains available when research budgets are exhausted.
+	// Empty uses only the tools already marked EndsToolPhase.
+	TerminalToolName string
 
 	StepPolicies       []StepPolicy
 	AfterToolsPolicies []AfterToolsPolicy
@@ -139,8 +140,6 @@ type AfterToolsDecision struct {
 	Messages     []loom.Message
 	Stop         bool
 	FinalContent string
-	// EndToolPhase starts a tool-free completion instead of returning immediately.
-	EndToolPhase bool
 }
 
 // FinishPolicy runs when a model attempts to finish without tool calls.
@@ -261,17 +260,23 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 	if err != nil {
 		return nil, fmt.Errorf("%s: list tools: %w", purpose, err)
 	}
-	terminalTools := terminalToolNames(allTools)
-	budgetExempt := terminalToolNames(allTools)
-	for _, name := range cfg.BudgetExemptTools {
+	if name := cfg.TerminalToolName; name != "" {
 		if _, ok := cfg.Tools.Lookup(name); !ok {
-			return nil, fmt.Errorf("%s: unknown budget-exempt tool %q", purpose, name)
+			return nil, fmt.Errorf("%s: unknown terminal tool %q", purpose, name)
 		}
-		budgetExempt[name] = true
+		// Decorate this run's metadata snapshot, never mutate the shared registry.
+		for i, info := range allTools {
+			if info != nil && info.Name == name {
+				copy := *info
+				copy.EndsToolPhase = true
+				allTools[i] = &copy
+			}
+		}
 	}
-	for name := range budgetExempt {
+	terminalTools := terminalToolNames(allTools)
+	for name := range terminalTools {
 		if _, set := cfg.ToolCallLimits[name]; set {
-			return nil, fmt.Errorf("%s: budget-exempt tool %q cannot have a tool limit", purpose, name)
+			return nil, fmt.Errorf("%s: terminal tool %q cannot have a tool limit", purpose, name)
 		}
 	}
 	maxRefusals := cfg.MaxConsecutiveRefusals
@@ -332,7 +337,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 				finalPrompt = prompt
 			}
 		}
-		if finalWriter != nil && !plan.IsFinalStep && (len(allTools) == 0 || researchBudgetExhausted(allTools, plan.Tools) && len(cfg.BudgetExemptTools) == 0) {
+		if finalWriter != nil && !plan.IsFinalStep && (len(allTools) == 0 || researchBudgetExhausted(allTools, plan.Tools) && cfg.TerminalToolName == "") {
 			finalizationReason = "tool_budget"
 			if len(allTools) == 0 {
 				finalizationReason = "no_tools"
@@ -484,7 +489,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 				results = append(results, result)
 			}
 		} else {
-			results, executed, lastRefusal, err = executeStepTools(ctx, w, state, cfg, plan.Tools, response.ToolCalls, &totalUses, uses, budgetExempt)
+			results, executed, lastRefusal, err = executeStepTools(ctx, w, state, cfg, plan.Tools, response.ToolCalls, &totalUses, uses, terminalTools)
 			if err != nil {
 				return nil, fmt.Errorf("%s: step %d tools: %w", purpose, step+1, err)
 			}
@@ -514,12 +519,6 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			if decision.Messages != nil {
 				msgs = decision.Messages
 				state.Messages = msgs
-			}
-			if decision.EndToolPhase {
-				toolPhaseEnded = true
-				if finalizationReason == "" {
-					finalizationReason = "policy"
-				}
 			}
 			if decision.Stop {
 				if finalWriter != nil {
@@ -731,7 +730,7 @@ func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[str
 		}
 		// A terminal tool is not a research tool: it is the only way the phase can end, so no
 		// budget withholds it.
-		if info.EndsToolPhase || slices.Contains(cfg.BudgetExemptTools, info.Name) {
+		if info.EndsToolPhase {
 			out = append(out, info)
 			continue
 		}

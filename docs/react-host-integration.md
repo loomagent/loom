@@ -14,11 +14,13 @@ concurrency. Host adapters must not implement a second iteration loop.
   registry subset. It may schedule concurrently, but returns exactly one result
   per call in input order. The core validates result identity before history use.
 - `MaxTokens` applies to research and final requests alike.
-- `BudgetExemptTools` supports business control tools that do not end the phase
-  themselves. Tools marked `EndsToolPhase` remain exclusive and budget-exempt.
-- `AfterToolsDecision.EndToolPhase` starts another tool-free model call; `Stop`
-  keeps the existing buffered early-return semantics. In streaming delivery both
-  paths enter the final round. Policies cannot reopen a completed phase.
+- `TerminalToolName` assigns the terminal protocol to any existing registered
+  tool by name. Configured and `EndsToolPhase` tools use the same state machine:
+  exclusive batch, no research budget charge, transition only on success.
+  Explicitly configured terminals remain available after research budget exhaustion.
+  The shared registry is unchanged; naming is local to each run.
+- `AfterToolsDecision.Stop` retains buffered early-return semantics for business
+  pipelines. Streaming delivery always enters a final model round.
 - Existing step policies may keep schemas stable for prompt cache reuse. Actual
   execution is checked against the current visible registry and budget.
 
@@ -28,8 +30,9 @@ concurrency. Host adapters must not implement a second iteration loop.
    terminal tool or an accepted natural draft, even with a custom research caller.
 2. user cannot execute a hidden tool or exceed a budget through a custom parallel
    scheduler; tool results preserve call identity and order.
-3. user can finish a report research batch containing a nonexclusive control tool
-   and ordinary tools, then receive a tool-free completion.
+3. user can choose any terminal name, including a report-specific name. Mixed
+   batches execute nothing; a failed terminal stays retryable. One successful
+   terminal ends tools and enters a tool-free completion.
 4. user gets an explicit failure for malformed scheduler results, sink failure or
    provider failure; cancellation never becomes a successful answer.
 5. user retains backend review, fallback reasoning configuration, dated context,

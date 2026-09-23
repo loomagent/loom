@@ -73,45 +73,8 @@ func TestUserMalformedHostResultsFailWithoutDeliveringAnAnswer(t *testing.T) {
 	}
 }
 
-func TestUserBatchableControlEndsResearchWithoutConsumingBudget(t *testing.T) {
-	// Given a report control tool that may accompany research in the same batch.
-	lookupCalls, controlCalls := 0, 0
-	lookup := loom.NewArgsTool(loom.MustArgsContract("lookup"), "lookup", func(context.Context, loom.Args) (string, error) { lookupCalls++; return "evidence", nil })
-	control := loom.NewArgsTool(loom.MustArgsContract("begin_report"), "control", func(context.Context, loom.Args) (string, error) { controlCalls++; return "ready", nil })
-	model := &scriptedModel{responses: []*loom.ChatResponse{
-		{ToolCalls: []loom.ToolCall{{ID: "control", Name: "begin_report"}, {ID: "research", Name: "lookup"}, {ID: "over", Name: "lookup"}}, FinishReason: loom.FinishReasonToolCalls},
-		{Content: "report context", FinishReason: loom.FinishReasonStop},
-	}}
-	var result *Result
-	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
-		var err error
-		result, err = Run(ctx, w, Config{Model: model, Tools: loom.NewToolRegistry(lookup, control), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxToolCalls: 1, BudgetExemptTools: []string{"begin_report"}, AfterToolsPolicies: []AfterToolsPolicy{AfterToolsPolicyFunc(func(_ context.Context, _ loom.Writer, s State, results []loom.ToolExecResult) (AfterToolsDecision, error) {
-			if s.ToolCallsUsed != 1 {
-				t.Errorf("control charged research budget: %d", s.ToolCallsUsed)
-			}
-			for _, r := range results {
-				if r.Call.Name == "begin_report" && r.Err == nil {
-					return AfterToolsDecision{EndToolPhase: true}, nil
-				}
-			}
-			return AfterToolsDecision{}, nil
-		})}})
-		if err != nil {
-			return err
-		}
-		return w.FinalAnswer(ctx, result.FinalContent)
-	}, loom.RunOptions{ConversationID: "report-control"})
-	// Then the successful control enters a fresh completion, preserving evidence.
-	if err != nil || lookupCalls != 1 || controlCalls != 1 || result == nil || result.FinalContent != "report context" {
-		t.Fatalf("result=%+v lookup=%d control=%d err=%v", result, lookupCalls, controlCalls, err)
-	}
-	if len(model.requests) != 2 || len(model.requests[1].Tools) != 0 {
-		t.Fatalf("completion exposed tools: %+v", model.requests)
-	}
-}
-
 func TestUserHostCallFailuresNeverCommitSuccess(t *testing.T) {
-	for _, kind := range []string{"nil_response", "model_error", "executor_error", "invalid_visible_tool", "unknown_exempt", "limited_exempt", "ambiguous_fallback"} {
+	for _, kind := range []string{"nil_response", "model_error", "executor_error", "invalid_visible_tool", "unknown_terminal", "limited_terminal", "ambiguous_fallback"} {
 		t.Run("user_"+kind, func(t *testing.T) {
 			// Given an invalid host configuration or a failed dependency.
 			dependencyErr := errors.New("dependency unavailable")
@@ -136,10 +99,10 @@ func TestUserHostCallFailuresNeverCommitSuccess(t *testing.T) {
 					p.Tools = []*loom.ToolInfo{{Name: "missing"}}
 					return nil
 				})}
-			case "unknown_exempt":
-				cfg.BudgetExemptTools = []string{"missing"}
-			case "limited_exempt":
-				cfg.BudgetExemptTools = []string{"lookup"}
+			case "unknown_terminal":
+				cfg.TerminalToolName = "missing"
+			case "limited_terminal":
+				cfg.TerminalToolName = "lookup"
 				cfg.ToolCallLimits = map[string]uint64{"lookup": 1}
 			case "ambiguous_fallback":
 				cfg.SensitiveFallback = &SensitiveFallbackConfig{Model: m}
