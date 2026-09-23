@@ -26,30 +26,34 @@ func main() {
 			return fmt.Sprintf(`{"term":%q,"definition":"a target that produces no file of its own"}`, query.Get(args)), nil
 		})
 
+	finalize := loom.NewArgsTool(loom.MustArgsContract("finalize_answer"),
+		"End the tool phase on its own when no more tools are needed.",
+		func(context.Context, loom.Args) (string, error) { return `{"ok":true}`, nil },
+		loom.WithEndsToolPhase())
 	model := &scriptedModel{responses: []*loom.ChatResponse{
 		{
 			ReasoningContent: "The question is about a build term, so look it up.",
 			ToolCalls:        []loom.ToolCall{{ID: "call_1", Name: "lookup", Arguments: `{"query":"phony target"}`}},
 			FinishReason:     loom.FinishReasonToolCalls,
 		},
-		{Content: "A phony target is a build rule that produces no file of its own.", FinishReason: loom.FinishReasonStop},
+		{ToolCalls: []loom.ToolCall{{ID: "call_2", Name: "finalize_answer", Arguments: `{}`}}, FinishReason: loom.FinishReasonToolCalls},
+		{ReasoningContent: "Use the glossary definition.", Content: "A phony target is a build rule that produces no file of its own.", FinishReason: loom.FinishReasonStop},
 	}}
 
 	sink := loom.NewMemorySink()
 	turn, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
-		result, err := react.Run(ctx, w, react.Config{
-			Model:   model,
-			Tools:   loom.NewToolRegistry(tool),
-			Purpose: "glossary",
+		_, err := react.RunToFinalAnswer(ctx, w, react.Config{
+			Model:     model,
+			Tools:     loom.NewToolRegistry(tool, finalize),
+			Purpose:   "glossary",
+			Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled},
 		})
-		if err != nil {
-			return err
-		}
-		return w.FinalAnswer(ctx, result.FinalContent)
+		return err
 	}, loom.RunOptions{
 		ConversationID: "react-example",
 		Input:          loom.UserMessage{Text: "What is a phony target?"},
 		Sinks:          []loom.Sink{sink},
+		StrictSink:     true,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -87,23 +91,28 @@ func (m *scriptedModel) Stream(_ context.Context, _ loom.ChatRequest) (loom.Stre
 	m.responses = m.responses[1:]
 	m.steps++
 
-	// A real provider streams a turn as several chunks; one chunk carrying the whole
-	// response is a stream too. The usage is what makes the loop report the call as an
-	// LLMCalledEvent, which is how a Sink accounts for tokens.
+	// Emit reasoning and content in separate increments, then finish with usage.
+	// This fake provider needs no credentials and makes no network requests.
 	usage := loom.Usage{PromptTokens: 24, CompletionTokens: 12, TotalTokens: 36}
 	chunk := &loom.Chunk{
-		ContentDelta:          response.Content,
-		ReasoningContentDelta: response.ReasoningContent,
-		FinishReason:          response.FinishReason,
-		Model:                 m.Name(),
-		Usage:                 &usage,
+		FinishReason: response.FinishReason,
+		Model:        m.Name(),
+		Usage:        &usage,
 	}
 	for index, call := range response.ToolCalls {
 		chunk.ToolCallDeltas = append(chunk.ToolCallDeltas, loom.ToolCallDelta{
 			Index: index, ID: call.ID, Name: call.Name, Arguments: call.Arguments,
 		})
 	}
-	return &sliceStream{chunks: []*loom.Chunk{chunk}}, nil
+	var chunks []*loom.Chunk
+	for _, r := range response.ReasoningContent {
+		chunks = append(chunks, &loom.Chunk{ReasoningContentDelta: string(r)})
+	}
+	for _, r := range response.Content {
+		chunks = append(chunks, &loom.Chunk{ContentDelta: string(r)})
+	}
+	chunks = append(chunks, chunk)
+	return &sliceStream{chunks: chunks}, nil
 }
 
 type sliceStream struct{ chunks []*loom.Chunk }

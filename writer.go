@@ -92,6 +92,9 @@ type Step interface {
 // Once the final answer is written the Turn is sealed, and every later Write*,
 // Stream*, or Step returns ErrTurnClosed.
 type TurnWriter interface {
+	// Fail writes a user-visible failure reply; custom failure codes belong to the host.
+	Fail(context.Context, string, CloseCode) error
+
 	Writer
 
 	// FinalAnswer writes the final answer, Completed at once. It may be called once

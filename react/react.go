@@ -141,13 +141,20 @@ type FinishDecision struct {
 // Result describes the completed loop.
 type Result struct {
 	FinalContent string
-	Messages     []loom.Message
-	SoftLanded   bool
-	Steps        uint64
-	// ToolPhaseEnded reports that the run ended in the final phase, either because a terminal
-	// tool succeeded or because a budget forced the soft landing.
+	// FinalAnswerCommitted is true only when RunToFinalAnswer has streamed and
+	// committed the answer. The caller must not write it a second time.
+	FinalAnswerCommitted bool
+	// FinalizationReason identifies how the streaming final phase was entered.
+	// Values are terminal_tool, natural_finish, tool_budget, step_limit,
+	// deadline, no_tools, and policy. It is empty for a buffered natural finish.
+	FinalizationReason string
+	Messages           []loom.Message
+	SoftLanded         bool
+	Steps              uint64
+	// ToolPhaseEnded reports that the run ended in the final, tool-free phase.
 	ToolPhaseEnded bool
-	// EndedByTool names the terminal tool that ended the phase, and is empty when a budget did.
+	// EndedByTool names the terminal tool that ended the phase. It is empty for
+	// natural finishes, policy stops, and budget boundaries.
 	EndedByTool string
 }
 
@@ -170,12 +177,35 @@ const defaultMaxConsecutiveRefusals = 3
 // ErrToolCallInFinalPhase reports a model that asked for a tool in a round that has none. The
 // final phase removes tools precisely so the answer cannot be interleaved with one, so the call
 // is not executed: the caller decides whether to ask for the answer again.
-var ErrToolCallInFinalPhase = errors.New("react: the model called a tool in the final phase")
+var ErrToolCallInFinalPhase = loom.ErrToolCallInFinalAnswer
 
 // Run executes a ReAct loop, streaming model output and tool events through w.
 // It does not call Writer.FinalAnswer; the caller owns the surrounding Turn's
 // completion semantics.
 func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
+	return run(ctx, w, nil, cfg)
+}
+
+// RunToFinalAnswer executes a ReAct loop and commits its final response through
+// the TurnWriter. Both reasoning and content are streamed as they arrive.
+// A successful terminal tool, an accepted natural finish, an after-tools stop,
+// or a budget boundary enters a new tool-free model round. Natural finish text
+// is retained only as a draft in model context; no tool call is fabricated.
+// Choosing this entry point explicitly permits finalization without a terminal
+// tool, so use Run when a terminal tool carries a mandatory business contract.
+// Reasoning must be explicitly configured. Final stream errors propagate without
+// automatically retrying or switching models after partial delivery.
+func RunToFinalAnswer(ctx context.Context, w loom.TurnWriter, cfg Config) (*Result, error) {
+	if w == nil {
+		return nil, errors.New("react: TurnWriter is required")
+	}
+	if cfg.Reasoning.Mode == "" {
+		return nil, errors.New("react: Reasoning must be explicitly configured")
+	}
+	return run(ctx, w, w, cfg)
+}
+
+func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Config) (*Result, error) {
 	if cfg.Model == nil {
 		return nil, errors.New("react: Model is required")
 	}
@@ -190,6 +220,12 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 		purpose = "react"
 	}
 	reasoning := cfg.Reasoning
+	if finalWriter != nil {
+		provider, modelName := loom.SplitModelName(cfg.Model.Name())
+		if _, err := loom.ResolveModelReasoning(provider, modelName, cfg.Model.Capabilities(), reasoning); err != nil {
+			return nil, err
+		}
+	}
 	if reasoning.Mode == "" {
 		reasoning.Mode = loom.ReasoningModeEnabled
 	}
@@ -206,11 +242,15 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 	var refusedInARow uint64
 	var toolPhaseEnded bool
 	var endedByTool string
+	var finalizationReason string
 	msgs := append([]loom.Message(nil), cfg.Messages...)
 	uses := make(map[string]uint64, len(cfg.ToolCallLimits))
 	var totalUses uint64
 
 	for step := uint64(0); ; step++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		state := snapshotState(step, msgs, allTools, totalUses, uses, toolPhaseEnded)
 		plan := StepPlan{
 			Messages: append([]loom.Message(nil), msgs...),
@@ -221,8 +261,9 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 		if deadline, ok := ctx.Deadline(); ok && cfg.SoftLandingReserve > 0 {
 			deadlineNear = time.Until(deadline) <= cfg.SoftLandingReserve
 		}
+		var finalPrompt string
 		switch {
-		case toolPhaseEnded:
+		case toolPhaseEnded || finalizationReason != "":
 			// The tool phase is over: every later request carries no tools, so its content is
 			// the answer by construction, and the phase cannot be reopened.
 			plan.IsFinalStep = true
@@ -232,8 +273,12 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 			if prompt == "" {
 				prompt = defaultToolPhaseEndedPrompt
 			}
-			plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Content: prompt})
+			finalPrompt = prompt
 		case loopLimitReached || deadlineNear:
+			finalizationReason = "step_limit"
+			if deadlineNear {
+				finalizationReason = "deadline"
+			}
 			plan.IsFinalStep = true
 			plan.Tools = nil
 			plan.ToolChoice = &loom.ToolChoice{Mode: loom.ToolChoiceNone}
@@ -241,15 +286,55 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 			if deadlineNear && strings.TrimSpace(cfg.DeadlineSoftLandingPrompt) != "" {
 				prompt = cfg.DeadlineSoftLandingPrompt
 			}
+			if finalWriter != nil && strings.TrimSpace(prompt) == "" {
+				prompt = defaultToolPhaseEndedPrompt
+			}
 			if prompt = strings.TrimSpace(prompt); prompt != "" {
-				plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Content: prompt})
+				finalPrompt = prompt
 			}
 		}
+		if finalWriter != nil && !plan.IsFinalStep && (len(allTools) == 0 || researchBudgetExhausted(allTools, plan.Tools)) {
+			finalizationReason = "tool_budget"
+			if len(allTools) == 0 {
+				finalizationReason = "no_tools"
+			}
+			plan.IsFinalStep = true
+			plan.Tools = nil
+			plan.ToolChoice = &loom.ToolChoice{Mode: loom.ToolChoiceNone}
+			prompt := strings.TrimSpace(cfg.SoftLandingPrompt)
+			if len(allTools) == 0 {
+				prompt = strings.TrimSpace(cfg.ToolPhaseEndedPrompt)
+			}
+			if prompt == "" {
+				prompt = defaultToolPhaseEndedPrompt
+			}
+			finalPrompt = prompt
+		}
+		if finalWriter == nil && finalPrompt != "" {
+			plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Content: finalPrompt})
+		}
+		finalPlanned := plan.IsFinalStep
 		for _, policy := range cfg.StepPolicies {
 			if policy != nil {
 				if err := policy.PrepareStep(ctx, state, &plan); err != nil {
 					return nil, fmt.Errorf("%s: step %d policy: %w", purpose, step+1, err)
 				}
+			}
+		}
+		// Policies may transform context but cannot reopen a completed phase or
+		// leave tools attached to a round they designate as final.
+		if finalPlanned || plan.IsFinalStep {
+			plan.IsFinalStep = true
+			plan.Tools = nil
+			plan.ToolChoice = &loom.ToolChoice{Mode: loom.ToolChoiceNone}
+			if finalizationReason == "" {
+				finalizationReason = "policy"
+			}
+			if finalWriter != nil {
+				if finalPrompt == "" {
+					finalPrompt = defaultToolPhaseEndedPrompt
+				}
+				plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Content: finalPrompt})
 			}
 		}
 		if len(plan.Tools) == 0 && plan.ToolChoice == nil {
@@ -264,7 +349,12 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 			ToolChoice: plan.ToolChoice,
 			Reasoning:  reasoning,
 		}
-		response, err := streamWithSensitiveFallback(ctx, w, stepPurpose, cfg.Model, request, cfg.SensitiveFallback)
+		var response *loom.ChatResponse
+		if plan.IsFinalStep && finalWriter != nil {
+			response, err = loom.StreamLLMToFinalAnswer(ctx, finalWriter, stepPurpose, cfg.Model, request)
+		} else {
+			response, err = streamWithSensitiveFallback(ctx, w, stepPurpose, cfg.Model, request, cfg.SensitiveFallback)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: step %d model: %w", purpose, step+1, err)
 		}
@@ -278,12 +368,14 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 				return nil, fmt.Errorf("%s: step %d: %w", purpose, step+1, ErrToolCallInFinalPhase)
 			}
 			return &Result{
-				FinalContent:   response.Content,
-				Messages:       appendResponse(plan.Messages, response),
-				SoftLanded:     !toolPhaseEnded,
-				Steps:          step + 1,
-				ToolPhaseEnded: true,
-				EndedByTool:    endedByTool,
+				FinalContent:         response.Content,
+				FinalAnswerCommitted: finalWriter != nil,
+				FinalizationReason:   finalizationReason,
+				Messages:             appendResponse(plan.Messages, response),
+				SoftLanded:           (finalWriter == nil && !toolPhaseEnded) || finalizationReason == "step_limit" || finalizationReason == "deadline" || finalizationReason == "tool_budget",
+				Steps:                step + 1,
+				ToolPhaseEnded:       true,
+				EndedByTool:          endedByTool,
 			}, nil
 		}
 
@@ -307,6 +399,18 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 				}
 			}
 			if continued {
+				continue
+			}
+			if finalWriter != nil {
+				if response.FinishReason != loom.FinishReasonStop {
+					return nil, fmt.Errorf("%s: natural finish requires a normal stop, got %q", purpose, response.FinishReason)
+				}
+				if strings.TrimSpace(response.Content) == "" {
+					return nil, loom.ErrEmptyFinalAnswer
+				}
+				msgs = appendResponse(plan.Messages, response)
+				msgs = append(msgs, loom.Message{Role: loom.RoleSystem, Content: "The preceding answer is an undelivered draft. The next response is the final answer for the user."})
+				finalizationReason = "natural_finish"
 				continue
 			}
 			return &Result{FinalContent: response.Content, Messages: appendResponse(plan.Messages, response), Steps: step + 1}, nil
@@ -347,6 +451,7 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 					if result.Err == nil && terminalTools[result.Call.Name] {
 						toolPhaseEnded = true
 						endedByTool = result.Call.Name
+						finalizationReason = "terminal_tool"
 					}
 				}
 				results = append(results, one...)
@@ -372,12 +477,24 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 				state.Messages = msgs
 			}
 			if decision.Stop {
+				if finalWriter != nil {
+					if decision.FinalContent != "" {
+						msgs = append(msgs, loom.Message{Role: loom.RoleAssistant, Content: decision.FinalContent})
+					}
+					if finalizationReason == "" {
+						finalizationReason = "policy"
+					}
+					break
+				}
 				return &Result{FinalContent: decision.FinalContent, Messages: msgs, Steps: step + 1}, nil
 			}
 		}
 		// A batch that ran nothing is not progress: the model may be asking for tools it cannot
 		// have, or bundling the terminal tool with others, and the loop this framework added
 		// would otherwise spin until MaxSteps, which is unlimited when the caller sets none.
+		if finalWriter != nil && finalizationReason != "" {
+			continue
+		}
 		if executed {
 			refusedInARow = 0
 			continue
@@ -387,6 +504,27 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 			return nil, fmt.Errorf("%s: step %d: %w", purpose, step+1, &RefusedBatchesError{Refusals: refusedInARow, Reason: lastRefusal})
 		}
 	}
+}
+
+// A signal-only registry still gets a tool-capable round. Only exhausted
+// research tools trigger this boundary; terminal tools themselves are exempt.
+func researchBudgetExhausted(all, available []*loom.ToolInfo) bool {
+	hadResearch := false
+	for _, info := range all {
+		if info != nil && !info.EndsToolPhase {
+			hadResearch = true
+			break
+		}
+	}
+	if !hadResearch {
+		return false
+	}
+	for _, info := range available {
+		if info != nil && !info.EndsToolPhase {
+			return false
+		}
+	}
+	return true
 }
 
 func streamWithSensitiveFallback(

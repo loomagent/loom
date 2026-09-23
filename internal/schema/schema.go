@@ -10,6 +10,7 @@ package schema
 import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"fmt"
 	"sort"
 )
 
@@ -21,6 +22,9 @@ import (
 // schema that carries something Loom cannot enforce fails loudly instead of
 // validating as if the constraint were absent.
 type Schema struct {
+	// external is a caller-validated schema transported without interpreting keywords.
+	external jsontext.Value
+
 	// Identity and dialect.
 	ID     string `json:"$id,omitempty"`
 	Schema string `json:"$schema,omitempty"`
@@ -102,4 +106,29 @@ func (s *Schema) PropertyNames() []string {
 	}
 	sort.Strings(remaining)
 	return append(names, remaining...)
+}
+
+// External accepts a full caller-validated JSON Schema for provider transport.
+// The built-in subset validator deliberately refuses these schemas.
+func External(data jsontext.Value) (*Schema, error) {
+	var object map[string]jsontext.Value
+	if err := jsonv2.Unmarshal(data, &object); err != nil {
+		return nil, err
+	}
+	if object == nil {
+		return nil, fmt.Errorf("external schema must be a JSON object")
+	}
+	return &Schema{external: append(jsontext.Value(nil), data...)}, nil
+}
+
+// IsExternal identifies schemas whose semantic validation belongs to the host.
+func (s *Schema) IsExternal() bool { return len(s.external) > 0 }
+
+// MarshalJSON preserves external schema keywords and exact JSON numbers.
+func (s Schema) MarshalJSON() ([]byte, error) {
+	if s.IsExternal() {
+		return append([]byte(nil), s.external...), nil
+	}
+	type plain Schema
+	return jsonv2.Marshal(plain(s))
 }

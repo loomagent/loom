@@ -41,9 +41,8 @@ type CloseReason struct {
 
 type CloseCode string
 
-// The built-in CloseReason.Code constants. CloseCode is a closed enumeration:
-// adding a value means updating proto/agent/v2.CloseCode, the Ent column
-// loom_turn.close_code, and StatusFromCloseCode together.
+// Built-in CloseReason codes. Hosts may pass additional failure codes to Fail;
+// their persistence and protocol mappings remain the host's responsibility.
 const (
 	// completed
 	CloseCodeFinalAnswer CloseCode = "final_answer" // the handler wrote a final_answer

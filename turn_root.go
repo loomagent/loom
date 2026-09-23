@@ -24,14 +24,14 @@ func newTurnRoot(state *turnState) *turnRoot {
 // returns ErrTurnClosed, and a call made while another commit is streaming returns
 // ErrFinalAnswerInProgress.
 func (t *turnRoot) FinalAnswer(ctx context.Context, text string) error {
-	return t.writeFinalAnswer(ctx, text, false, nil)
+	return t.writeFinalAnswer(ctx, text, false, nil, CloseCodeFinalAnswer)
 }
 
 // StreamFinalAnswer streams the final answer. A nil return seals the Turn; an error marks this
 // attempt as a candidate that failed, releases the commit, and returns, so product code may retry
 // or return. Only a committed answer reaches the LLM history.
 func (t *turnRoot) StreamFinalAnswer(ctx context.Context, fn func(FinalAnswerStream) error) error {
-	return t.writeFinalAnswer(ctx, "", true, fn)
+	return t.writeFinalAnswer(ctx, "", true, fn, CloseCodeFinalAnswer)
 }
 
 // writeFinalAnswer is the shared entry point for the one-shot and streaming paths.
@@ -48,6 +48,7 @@ func (t *turnRoot) writeFinalAnswer(
 	text string,
 	streaming bool,
 	fn func(FinalAnswerStream) error,
+	closeCode CloseCode,
 ) error {
 	// 1. claim the commit and allocate the final_answer item
 	t.state.mu.Lock()
@@ -78,6 +79,7 @@ func (t *turnRoot) writeFinalAnswer(
 		// The answer and the seal land together, so no reader can observe a sealed Turn whose
 		// answer has not been appended yet.
 		t.state.sealFinalAnswerLocked()
+		t.state.closeReason.Code = closeCode
 	}
 	children := t.locateChildrenLocked()
 	*children = append(*children, item)
@@ -106,6 +108,7 @@ func (t *turnRoot) writeFinalAnswer(
 		t.state.finalAnswerInProgress = false
 	case fnErr == nil:
 		t.state.sealFinalAnswerLocked()
+		t.state.closeReason.Code = closeCode
 	default:
 		// A failed candidate is not a commit: releasing the claim is what keeps a retry possible.
 		t.state.finalAnswerInProgress = false
@@ -136,4 +139,15 @@ func (t *turnRoot) runStreamingFinalAnswer(
 		panic(recovered)
 	}()
 	return fn(stream)
+}
+
+// Fail commits a displayable failure reply and closes the turn as failed.
+// A host-defined nonempty code is allowed; built-in success/cancellation codes
+// are rejected. The failed turn never becomes a successful final answer.
+func (t *turnRoot) Fail(ctx context.Context, text string, code CloseCode) error {
+	status, _ := StatusFromCloseCode(code)
+	if code == "" || status != TurnStatusFailed {
+		return fmt.Errorf("loom: failure reply requires a failure close code: %q", code)
+	}
+	return t.writeFinalAnswer(ctx, text, false, nil, code)
 }

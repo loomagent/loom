@@ -49,6 +49,9 @@ func (e *ValidationError) Error() string { return "tool arguments do not match t
 // Compile checks that a schema stays inside the supported keyword set and
 // returns a validator for it.
 func Compile(s *schema.Schema) (*Validator, error) {
+	if s != nil && s.IsExternal() {
+		return nil, fmt.Errorf("toolcontract: external schemas require host validation")
+	}
 	if s == nil {
 		return nil, fmt.Errorf("toolcontract: schema is nil")
 	}
@@ -140,6 +143,9 @@ func decodeValue(raw jsontext.Value) any {
 // compiles every pattern once, caching it for later validation. Keywords outside
 // the subset cannot reach here: the model refuses to decode them.
 func checkSupported(s *schema.Schema, path string, patterns map[*schema.Schema]*regexp.Regexp) error {
+	if s != nil && s.IsExternal() {
+		return fmt.Errorf("toolcontract: external schemas require host validation")
+	}
 	if s == nil {
 		return nil
 	}

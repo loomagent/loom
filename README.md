@@ -568,6 +568,39 @@ extend it without forking the loop through three small policy interfaces:
 `react/review.Policy` supplies a stateful quality gate while leaving the actual
 reviewer, criteria, and instructions to the application.
 
+### Stream the final reasoning and answer
+
+Use `react.RunToFinalAnswer(ctx, turnWriter, cfg)` for a user-facing turn. It uses
+the same loop as `Run`, then calls the model with **no tools** and streams both
+optional reasoning and content to the configured sinks. Set `cfg.Reasoning`
+explicitly, including an effort when the model declares selectable efforts; the
+final phase preserves that configuration. Do not call `FinalAnswer` afterwards:
+a successful return has already committed it (`Result.FinalAnswerCommitted`).
+
+The final phase starts after a successful terminal tool, an accepted natural
+finish, an after-tools stop, or a research budget boundary. A natural answer is
+kept as an **undelivered draft** in model context, then regenerated in the final
+round; this costs another model call but makes its first content delta streamable.
+No terminal tool call is fabricated. `Result.FinalizationReason` identifies the
+transition, and `EndedByTool` is set only for an actual successful terminal tool.
+Choose this entry point only when natural finalization is allowed; keep `Run`
+when a terminal tool implements a mandatory business contract or when the loop
+is a nested step whose answer the caller must inspect before committing.
+
+`loom.StreamLLMToFinalAnswer` is also available for a direct tool-free model call.
+It opens a reasoning item only when reasoning arrives, and opens the final answer
+on its first content delta. Both channels reach `Sink.ItemDelta` before reading
+the next model frame. Neither the full reasoning nor the full answer is buffered
+before delivery. The complete texts remain available in the returned response.
+If reasoning resumes after content, it is streamed as another reasoning item.
+
+Use `RunOptions.StrictSink: true` when persistence is mandatory. Truncation,
+content filtering, cancellation, stream failures, empty answers, missing normal
+stop, and unexpected tool calls cannot commit a successful final answer. Partial
+items are retained with their status. Once final streaming begins, the loop does
+not automatically replay or switch models; configured sensitive-content fallback
+applies to the research phase. See the credential-free `examples/react` program.
+
 ### Structured output inside a ReAct loop
 
 Two shapes are idiomatic, and neither needs a retry loop written by hand:
@@ -831,3 +864,15 @@ Two directories hold files written elsewhere, both under the MIT license of the
 source commit recorded in the README beside them: `internal/toolcontract/testdata/jsonschema` and
 `testdata/format`. Everything else in this repository is original; the failover configuration
 follows the shape Eino uses for the same problem, with no code taken from it.
+
+### Host-owned contracts and policy failures
+
+`ExternalSchema(rawJSON)` preserves a host-validated JSON Schema for provider
+transport, including keywords outside Loom's declared-argument subset. It does
+not validate model inputs or outputs: the host must do that. `ValidateSchema`
+rejects external schemas rather than silently ignoring their constraints.
+
+`WithCallModelRequestForModel` rebuilds each request for the selected model,
+including failover, when the host owns response-format policy.
+`TurnWriter.Fail(ctx, text, code)` commits a visible failure reply while keeping
+the turn failed; a custom failure code and its database mapping belong to the host.

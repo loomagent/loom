@@ -492,6 +492,30 @@ func TestStoreContract(t *testing.T) {
 `react/review.Policy` 提供有状态的质量闸门,而把真正的评审方、评审标准和指令留给
 应用。
 
+### 流式输出最终推理和正文
+
+用户轮次使用 `react.RunToFinalAnswer(ctx, turnWriter, cfg)`。它复用 `Run` 的循环,
+进入最终阶段后移除所有工具,将可选 reasoning 和 content 的每个增量交给 Sink。
+必须显式配置 `cfg.Reasoning`;模型提供推理强度时还要指定强度,最终轮保持该配置。
+成功返回时已经提交最终答案(`Result.FinalAnswerCommitted`),不要再调用 `FinalAnswer`。
+
+结束工具成功、自然收笔通过 FinishPolicy、AfterToolsPolicy 叫停,或研究预算耗尽,
+都会进入无工具的最终轮。自然收笔的正文只作为**未交付的草稿**保留在模型上下文,
+在最终轮重新生成;这会多一次模型请求,但能从第一段 content 开始流式交付。
+不会伪造工具调用。`Result.FinalizationReason` 记录切换原因,`EndedByTool` 只记录
+真实成功的结束工具。只有允许自然结束的业务才选择这个入口;结束工具承载必须执行的
+业务契约,或循环作为嵌套步骤供上层检查结果时,继续使用 `Run`。
+
+直接调用无工具模型时可使用 `loom.StreamLLMToFinalAnswer`。reasoning 首段到达才
+创建推理记录,content 首段到达才创建最终答案记录;两种增量都会在读取下一帧之前
+交给 `Sink.ItemDelta`,不等待完整推理或正文生成。完整文本仍保留在返回结果中。
+如果正文之后又出现 reasoning,会按到达顺序流式写入新的推理记录。
+
+必须落库时设置 `RunOptions.StrictSink: true`。截断、内容过滤、取消、流中断、空答案、
+缺少正常结束标记,以及最终轮意外调用工具,都不能提交成功答案;已输出的片段保留对应
+状态。最终轮开始流式交付后不会自动重放或切换模型;敏感内容 fallback 配置用于研究
+阶段。无需凭据的 `examples/react` 演示了完整接法。
+
 ### ReAct 循环里的结构化输出
 
 有两种惯用形状,而且都不需要手写重试循环:

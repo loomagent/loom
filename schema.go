@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/loomagent/loom/internal/schema"
 	"github.com/loomagent/loom/internal/toolcontract"
 )
 
@@ -85,3 +86,8 @@ func cloneSchema(schema *Schema) *Schema {
 func schemaHasType(schema *Schema, want string) bool {
 	return schema != nil && schema.Type == want
 }
+
+// ExternalSchema wraps a complete JSON Schema already validated by the host.
+// It preserves keywords outside Loom's declared-argument subset for transport.
+// ValidateSchema refuses it; hosts must validate inputs and outputs themselves.
+func ExternalSchema(data jsontext.Value) (*Schema, error) { return schema.External(data) }
