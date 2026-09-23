@@ -702,3 +702,13 @@ code;1113 这类余额错误立即失败,1302 走有界的限流退避,1305 走�
 `toggleable_default_on/off` 取值仍然接受,并通过 `ReasoningSupport.Canonical()`
 归一化。应用请求会显式选择推理;当声明了强度档位时,启用推理还必须显式给出受支持的
 强度。探测报告会单独保留对服务端默认行为的观察。
+
+## 许可证
+
+MIT——见 [LICENSE](LICENSE)。Copyright (c) 2026 The Loom Authors。
+
+有两处目录放的是别处写好的文件,都属于
+[JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite) 的 MIT
+许可,上游 commit 记在它们各自的 README 里:`internal/toolcontract/testdata/jsonschema` 与
+`testdata/format`。仓库里的其余内容都是原创;failover 的配置形态参考了 Eino 对同一问题的
+写法,没有取用它的代码。
