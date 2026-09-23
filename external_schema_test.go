@@ -3,6 +3,7 @@ package loom
 import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"fmt"
 	"testing"
 )
 
@@ -37,5 +38,20 @@ func TestUserTransportsBusinessSchemaWithoutLosingConstraints(t *testing.T) {
 		if _, err := ExternalSchema(jsontext.Value(invalid)); err == nil {
 			t.Fatalf("invalid schema accepted: %q", invalid)
 		}
+	}
+}
+
+func TestUserSchemaKeepsExactIntegerInProviderObject(t *testing.T) {
+	schema, err := ExternalSchema(jsontext.Value(`{"type":"object","properties":{"id":{"const":9007199254740993}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := StructuredSchemaObject(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := object["properties"].(map[string]any)["id"].(map[string]any)["const"]
+	if fmt.Sprint(value) != "9007199254740993" {
+		t.Fatalf("provider rounded schema constraint: %v", value)
 	}
 }

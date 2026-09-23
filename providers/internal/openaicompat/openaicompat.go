@@ -42,12 +42,12 @@ func Tools(tools []*loom.ToolInfo) ([]openai.ChatCompletionToolUnionParam, error
 		}
 		params := shared.FunctionParameters{"type": "object", "properties": map[string]any{}}
 		if t.Parameters != nil {
-			b, err := jsonv2.Marshal(t.Parameters)
+			object, err := loom.StructuredSchemaObject(t.Parameters)
 			if err != nil {
 				return nil, fmt.Errorf("tool %q argument schema could not be marshaled: %w", t.Name, err)
 			}
-			if err := jsonv2.Unmarshal(b, &params); err != nil {
-				return nil, fmt.Errorf("tool %q argument schema could not be unmarshaled: %w", t.Name, err)
+			for key, value := range object {
+				params[key] = value
 			}
 		}
 		out = append(out, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
