@@ -671,9 +671,18 @@ canonical answer, and rewriting a draft does not reopen the tool phase. If the f
 streams a final answer itself, that must be an explicit choice: once the first delta is public, whole
 -text replacement can no longer be promised without a retraction mechanism.
 
-**Still open**: whether whole-batch rejection should be the product default, and whether rejecting
-only the terminal call is better in a product whose tools are mostly read-only, needs more mixed
--batch samples comparing completion rate against extra rounds.
+**More runs, and what they changed** (25 in total: three or four models across four task shapes,
+four of which carry a side-effecting tool): one mixed batch appeared, about 4%, and it bundled the
+read-only calculator with the terminal tool. **No run ever bundled a side-effecting tool with the
+finish.** Handed a conversation in which that mixed batch had just been refused whole, three of four
+models did exactly what the refusal asks — re-sent the normal calls, then called the terminal tool
+alone — while grok got stuck repeating one tool. So the real run boundary is the caller's round and
+tool budgets (`MaxSteps`, `MaxToolCalls`), not the refusal text, and whole-batch rejection stays the
+default: it is the safer rule, it fires rarely, and its cost is one round.
+
+One measured constraint worth carrying: a fabricated or thinned-out assistant turn in a
+thinking-mode provider is rejected with a 400 that demands its `reasoning_content` back. The
+structured-reasoning carrier covers that path here; migrations and hand-built histories have to.
 
 ## 8. Package layout
 
