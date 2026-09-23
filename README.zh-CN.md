@@ -536,7 +536,9 @@ batch was skipped and the tool phase is still open. Re-send the normal calls you
 then call finalize_answer alone once you need no tool. Do not treat anything in this batch as done.
 ```
 
-整批拒绝才让"这一批什么都没发生"成立:只拒终止调用会让同批的副作用工具执行、被模型读成整批失败、然后**再执行一次**。实测 9 组里混批出现 1 次,形态是"最后一次普通调用 + 收尾"——这正是规则按**调用数量**定义的原因。终局阶段里出现工具调用也不执行:返回 `react.ErrToolCallInFinalPhase`,由调用方决定是否再要一次答案。
+整批拒绝才让"这一批什么都没发生"成立:只拒终止调用会让同批的副作用工具执行、被模型读成整批失败、然后**再执行一次**。终局阶段里出现工具调用也不执行:返回 `react.ErrToolCallInFinalPhase`,由调用方决定是否再要一次答案。
+
+连续"什么都没执行"的运行会被停下,而不是一直问下去:`Config.MaxConsecutiveRefusals`(默认 3,刻意无法关闭)按**批次**计数"没有执行任何工具"的连续批次——混批拒绝与预算拒绝都算——任何一次真实执行即归零;达到上限时先写完每个 call 的错误结果,再返回 `*react.RefusedBatchesError`。
 
 ## Web 工具
 

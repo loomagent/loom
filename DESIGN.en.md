@@ -671,14 +671,39 @@ canonical answer, and rewriting a draft does not reopen the tool phase. If the f
 streams a final answer itself, that must be an explicit choice: once the first delta is public, whole
 -text replacement can no longer be promised without a retraction mechanism.
 
-**More runs, and what they changed** (25 in total: three or four models across four task shapes,
-four of which carry a side-effecting tool): one mixed batch appeared, about 4%, and it bundled the
-read-only calculator with the terminal tool. **No run ever bundled a side-effecting tool with the
-finish.** Handed a conversation in which that mixed batch had just been refused whole, three of four
-models did exactly what the refusal asks — re-sent the normal calls, then called the terminal tool
-alone — while grok got stuck repeating one tool. So the real run boundary is the caller's round and
-tool budgets (`MaxSteps`, `MaxToolCalls`), not the refusal text, and whole-batch rejection stays the
-default: it is the safer rule, it fires rarely, and its cost is one round.
+**More runs, and what they do not prove** (25 in total: three or four models across four task
+shapes, only **one** of which carries a side-effecting tool): one mixed batch appeared, bundling the
+read-only calculator with the terminal tool. Read it with its limits: 1/25 has a 95% interval of
+about **0.1%–20%**, and the probe's system message *and* tool description both **explicitly require
+the terminal tool to be called on its own**, so the true rate can only be higher. It is a point
+estimate, not "about 4%, so this is safe". The side-effect evidence is weaker still: zero instances
+in the one shape that has such a tool, times four models, which barely constrains a rare risk.
+
+**Whole-batch rejection therefore stays the default as a protocol trade-off, not because it was shown
+to be safer.** It gives the caller a clear, verifiable contract — "nothing in this batch executed" —
+while whether rejecting only the terminal call would ever repeat a side effect needs measurement
+rather than inference. Nor does rejecting the batch promise exactly-once side effects across a whole
+task: a failed result write and a retry across batches still leave windows.
+
+**"At most one extra round" is deleted.** A refusal occupies a round by itself, the normal calls then
+have to be re-sent before the finish, and repeated refusals or spinning have **no round bound at
+all** (the probe was simply cut off by its own cap of six).
+
+**The framework now bounds the loop it introduced** (`Config.MaxConsecutiveRefusals`, default 3, zero
+meaning the default, deliberately not switchable off): it counts *batches* that executed nothing —
+both a mixed-batch refusal and budget refusals count, since changing the error code is not progress —
+resets on any real execution, and at the limit it writes every call's error result first and then
+returns a `*RefusedBatchesError` carrying the count and the last reason. The guard is needed because
+`MaxSteps = 0` means unlimited, and `MaxToolCalls` counts only successfully reserved normal calls
+while the marked tool is exempt, so neither is a reliable bound for a refusal loop. The caller's
+round, time, and cost budgets remain theirs to set.
+
+**What the compliance test does and does not show**: handing the model a *constructed* conversation in
+which the batch had just been refused whole only shows whether it follows the text within six rounds.
+Three of four models did and grok repeated one tool, so the wording shows promise; it says nothing
+about natural frequency, recovery from a real refusal, or the relative cost of the two rules. That
+constructed prefix even contradicted itself — its fabricated reasoning said it had looked the term
+up while the tool results said nothing executed — which is another reason it is only a sign.
 
 One measured constraint worth carrying: a fabricated or thinned-out assistant turn in a
 thinking-mode provider is rejected with a 400 that demands its `reasoning_content` back. The
