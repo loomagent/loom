@@ -311,7 +311,7 @@ func TestMessagesCarryStructuredReasoningVerbatim(t *testing.T) {
 }
 
 func TestUserToolSchemaKeepsExactInteger(t *testing.T) {
-	schema, err := loom.ExternalSchema([]byte(`{"type":"object","properties":{"id":{"const":9007199254740993}}}`))
+	schema, err := loom.ExternalSchema([]byte(`{"type":"object","properties":{"id":{"const":9007199254740993},"urls":{"type":"array","minItems":1,"items":{"type":"string"}}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestUserToolSchemaKeepsExactInteger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "9007199254740993") {
+	if !strings.Contains(string(data), `"const":9007199254740993`) || !strings.Contains(string(data), `"minItems":1`) {
 		t.Fatalf("tool constraint rounded: %s", data)
 	}
 }

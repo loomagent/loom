@@ -399,7 +399,29 @@ func StructuredSchemaObject(schema *Schema) (map[string]any, error) {
 	if err := decoder.Decode(&out); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return schemaWireValue(out).(map[string]any), nil
+}
+
+// schemaWireNumber keeps number tokens numeric even in SDK encoders that treat
+// encoding/json.Number as its underlying string kind.
+type schemaWireNumber string
+
+func (n schemaWireNumber) MarshalJSON() ([]byte, error) { return []byte(n), nil }
+
+func schemaWireValue(value any) any {
+	switch v := value.(type) {
+	case stdjson.Number:
+		return schemaWireNumber(v)
+	case map[string]any:
+		for key, item := range v {
+			v[key] = schemaWireValue(item)
+		}
+	case []any:
+		for i, item := range v {
+			v[i] = schemaWireValue(item)
+		}
+	}
+	return value
 }
 
 func withStructuredOutputRequest(req ChatRequest, caps ModelCapabilities, name, description string, schema *Schema) (ChatRequest, error) {
