@@ -68,7 +68,14 @@ func TestUserReceivesFinalReasoningAndContentBeforeModelFinishes(t *testing.T) {
 					defer close(done)
 					turn, runErr = loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 						var err error
-						result, err = RunToFinalAnswer(ctx, w, Config{Model: model, Tools: loom.NewToolRegistry(terminalTool(&calls)), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}, ToolPhaseEndedPrompt: "Write the final answer now."})
+						result, err = RunToFinalAnswer(ctx, w, Config{Model: model, Tools: loom.NewToolRegistry(terminalTool(&calls)), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}, ToolPhaseEndedPrompt: "Write the final answer now.", MaxTokens: new(1024),
+							CallModel: func(ctx context.Context, w loom.Writer, _ State, purpose string, model loom.ChatModel, req loom.ChatRequest) (*loom.ChatResponse, error) {
+								if len(req.Tools) == 0 {
+									t.Error("host research caller received final delivery")
+								}
+								return loom.StreamLLMToStep(ctx, w, purpose, model, req)
+							},
+						})
 						return err
 					}, loom.RunOptions{ConversationID: "streaming-final", Sinks: []loom.Sink{sink}, StrictSink: true})
 				}()
@@ -106,7 +113,7 @@ func TestUserReceivesFinalReasoningAndContentBeforeModelFinishes(t *testing.T) {
 				if result.FinalContent != "Hello world" || !result.FinalAnswerCommitted {
 					t.Fatalf("result=%+v", result)
 				}
-				if len(model.finalRequests) != 1 || model.finalRequests[0].Reasoning.Mode != loom.ReasoningModeEnabled {
+				if len(model.finalRequests) != 1 || model.finalRequests[0].Reasoning.Mode != loom.ReasoningModeEnabled || model.finalRequests[0].MaxTokens == nil || *model.finalRequests[0].MaxTokens != 1024 {
 					t.Fatal("final phase changed reasoning configuration")
 				}
 				if model.finalRequests[0].Messages[len(model.finalRequests[0].Messages)-1].Content != "Write the final answer now." {

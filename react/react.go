@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -50,6 +51,18 @@ type Config struct {
 	// Purpose prefixes model call span names and errors.
 	Purpose string
 
+	// CallModel replaces research/buffered calls only. Final streamed delivery
+	// always uses StreamLLMToFinalAnswer, without host retries or fallback.
+	CallModel ModelCaller
+	// ExecuteTools schedules already reserved calls against the visible registry.
+	ExecuteTools ToolExecutor
+	// MaxTokens is applied to every request, including final delivery.
+	MaxTokens *int
+	// BudgetExemptTools are host control tools; unlike EndsToolPhase they may
+	// share a batch and remain available at budget exhaustion instead of
+	// automatically finalizing. An AfterToolsPolicy can end the phase on success.
+	BudgetExemptTools []string
+
 	StepPolicies       []StepPolicy
 	AfterToolsPolicies []AfterToolsPolicy
 	FinishPolicies     []FinishPolicy
@@ -57,6 +70,15 @@ type Config struct {
 	// back to the model. The original results remain visible to policies.
 	TransformToolResults func([]loom.ToolExecResult) []loom.ToolExecResult
 }
+
+// ModelCaller performs one non-delivery model call, including host fallback if
+// configured. State.Step is zero-based. Returning nil without an error is invalid.
+type ModelCaller func(context.Context, loom.Writer, State, string, loom.ChatModel, loom.ChatRequest) (*loom.ChatResponse, error)
+
+// ToolExecutor executes each input call once and returns one result per call in
+// the same order. The registry contains only this step's visible tools. Budget
+// reservation and terminal isolation happen before this extension runs.
+type ToolExecutor func(context.Context, loom.Writer, State, *loom.ToolRegistry, []loom.ToolCall) ([]loom.ToolExecResult, error)
 
 // SensitiveFallbackConfig configures a provider-neutral fallback for content
 // filtering. Configured IDs are compared exactly only to avoid retrying an
@@ -117,6 +139,8 @@ type AfterToolsDecision struct {
 	Messages     []loom.Message
 	Stop         bool
 	FinalContent string
+	// EndToolPhase starts a tool-free completion instead of returning immediately.
+	EndToolPhase bool
 }
 
 // FinishPolicy runs when a model attempts to finish without tool calls.
@@ -215,6 +239,9 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 	if w == nil {
 		return nil, errors.New("react: Writer is required")
 	}
+	if cfg.CallModel != nil && cfg.SensitiveFallback != nil {
+		return nil, errors.New("react: CallModel owns fallback; do not also configure SensitiveFallback")
+	}
 	purpose := strings.TrimSpace(cfg.Purpose)
 	if purpose == "" {
 		purpose = "react"
@@ -235,6 +262,18 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 		return nil, fmt.Errorf("%s: list tools: %w", purpose, err)
 	}
 	terminalTools := terminalToolNames(allTools)
+	budgetExempt := terminalToolNames(allTools)
+	for _, name := range cfg.BudgetExemptTools {
+		if _, ok := cfg.Tools.Lookup(name); !ok {
+			return nil, fmt.Errorf("%s: unknown budget-exempt tool %q", purpose, name)
+		}
+		budgetExempt[name] = true
+	}
+	for name := range budgetExempt {
+		if _, set := cfg.ToolCallLimits[name]; set {
+			return nil, fmt.Errorf("%s: budget-exempt tool %q cannot have a tool limit", purpose, name)
+		}
+	}
 	maxRefusals := cfg.MaxConsecutiveRefusals
 	if maxRefusals == 0 {
 		maxRefusals = defaultMaxConsecutiveRefusals
@@ -293,7 +332,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 				finalPrompt = prompt
 			}
 		}
-		if finalWriter != nil && !plan.IsFinalStep && (len(allTools) == 0 || researchBudgetExhausted(allTools, plan.Tools)) {
+		if finalWriter != nil && !plan.IsFinalStep && (len(allTools) == 0 || researchBudgetExhausted(allTools, plan.Tools) && len(cfg.BudgetExemptTools) == 0) {
 			finalizationReason = "tool_budget"
 			if len(allTools) == 0 {
 				finalizationReason = "no_tools"
@@ -321,6 +360,12 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 				}
 			}
 		}
+		if plan.ToolChoice != nil && plan.ToolChoice.Mode == loom.ToolChoiceNone {
+			plan.Tools = nil
+		}
+		if finalWriter != nil && len(plan.Tools) == 0 {
+			plan.IsFinalStep = true
+		}
 		// Policies may transform context but cannot reopen a completed phase or
 		// leave tools attached to a round they designate as final.
 		if finalPlanned || plan.IsFinalStep {
@@ -332,7 +377,10 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			}
 			if finalWriter != nil {
 				if finalPrompt == "" {
-					finalPrompt = defaultToolPhaseEndedPrompt
+					finalPrompt = strings.TrimSpace(cfg.ToolPhaseEndedPrompt)
+					if finalPrompt == "" {
+						finalPrompt = defaultToolPhaseEndedPrompt
+					}
 				}
 				plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Content: finalPrompt})
 			}
@@ -348,15 +396,21 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			Tools:      plan.Tools,
 			ToolChoice: plan.ToolChoice,
 			Reasoning:  reasoning,
+			MaxTokens:  cfg.MaxTokens,
 		}
 		var response *loom.ChatResponse
 		if plan.IsFinalStep && finalWriter != nil {
 			response, err = loom.StreamLLMToFinalAnswer(ctx, finalWriter, stepPurpose, cfg.Model, request)
+		} else if cfg.CallModel != nil {
+			response, err = cfg.CallModel(ctx, w, state, stepPurpose, cfg.Model, request)
 		} else {
 			response, err = streamWithSensitiveFallback(ctx, w, stepPurpose, cfg.Model, request, cfg.SensitiveFallback)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: step %d model: %w", purpose, step+1, err)
+		}
+		if response == nil {
+			return nil, fmt.Errorf("%s: model returned nil response", purpose)
 		}
 		if err := validateFinishReason(response.FinishReason); err != nil {
 			return nil, fmt.Errorf("%s: step %d: %w", purpose, step+1, err)
@@ -430,31 +484,16 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 				results = append(results, result)
 			}
 		} else {
-			for _, call := range response.ToolCalls {
-				if reason := reserveTool(call.Name, cfg, &totalUses, uses, terminalTools); reason != "" {
-					lastRefusal = "tool_budget_exhausted"
-					result, err := rejectToolCall(ctx, w, call, "tool_budget_exhausted", reason)
-					if err != nil {
-						return nil, fmt.Errorf("%s: step %d reject tool: %w", purpose, step+1, err)
-					}
-					results = append(results, result)
-					continue
+			results, executed, lastRefusal, err = executeStepTools(ctx, w, state, cfg, plan.Tools, response.ToolCalls, &totalUses, uses, budgetExempt)
+			if err != nil {
+				return nil, fmt.Errorf("%s: step %d tools: %w", purpose, step+1, err)
+			}
+			for _, result := range results {
+				if result.Err == nil && terminalTools[result.Call.Name] {
+					toolPhaseEnded = true
+					endedByTool = result.Call.Name
+					finalizationReason = "terminal_tool"
 				}
-				one, err := loom.ExecuteToolCalls(ctx, w, cfg.Tools, []loom.ToolCall{call})
-				if err != nil {
-					return nil, fmt.Errorf("%s: step %d execute tool: %w", purpose, step+1, err)
-				}
-				executed = true
-				for _, result := range one {
-					// Only success ends the phase; a failure comes back as a tool result and the
-					// loop continues.
-					if result.Err == nil && terminalTools[result.Call.Name] {
-						toolPhaseEnded = true
-						endedByTool = result.Call.Name
-						finalizationReason = "terminal_tool"
-					}
-				}
-				results = append(results, one...)
 			}
 		}
 		promptResults := results
@@ -475,6 +514,12 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			if decision.Messages != nil {
 				msgs = decision.Messages
 				state.Messages = msgs
+			}
+			if decision.EndToolPhase {
+				toolPhaseEnded = true
+				if finalizationReason == "" {
+					finalizationReason = "policy"
+				}
 			}
 			if decision.Stop {
 				if finalWriter != nil {
@@ -686,7 +731,7 @@ func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[str
 		}
 		// A terminal tool is not a research tool: it is the only way the phase can end, so no
 		// budget withholds it.
-		if info.EndsToolPhase {
+		if info.EndsToolPhase || slices.Contains(cfg.BudgetExemptTools, info.Name) {
 			out = append(out, info)
 			continue
 		}
@@ -701,25 +746,32 @@ func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[str
 	return out
 }
 
-func reserveTool(name string, cfg Config, total *uint64, uses map[string]uint64, terminalTools map[string]bool) string {
-	// A terminal tool is not a research tool: no budget withholds it, or the phase could never
-	// end.
-	if terminalTools[name] {
+func toolBudgetReason(name string, cfg Config, total uint64, uses map[string]uint64, exempt map[string]bool) string {
+	if exempt[name] {
 		return ""
 	}
-	if cfg.MaxToolCalls > 0 && *total >= cfg.MaxToolCalls {
+	if cfg.MaxToolCalls > 0 && total >= cfg.MaxToolCalls {
 		return fmt.Sprintf("total tool call limit %d reached", cfg.MaxToolCalls)
 	}
 	if limit := cfg.ToolCallLimits[name]; limit > 0 && uses[name] >= limit {
 		return fmt.Sprintf("tool %q call limit %d reached", name, limit)
 	}
-	*total++
-	uses[name]++
+	return ""
+}
+
+func reserveTool(name string, cfg Config, total *uint64, uses map[string]uint64, exempt map[string]bool) string {
+	if reason := toolBudgetReason(name, cfg, *total, uses, exempt); reason != "" {
+		return reason
+	}
+	if !exempt[name] {
+		*total++
+		uses[name]++
+	}
 	return ""
 }
 
 func rejectToolCall(ctx context.Context, w loom.Writer, call loom.ToolCall, code, reason string) (loom.ToolExecResult, error) {
-	err := errors.New(reason)
+	err := fmt.Errorf("%s: %s", code, reason)
 	if writeErr := w.WriteToolCall(ctx, call.Name, call); writeErr != nil {
 		return loom.ToolExecResult{}, writeErr
 	}
