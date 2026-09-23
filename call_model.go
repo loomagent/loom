@@ -164,3 +164,10 @@ func shouldFailover(ctx context.Context, cfg *FailoverConfig, attempt FailoverAt
 	}
 	return cfg.ShouldFailover(ctx, attempt)
 }
+
+// WithCallModelRequestForModel builds the request for each selected model,
+// including failover models. Hosts use it to select a declared response format
+// without sending one provider's capability assumptions to another provider.
+func WithCallModelRequestForModel(build func(ChatModel) (ChatRequest, error)) CallModelOption {
+	return withCallModelRequestForModel(build)
+}

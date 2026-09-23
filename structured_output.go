@@ -5,6 +5,7 @@ package loom
 
 import (
 	"context"
+	stdjson "encoding/json"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -393,7 +394,9 @@ func StructuredSchemaObject(schema *Schema) (map[string]any, error) {
 		return nil, err
 	}
 	var out map[string]any
-	if err := jsonv2.Unmarshal(data, &out); err != nil {
+	decoder := stdjson.NewDecoder(strings.NewReader(string(data)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&out); err != nil {
 		return nil, err
 	}
 	return out, nil

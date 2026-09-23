@@ -309,3 +309,21 @@ func TestMessagesCarryStructuredReasoningVerbatim(t *testing.T) {
 		t.Fatalf("a field the provider has no place for was sent: %s", data)
 	}
 }
+
+func TestUserToolSchemaKeepsExactInteger(t *testing.T) {
+	schema, err := loom.ExternalSchema([]byte(`{"type":"object","properties":{"id":{"const":9007199254740993}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := Tools([]*loom.ToolInfo{{Name: "lookup", Parameters: schema}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := jsonv2.Marshal(tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "9007199254740993") {
+		t.Fatalf("tool constraint rounded: %s", data)
+	}
+}
