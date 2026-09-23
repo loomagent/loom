@@ -13,7 +13,7 @@ func TestHistoryToMessages_ReasoningPairing(t *testing.T) {
 				{Kind: ItemKindToolCall, ToolCallID: "c1", ToolName: "web_search", Arguments: `{"q":"ai"}`},
 				{Kind: ItemKindToolResult, ToolCallID: "c1", Output: `{"r":[...]}`},
 				{Kind: ItemKindReasoning, Text: "good results, summarize"},
-				{Kind: ItemKindFinalAnswer, Text: "found 5 tools"},
+				{Kind: ItemKindFinalAnswer, Text: "found 5 tools", Status: ItemStatusCompleted},
 			},
 		},
 	}
@@ -64,7 +64,7 @@ func TestHistoryToMessages_StepNesting(t *testing.T) {
 						{Kind: ItemKindToolResult, ToolCallID: "c1", Output: "out"},
 					}},
 				}},
-				{Kind: ItemKindFinalAnswer, Text: "A"},
+				{Kind: ItemKindFinalAnswer, Text: "A", Status: ItemStatusCompleted},
 			},
 		},
 	}

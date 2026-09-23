@@ -7,6 +7,12 @@ import "errors"
 // provider independently of stored declarations and adapter assumptions.
 var ErrUnsupportedCapability = errors.New("loom: provider does not support this request")
 
+// ErrFinalAnswerInProgress means another FinalAnswer or StreamFinalAnswer holds the commit, so
+// this one is refused without touching the Turn. It is deliberately not ErrTurnClosed: that error
+// means the Turn is already closed and is treated as a cancellation, which would misreport a Turn
+// that is still open and, on a retry, still writable.
+var ErrFinalAnswerInProgress = errors.New("loom: final answer already in progress")
+
 // ErrTurnClosed means the Turn is sealed or was terminated externally, so the
 // write is refused. It happens when:
 //   - the handler already sealed the Turn with FinalAnswer / StreamFinalAnswer

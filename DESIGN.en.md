@@ -576,7 +576,8 @@ round happens" needs to be a checkable commit point.
    result, and the phase stays open.
 3. **The guarantees**: once the marked tool succeeds, tools are physically removed; every later
    request carries none, so its `content` is the answer by construction; the phase is irreversible;
-   the final answer is written once.
+   the answer is committed at most once per Turn — a failed stream is a **candidate**, not a
+   committed answer.
 4. **A mixed batch is rejected whole**: if a response contains a **valid** terminal tool, the batch
    must be **exactly one call**. When it is mixed, **nothing in the batch executes**, every call gets
    an error result (the protocol requires a result per `call_id`, or the next request is invalid),
@@ -621,10 +622,23 @@ round happens" needs to be a checkable commit point.
   Turn being sealed. Removing tools only guarantees that generation happens without tools; it does
   not make the content deliverable. A soft landing and a terminal tool enter the same phase but keep
   different close reasons.
-- **"Written once" cannot rest on `ErrTurnClosed` alone**: before sealing there are two windows (two
-  concurrent commits passing the check, and a failed streaming closure followed by a retry), so it
-  needs an atomic commit placeholder or a narrowed promise — the caller commits serially and does not
-  reopen a streamed candidate.
+- **"At most one commit" is guaranteed by an atomic commit.** Relying on `ErrTurnClosed` was not
+  enough: before sealing there were two windows — two concurrent commits passing the check, and a
+  failed streaming closure followed by a retry. The commit is now claimed and applied in one
+  critical section: the one-shot path checks, appends, and seals under the same lock, so the answer
+  and the seal become visible together, while the streaming path holds the claim while its closure
+  runs and then decides **under the lock** between committing and failing-and-releasing, which is
+  what keeps a retry possible.
+- The commit therefore separates **candidate from commit**: a failed stream leaves a `failed` item
+  as an audit record, and only the `completed` one reaches the LLM history (the history conversion
+  filters by status; reading by `Kind` used to feed a rejected draft to the model).
+- A second commit made while a claim is held returns its own error, `ErrFinalAnswerInProgress`,
+  rather than `ErrTurnClosed`: the latter is treated as a cancellation by `IsCancelError`, which
+  would report "another commit is in flight" as a cancel and disturb the close-reason derivation.
+  After sealing, `ErrTurnClosed` is still the answer.
+- A **panic** in the closure is treated as a failure: the item is marked failed and the claim
+  released before the panic continues to the caller. The framework still does not recover panics;
+  this only keeps the state consistent.
 - Boundaries: there is a window between the terminal tool succeeding and the state being committed
   (does a restart re-run it?), so the terminal tool is best side-effect free or idempotent, and
   "nothing in the batch executed" only covers tools the framework runs, not provider-hosted ones.

@@ -118,6 +118,12 @@ func turnToMessages(turn *Turn) []Message {
 			})
 
 		case ItemKindFinalAnswer:
+			// Only a committed answer belongs in the history. A failed or cancelled attempt is an
+			// audit record: feeding its partial text to the model would present a draft the run
+			// refused, and the next Turn cannot tell it apart from the answer.
+			if it.Status != ItemStatusCompleted {
+				return
+			}
 			flushCalls()
 			appendAssistantMsg(it.Text, nil)
 		case ItemKindStep:
