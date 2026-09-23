@@ -821,3 +821,13 @@ Legacy `toggleable_default_on/off` values remain accepted and normalize through
 `ReasoningSupport.Canonical()`. Application requests explicitly select reasoning;
 when declared effort levels exist, enabling reasoning also requires an explicit
 supported effort. Probe reports retain the server-default observation separately.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 The Loom Authors.
+
+Two directories hold files written elsewhere, both under the MIT license of the
+[JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite), with their
+source commit recorded in the README beside them: `internal/toolcontract/testdata/jsonschema` and
+`testdata/format`. Everything else in this repository is original; the failover configuration
+follows the shape Eino uses for the same problem, with no code taken from it.
