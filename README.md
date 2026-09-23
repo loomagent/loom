@@ -277,8 +277,41 @@ A retry needs the caller for a reason: the useful part is *what to send the seco
 time* — the rejected output, why it was rejected, and whatever context the caller
 holds. In `json_object` mode the first prompt must already ask for JSON and show the
 shape, since the provider can refuse the request otherwise; the retry is where the
-schema and the contract's example usually get added. Both halves are already in
-hand, so the loop is a few lines:
+schema and the contract's example usually get added.
+
+For a bounded retry inside one call, the framework owns the loop and the caller owns
+the decision:
+
+```go
+args, _, err := loom.ChatStructuredArgs(ctx, "summary", model, request, contract,
+    loom.WithStructuredAttempts(2),
+    loom.WithStructuredAttemptTimeout(2*time.Minute),
+    loom.WithStructuredNextRequest(func(_ context.Context, attempt loom.StructuredAttempt) (*loom.ChatRequest, error) {
+        next := attempt.Request                                  // the request that just failed
+        next.Messages = append(next.Messages,
+            loom.Message{Role: loom.RoleAssistant, Content: attempt.Response.Content},
+            loom.Message{Role: loom.RoleUser, Content: "Return one JSON value matching:\n" + schemaJSON})
+        return &next, nil                                        // nil stops and reports the failure
+    }))
+```
+
+Asking for more than one attempt requires that callback, because the framework does not
+choose what the second request says; one attempt is the default and behaves exactly as a
+single call. One attempt covers the whole model call — failover across models and the
+provider's transport retries included — and the validation after it, so a per-attempt
+timeout bounds all of that rather than one physical request: an attempt that exceeds it
+fails with `ErrAttemptTimeout`. The callback is not called when the caller's ctx has ended
+or when the attempts are spent, and it is told the attempt number, the request, the
+response, why it failed, and the contract.
+
+Errors stay distinguishable: with one attempt the error is exactly what the call produced;
+with several, a `*StructuredAttemptsError` records how many were spent and unwraps to the
+last failure, while a callback that itself fails returns a `*StructuredNextRequestError`
+carrying that error and the model failure separately.
+
+A retry that belongs to a wider conversation — one that needs the rest of the history, a
+different model, or a human decision — stays outside the call, and then the loop is a few
+lines:
 
 ```go
 schemaJSON, _ := jsonv2.Marshal(contract.Schema())

@@ -495,6 +495,20 @@ contract. The schema is never written into the prompt: a request that constrains
 rewriting the conversation is a hidden one. Loom asks once — an invalid response returns as a
 `*StructuredOutputError` carrying it, and how many more times to ask, with what context, is the
 caller's decision (a react turn feeds the error back beside the rest of the conversation).
+**The attempt seam** (decision 33): `WithStructuredAttempts(n)` sets the budget,
+`WithStructuredAttemptTimeout(d)` bounds each attempt, and `WithStructuredNextRequest(fn)` decides
+what the next request says. Three boundaries are worth keeping: one attempt **is** one `CallModel`
+— failover across models, the provider's transport retries, and the local validation after them —
+so a per-attempt timeout bounds all of that rather than one physical request; `n > 1` **requires**
+the callback, because what the second request says is not the framework's decision (that is the
+policy decision 29 removed); and the callback is asked after any failure, including a request that
+failed, which is how a product's `RetryOnError` is expressed without the framework owning such a
+switch. Errors stay distinguishable: one attempt returns what its call produced, several wrap it in
+a `*StructuredAttemptsError` that records the count and unwraps to the last failure, and a callback
+that fails returns a `*StructuredNextRequestError` carrying its own error and the model failure
+separately. Judging cost needs three numbers, not one: structured attempts, failover models, and
+physical requests.
+
 In `json_object` mode the prompt belongs to the caller, and the contract hands over material it
 already validated: `contract.Example()` is an instance that satisfies the schema, and
 `contract.JSONObjectPrompt()` is the whole instruction — ask for JSON, show the example, name the
@@ -761,6 +775,7 @@ github.com/loomagent/loom/
 | 30 | in `json_object` mode the prompt belongs to the caller; the contract only hands over what it validated at build time (`Example()` / `JSONObjectPrompt()`) | landed |
 | 31 | an `integer` is judged by value (exact rational arithmetic); `format` is asserted in the contract while the schema keeps the specification's annotation semantics | landed |
 | 32 | the subset suite's skips are counted in three categories: unmodeled keywords (18, a policy), keyword spellings (4, a policy), unimplemented constructs (14, a gap) | landed |
+| 33 | structured output gains an attempt seam: the framework owns the count and each attempt's total deadline, the caller's callback says what the next request is, and `n>1` requires it | landed |
 
 Dropped: the Note family (reasoning plus a label already carries process information);
 CloseDetector (external termination is a cancelled ctx with a cause); `Writer.RunTool`
