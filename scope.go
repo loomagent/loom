@@ -572,9 +572,10 @@ func formatChildPath(parentPath string, kind ItemKind, idx uint64) string {
 	return parentPath + "." + string(kind) + "[" + strconv.FormatUint(idx, 10) + "]"
 }
 
-// isSingletonKind reports whether a turn may hold only one item of this kind. The state
-// machine keeps a singleton from being written twice; WriteFinalAnswer and the like check
-// internally.
+// isSingletonKind reports whether a turn may hold only one item of this kind. User messages
+// are the only such kind: every other kind carries an occurrence index, so a second attempt
+// at a kind gets its own path instead of colliding with the first. The state machine keeps a
+// user message from being written twice; the write path checks internally.
 func isSingletonKind(kind ItemKind) bool {
-	return kind == ItemKindUserMessage || kind == ItemKindFinalAnswer
+	return kind == ItemKindUserMessage
 }

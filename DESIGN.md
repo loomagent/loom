@@ -87,7 +87,7 @@ turn[0].step[0].reasoning[0]                 ← step 内第 0 个 reasoning
 turn[0].step[0].tool_call[0]
 turn[0].step[0].tool_result[0]
 turn[0].step[0].step[0]                      ← sub flow 嵌套
-turn[0].final_answer[0]                      ← 最终回答(单例,但带 [0] 保持形态统一)
+turn[0].final_answer[0]                      ← 最终回答;每次尝试一个 item,失败候选与最终提交各自成行
 
 turn[1].user_message[0]                      ← 同 conversation 下一轮
 ```

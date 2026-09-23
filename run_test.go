@@ -35,7 +35,7 @@ func TestRun_Completed(t *testing.T) {
 	if turn.Items[0].Kind != ItemKindFinalAnswer || turn.Items[0].Text != "answer: hello" {
 		t.Errorf("first item: %+v", turn.Items[0])
 	}
-	if turn.Items[0].Path != "turn[0].final_answer" {
+	if turn.Items[0].Path != "turn[0].final_answer[0]" {
 		t.Errorf("final_answer path: %q", turn.Items[0].Path)
 	}
 	// Sink: one Started and one Finished for final_answer, two frames

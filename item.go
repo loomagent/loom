@@ -27,8 +27,11 @@ const (
 	// Fields: ToolName, ToolCallID, Output, Error.
 	ItemKindToolResult ItemKind = "tool_result"
 
-	// ItemKindFinalAnswer is the final answer. One per Turn.
-	// Fields: Text. Writing one moves the Turn to Completed.
+	// ItemKindFinalAnswer is one attempt at the final answer. A Turn commits at most one of
+	// them — claiming and sealing the commit happen in one critical section, so a Turn cannot
+	// end with two answers — but an attempt that failed stays in the tree as a candidate. Every
+	// attempt therefore carries its own occurrence index and path.
+	// Fields: Text. Committing one moves the Turn to Completed.
 	ItemKindFinalAnswer ItemKind = "final_answer"
 )
 

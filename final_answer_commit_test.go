@@ -114,6 +114,11 @@ func TestFailedFinalAnswerReleasesTheCommitAndStaysOutOfHistory(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("final_answer items = %d, want 2 (one failed candidate, one commit)", len(items))
 	}
+	// A store that keys rows by path — as the reference sink does — cannot tell two attempts
+	// apart unless every attempt has its own path.
+	if items[0].Path != "turn[0].final_answer[0]" || items[1].Path != "turn[0].final_answer[1]" {
+		t.Fatalf("attempt paths = %q, %q, want turn[0].final_answer[0] and [1]", items[0].Path, items[1].Path)
+	}
 	if items[0].Status != ItemStatusFailed || !strings.Contains(items[0].Error.Message, "the draft was rejected") {
 		t.Fatalf("candidate = %+v", items[0])
 	}

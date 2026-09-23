@@ -81,7 +81,7 @@ turn[0].step[0].reasoning[0]                 ← the 0th reasoning inside that s
 turn[0].step[0].tool_call[0]
 turn[0].step[0].tool_result[0]
 turn[0].step[0].step[0]                      ← a nested sub flow
-turn[0].final_answer[0]                      ← the final answer (a singleton, kept as [0] for uniform shape)
+turn[0].final_answer[0]                      ← the final answer; every attempt is its own item, so a failed candidate and the commit never share a path
 
 turn[1].user_message[0]                      ← the next round in the same conversation
 ```
