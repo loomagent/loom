@@ -146,3 +146,26 @@ func TestRunToolByName_NotFound(t *testing.T) {
 		t.Errorf("tool_result.Error: %+v", tr.Error)
 	}
 }
+
+// The helpers validate what they need instead of panicking on a nil writer or registry, which is
+// how the rest of the framework reports a missing dependency.
+func TestToolHelpersRejectMissingDependencies(t *testing.T) {
+	t.Parallel()
+	if _, err := ExecuteToolCalls(t.Context(), nil, NewToolRegistry(), nil); err == nil {
+		t.Error("ExecuteToolCalls accepted a nil writer")
+	}
+	if _, err := RunToolByName(t.Context(), nil, "label", NewToolRegistry(), "missing", nil); err == nil {
+		t.Error("RunToolByName accepted a nil writer")
+	}
+	if _, err := Run(t.Context(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
+		if _, err := ExecuteToolCalls(ctx, w, nil, nil); err == nil {
+			t.Error("ExecuteToolCalls accepted a nil registry")
+		}
+		if _, err := RunToolByName(ctx, w, "label", nil, "missing", nil); err == nil {
+			t.Error("RunToolByName accepted a nil registry")
+		}
+		return nil
+	}, RunOptions{ConversationID: "tool-helper-dependencies"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}

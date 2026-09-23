@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	jsonv2 "encoding/json/v2"
+	"errors"
 	"fmt"
 )
 
@@ -31,6 +32,12 @@ func ExecuteToolCalls(
 	registry *ToolRegistry,
 	calls []ToolCall,
 ) ([]ToolExecResult, error) {
+	if w == nil {
+		return nil, errors.New("loom.ExecuteToolCalls: writer must not be nil")
+	}
+	if registry == nil {
+		return nil, errors.New("loom.ExecuteToolCalls: registry must not be nil")
+	}
 	out := make([]ToolExecResult, 0, len(calls))
 	for _, call := range calls {
 		output, err := runOneTool(ctx, w, call.Name, registry, call)
@@ -72,6 +79,12 @@ func RunToolByName(
 	name string,
 	args any,
 ) (string, error) {
+	if w == nil {
+		return "", errors.New("loom.RunToolByName: writer must not be nil")
+	}
+	if registry == nil {
+		return "", errors.New("loom.RunToolByName: registry must not be nil")
+	}
 	argsJSON, err := jsonv2.Marshal(args)
 	if err != nil {
 		return "", fmt.Errorf("loom.RunToolByName: marshal args: %w", err)
