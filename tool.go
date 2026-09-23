@@ -27,6 +27,9 @@ func ValidateToolName(name string) error {
 	return nil
 }
 
+// TerminalToolDescription is the shared model-facing instruction for ending tool use.
+const TerminalToolDescription = "End the tool-using phase. Call this tool alone when no more tools are needed. After it succeeds, write the complete final answer from the accumulated context."
+
 // ToolInfo is a tool's metadata, which the model uses to decide when and how to
 // call it.
 //

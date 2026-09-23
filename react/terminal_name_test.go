@@ -59,6 +59,13 @@ func TestUserCustomTerminalNamesShareOneFinalizationProtocol(t *testing.T) {
 					if attempts != wantAttempts {
 						t.Fatalf("terminal attempts=%d", attempts)
 					}
+					for _, request := range model.requests {
+						for _, info := range request.Tools {
+							if info.Name == name && info.Description != loom.TerminalToolDescription {
+								t.Fatalf("terminal description = %q", info.Description)
+							}
+						}
+					}
 					last := model.requests[len(model.requests)-1]
 					if len(last.Tools) != 0 {
 						t.Fatal("final round exposes tools")
@@ -76,7 +83,7 @@ func TestUserCustomTerminalNamesShareOneFinalizationProtocol(t *testing.T) {
 						t.Fatalf("reasoning=%q answer=%q", reasoning, answer)
 					}
 					info, err := terminal.Info(t.Context())
-					if err != nil || info.EndsToolPhase {
+					if err != nil || info.EndsToolPhase || info.Description != "end research" {
 						t.Fatal("per-run naming mutated the shared tool")
 					}
 				})

@@ -18,6 +18,7 @@ concurrency. Host adapters must not implement a second iteration loop.
   tool by name. Configured and `EndsToolPhase` tools use the same state machine:
   exclusive batch, no research budget charge, transition only on success.
   Explicitly configured terminals remain available after research budget exhaustion.
+  Their descriptions are replaced with the shared `loom.TerminalToolDescription`.
   The shared registry is unchanged; naming is local to each run.
 - `AfterToolsDecision.Stop` retains buffered early-return semantics for business
   pipelines. Streaming delivery always enters a final model round.

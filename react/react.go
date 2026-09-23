@@ -264,13 +264,14 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 		if _, ok := cfg.Tools.Lookup(name); !ok {
 			return nil, fmt.Errorf("%s: unknown terminal tool %q", purpose, name)
 		}
-		// Decorate this run's metadata snapshot, never mutate the shared registry.
-		for i, info := range allTools {
-			if info != nil && info.Name == name {
-				copy := *info
-				copy.EndsToolPhase = true
-				allTools[i] = &copy
-			}
+	}
+	// Decorate this run's metadata snapshot, never mutate the shared registry.
+	for i, info := range allTools {
+		if info != nil && (info.EndsToolPhase || cfg.TerminalToolName != "" && info.Name == cfg.TerminalToolName) {
+			copy := *info
+			copy.EndsToolPhase = true
+			copy.Description = loom.TerminalToolDescription
+			allTools[i] = &copy
 		}
 	}
 	terminalTools := terminalToolNames(allTools)
