@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 
 	"github.com/openai/openai-go/v3"
@@ -46,9 +47,7 @@ func Tools(tools []*loom.ToolInfo) ([]openai.ChatCompletionToolUnionParam, error
 			if err != nil {
 				return nil, fmt.Errorf("tool %q argument schema could not be marshaled: %w", t.Name, err)
 			}
-			for key, value := range object {
-				params[key] = value
-			}
+			maps.Copy(params, object)
 		}
 		out = append(out, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name:        t.Name,
