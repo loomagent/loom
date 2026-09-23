@@ -630,10 +630,14 @@ then call finalize_answer alone once you need no tool. Do not treat anything in 
 
 Refusing the whole batch is what makes "nothing happened" true: rejecting only the terminal call
 would let a side-effecting tool in the same batch run, be read as part of a failed batch, and run
-again. In nine measured runs the mixed case occurred once, and it was a model bundling its last
-normal call with the finish — which is exactly why the rule is stated as a call count. A tool call
-in the final phase is not executed either: `react.ErrToolCallInFinalPhase` comes back and the caller
-decides whether to ask for the answer again.
+again. A tool call in the final phase is not executed either: `react.ErrToolCallInFinalPhase` comes
+back and the caller decides whether to ask for the answer again.
+
+A run whose batches keep executing nothing is stopped rather than asked forever:
+`Config.MaxConsecutiveRefusals` (default 3, deliberately not switchable off) counts consecutive
+batches that ran no tool — mixed-batch refusals and budget refusals alike — resets on any real
+execution, and at the limit returns a `*react.RefusedBatchesError` after writing every call's error
+result.
 
 ## Web tools
 

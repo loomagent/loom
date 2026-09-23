@@ -14,13 +14,16 @@ func runTerminalCase(t *testing.T, cfg Config, conversationID string) (*Result, 
 	t.Helper()
 	var result *Result
 	var runErr error
-	if _, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+	// The run error is returned rather than asserted here: the tests that do not expect one check
+	// for themselves, and the ones that do inspect its type.
+	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		result, runErr = Run(ctx, w, cfg)
 		return runErr
-	}, loom.RunOptions{ConversationID: conversationID}); err != nil && !errors.Is(err, ErrToolCallInFinalPhase) {
-		t.Fatalf("loom.Run: %v", err)
+	}, loom.RunOptions{ConversationID: conversationID})
+	if runErr != nil {
+		return result, runErr
 	}
-	return result, runErr
+	return result, err
 }
 
 // toolResultContent returns what the model was told about one call, or an empty string.

@@ -30,6 +30,12 @@ type Config struct {
 	MaxToolCalls uint64
 	// ToolCallLimits applies per-tool limits. Missing and zero values are unlimited.
 	ToolCallLimits map[string]uint64
+	// MaxConsecutiveRefusals bounds batches that are refused without executing anything: a batch
+	// that bundles the terminal tool with others, or one whose calls are all over budget. A run
+	// that keeps being refused makes no progress, and MaxSteps=0 means unlimited, so the
+	// framework bounds the loop it introduced itself; zero uses
+	// defaultMaxConsecutiveRefusals, and there is deliberately no way to switch it off.
+	MaxConsecutiveRefusals uint64
 	// SoftLandingPrompt is appended as a system message before the final call.
 	SoftLandingPrompt string
 	// ToolPhaseEndedPrompt is appended as a system message once the tool phase has ended, so the
@@ -145,6 +151,22 @@ type Result struct {
 	EndedByTool string
 }
 
+// RefusedBatchesError reports that consecutive batches were refused without executing anything, so
+// the run stopped instead of asking a model again that was making no progress. The refusals were
+// written as tool results before this error was returned, so the conversation stays intact for
+// whatever the caller does next.
+type RefusedBatchesError struct {
+	Refusals uint64
+	Reason   string
+}
+
+func (e *RefusedBatchesError) Error() string {
+	return fmt.Sprintf("react: %d consecutive batches were refused without executing anything (last refusal: %s)", e.Refusals, e.Reason)
+}
+
+// defaultMaxConsecutiveRefusals is the bound a run uses when the caller sets none.
+const defaultMaxConsecutiveRefusals = 3
+
 // ErrToolCallInFinalPhase reports a model that asked for a tool in a round that has none. The
 // final phase removes tools precisely so the answer cannot be interleaved with one, so the call
 // is not executed: the caller decides whether to ask for the answer again.
@@ -177,6 +199,11 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("%s: list tools: %w", purpose, err)
 	}
 	terminalTools := terminalToolNames(allTools)
+	maxRefusals := cfg.MaxConsecutiveRefusals
+	if maxRefusals == 0 {
+		maxRefusals = defaultMaxConsecutiveRefusals
+	}
+	var refusedInARow uint64
 	var toolPhaseEnded bool
 	var endedByTool string
 	msgs := append([]loom.Message(nil), cfg.Messages...)
@@ -286,7 +313,9 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 		}
 
 		results := make([]loom.ToolExecResult, 0, len(response.ToolCalls))
+		executed, lastRefusal := false, ""
 		if reason := mixedTerminalBatch(response.ToolCalls, terminalTools); reason != "" {
+			lastRefusal = "terminal_tool_not_alone"
 			// Nothing in this batch runs; every call still gets a result, because the next
 			// request is invalid without one per call id.
 			for _, call := range response.ToolCalls {
@@ -299,6 +328,7 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 		} else {
 			for _, call := range response.ToolCalls {
 				if reason := reserveTool(call.Name, cfg, &totalUses, uses, terminalTools); reason != "" {
+					lastRefusal = "tool_budget_exhausted"
 					result, err := rejectToolCall(ctx, w, call, "tool_budget_exhausted", reason)
 					if err != nil {
 						return nil, fmt.Errorf("%s: step %d reject tool: %w", purpose, step+1, err)
@@ -310,6 +340,7 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 				if err != nil {
 					return nil, fmt.Errorf("%s: step %d execute tool: %w", purpose, step+1, err)
 				}
+				executed = true
 				for _, result := range one {
 					// Only success ends the phase; a failure comes back as a tool result and the
 					// loop continues.
@@ -343,6 +374,17 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 			if decision.Stop {
 				return &Result{FinalContent: decision.FinalContent, Messages: msgs, Steps: step + 1}, nil
 			}
+		}
+		// A batch that ran nothing is not progress: the model may be asking for tools it cannot
+		// have, or bundling the terminal tool with others, and the loop this framework added
+		// would otherwise spin until MaxSteps, which is unlimited when the caller sets none.
+		if executed {
+			refusedInARow = 0
+			continue
+		}
+		refusedInARow++
+		if refusedInARow >= maxRefusals {
+			return nil, fmt.Errorf("%s: step %d: %w", purpose, step+1, &RefusedBatchesError{Refusals: refusedInARow, Reason: lastRefusal})
 		}
 	}
 }
@@ -554,7 +596,15 @@ func appendResponse(messages []loom.Message, response *loom.ChatResponse) []loom
 	if response == nil {
 		return out
 	}
-	return append(out, loom.Message{Role: loom.RoleAssistant, Content: response.Content, ReasoningContent: response.ReasoningContent, ToolCalls: response.ToolCalls})
+	return append(out, loom.Message{
+		Role:             loom.RoleAssistant,
+		Content:          response.Content,
+		ReasoningContent: response.ReasoningContent,
+		// A provider that returns structured reasoning wants the same blocks back on the turn
+		// they belong to, which is why they travel with the message.
+		ReasoningDetails: response.ReasoningDetails,
+		ToolCalls:        response.ToolCalls,
+	})
 }
 
 func validateFinishReason(reason loom.FinishReason) error {
