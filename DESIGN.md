@@ -500,6 +500,8 @@ func ChatStructuredArgs(ctx context.Context, purpose string, model ChatModel, re
 带着响应内容返回,再试几次、带什么上下文由调用方决定(react 轮次会把错误连同其余对话
 一起反馈给模型)。
 
+**尝试接缝**(决策 33):`WithStructuredAttempts(n)` 给次数、`WithStructuredAttemptTimeout(d)` 给每次尝试的总时限、`WithStructuredNextRequest(fn)` 决定"下次发什么",默认 1 次。三条边界值得记下:① **一次尝试 = 一次 `CallModel`**(含 failover 换模型、provider 传输重试,及其后的本地校验),所以每次超时限的是这整段,而不是单个物理请求;② `n > 1` 时**必须**给回调——框架不替调用方选择"第二次发什么"(否则就是决策 29 排除掉的策略);③ 回调在任何失败后都会被问(含请求层错误),产品的 `RetryOnError` 由此表达,框架不设该开关。错误分层:`n = 1` 时原样返回;`n > 1` 时 `*StructuredAttemptsError` 带次数并 `Unwrap` 到最后失败;回调自身失败是 `*StructuredNextRequestError`,把回调错误与模型失败分开携带。要观察成本,需要同时看**结构化尝试数、failover 模型数、物理请求数**——三者并不相等。
+
 `json_object` 模式下提示词由调用方持有,契约只交出**构建时已校验过**的材料:`contract.Example()`
 给出满足 schema 的样例,`contract.JSONObjectPrompt()` 给出"要 JSON + 样例 + 字段约束"的完整
 引导语。框架从不自行把其中任何一段放进请求。
@@ -693,6 +695,7 @@ github.com/loomagent/loom/
 | 30 | `json_object` 模式下提示词由调用方持有;契约只交出构建时校验过的样例与字段引导语(`Example()` / `JSONObjectPrompt()`) | 已落实 |
 | 31 | `integer` 按值判定(精确有理数运算);`format` 的断言在契约层,schema 层保持规范的注解语义 | 已落实 |
 | 32 | 子集套件的跳过分三类并各自断言:未建模关键字(策略 18)/ 关键字写法(策略 4)/ 未实现构造(缺口 14) | 已落实 |
+| 33 | 结构化输出提供尝试接缝:次数与每次尝试总时限归框架,"下一次发什么"由调用方回调给;`n>1` 必须给回调 | 已落实 |
 
 已放弃:Note 系列(reasoning 与 label 足以表达过程信息)、CloseDetector(外部终结
 由调用方取消带 cause 的 ctx 表达)、`Writer.RunTool`(由 `RunToolByName` 与

@@ -238,7 +238,35 @@ summary.Get(args)
 重试必须由调用方做,原因在“重试的关键不是再问一次,而是第二次带什么”——被拒的输出、
 被拒的原因,以及调用方手上那些上下文。`json_object` 模式下第一次的提示词就必须提到
 JSON 并给出样例(供应商可能不提到就 400),而 schema 与契约样例通常是**重试时**才补
-进去的。两样都在手里,所以循环就是几行:
+进去的。
+
+**在一次调用内部做有界重试**时,循环归框架、决定归调用方:
+
+```go
+args, _, err := loom.ChatStructuredArgs(ctx, "summary", model, request, contract,
+    loom.WithStructuredAttempts(2),
+    loom.WithStructuredAttemptTimeout(2*time.Minute),
+    loom.WithStructuredNextRequest(func(_ context.Context, attempt loom.StructuredAttempt) (*loom.ChatRequest, error) {
+        next := attempt.Request                                  // 刚刚失败的那次请求
+        next.Messages = append(next.Messages,
+            loom.Message{Role: loom.RoleAssistant, Content: attempt.Response.Content},
+            loom.Message{Role: loom.RoleUser, Content: "Return one JSON value matching:\n" + schemaJSON})
+        return &next, nil                                        // 返回 nil 即停止并报出失败
+    }))
+```
+
+要求多于一次尝试就**必须**给这个回调,因为"第二次发什么"不是框架能替调用方决定的;
+默认一次,行为与单次调用逐字一致。**一次尝试覆盖整次模型调用**——含跨模型的 failover
+与 provider 的传输层重试——以及其后的本地校验,所以"每次尝试超时"限的是这整段而不是
+单个物理请求;超时的尝试以 `ErrAttemptTimeout` 失败。调用方的 ctx 已结束、或尝试次数已
+用尽时,回调不会被调用;回调会拿到尝试序号、该次请求、响应、失败原因与契约。
+
+错误保持可区分:只有一次尝试时,返回的就是那一次调用产生的东西;多次尝试时由
+`*StructuredAttemptsError` 记录用了几次并 `Unwrap` 到最后一次失败;而回调自身失败返回
+`*StructuredNextRequestError`,把回调错误与模型失败分开携带。
+
+如果这次重试属于**更大的对话**——需要其余历史、换模型、或等人决定——那就留在调用之外,
+此时循环就是几行:
 
 ```go
 schemaJSON, _ := jsonv2.Marshal(contract.Schema())
