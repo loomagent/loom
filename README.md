@@ -576,7 +576,9 @@ finalize := loom.NewArgsTool(loom.MustArgsContract("finalize_answer"),
 ```
 
 Once that call **succeeds**, every later request carries no tools, so the answer cannot be
-interleaved with a tool call; the phase is irreversible, and the final answer is written once.
+interleaved with a tool call; the phase is irreversible, and the Turn commits **at most one** final
+answer — a stream that fails is a candidate, not a committed answer, and only the committed one
+reaches the history.
 A failed call comes back as a tool result and the phase stays open. The name belongs to the
 caller: the framework has no phase enum, so `start_report` and `finalize_answer` are the same
 mechanism with different names. A marked tool is never withheld by a tool budget, because the

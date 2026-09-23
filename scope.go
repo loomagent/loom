@@ -46,6 +46,13 @@ type turnState struct {
 	//   - a strict-mode sink failure                    → {Failed, "agent_error"} with Cause=sinkErr
 	closeReason *CloseReason
 
+	// finalAnswerInProgress marks a final commit that has been claimed: either it is streaming
+	// right now, or it is about to be sealed. A second commit is refused with
+	// ErrFinalAnswerInProgress while the claim is held, and the claim is released when the
+	// attempt fails, so a retry stays possible. The one-shot path never leaves this set without
+	// sealing in the same critical section.
+	finalAnswerInProgress bool
+
 	// items is the root of Turn.Items; the nesting goes through Item.Children.
 	items []Item
 
@@ -95,6 +102,16 @@ func newTurnState(
 // should return ErrTurnClosed.
 func (s *turnState) isClosed() bool {
 	return s.closeReason != nil
+}
+
+// sealFinalAnswerLocked seals the Turn as {Completed, "final_answer"}. The caller holds mu, so
+// the claim, the answer item, and the close reason become visible together: two commits cannot
+// both win, and the first reason a Turn was closed for is never overwritten by a later one.
+func (s *turnState) sealFinalAnswerLocked() {
+	if s.closeReason != nil {
+		return
+	}
+	s.closeReason = &CloseReason{Code: CloseCodeFinalAnswer}
 }
 
 // nextToolCallIDLocked is called with mu already held, and returns an incrementing
