@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -166,6 +167,7 @@ func (m *Model) chatRaw(ctx context.Context, dsReq openai.ChatCompletionNewParam
 var wire = openaicompat.Provider{
 	FinishReason:   translateFinishReason,
 	ReasoningField: openaicompat.ReasoningContentField,
+	NormalizeError: normalizeDeepSeekError,
 }
 
 // Stream implements loom.ChatModel.Stream with automatic retries, up to the first-frame
@@ -295,6 +297,11 @@ func normalizeDeepSeekError(err error) error {
 	return err
 }
 
+// DeepSeek may append its diagnostic request ID to this business error. Match
+// only that known suffix: an arbitrary phrase extension is not a moderation
+// signal, and the HTTP status check below still distinguishes other failures.
+var contentExistsRiskMessage = regexp.MustCompile(`(?i)^content exists risk(?:\s+\(request_id:\s*[[:alnum:]_-]+\))?$`)
+
 func isDeepSeekContentExistsRisk(err error) bool {
 	apiErr, ok := errors.AsType[*openai.Error](err)
 	if !ok {
@@ -303,7 +310,7 @@ func isDeepSeekContentExistsRisk(err error) bool {
 	if apiErr.StatusCode != 400 {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(apiErr.Message), "Content Exists Risk")
+	return contentExistsRiskMessage.MatchString(strings.TrimSpace(apiErr.Message))
 }
 
 func translateFinishReason(r string) loom.FinishReason {
