@@ -49,6 +49,8 @@ var ErrContentFilter = errors.New("loom: content filter")
 // A provider maps its own official error type onto this sentinel, and policies
 // above it must not match a provider's private wording. Recognising DeepSeek's
 // official "Content Exists Risk", for example, is the deepseek provider's job.
+// If unhandled by a fallback policy, Run records failed/content_filter while
+// preserving the original error in CloseReason.Cause and its return value.
 var ErrSensitiveContentRisk = errors.New("loom: sensitive content risk")
 
 // ErrOutputTruncated means the model's output was cut short, whether by

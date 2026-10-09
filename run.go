@@ -12,7 +12,8 @@ import (
 // finally FinalAnswer. Its error return is how it reports failure:
 //   - nil after calling FinalAnswer → the Turn is Completed
 //   - nil without FinalAnswer       → the Turn Failed with code=no_final_answer
-//   - non-nil                       → the Turn Failed with code=agent_error and cause=err
+//   - a moderation or truncation error → the Turn Failed with the specific close code
+//   - another non-nil error           → the Turn Failed with code=agent_error and cause=err
 //
 // Run watches for a cancelled or expired ctx and turns it into the matching Cancelled or
 // timeout terminal state.
@@ -186,16 +187,8 @@ func deriveCloseReason(state *turnState, ctx context.Context, handlerErr error) 
 			}
 			return
 		}
-		// Narrow down a finish_reason error from the LLM protocol
-		code := CloseCodeAgentError
-		switch {
-		case errors.Is(handlerErr, ErrContentFilter):
-			code = CloseCodeContentFilter
-		case errors.Is(handlerErr, ErrOutputTruncated):
-			code = CloseCodeOutputTruncated
-		}
 		state.closeReason = &CloseReason{
-			Code:    code,
+			Code:    FailureCloseCode(handlerErr),
 			Message: handlerErr.Error(),
 			Cause:   handlerErr,
 		}
