@@ -398,6 +398,13 @@ The architecture and the decisions behind it are documented in
 
 ## Model factory
 
+Every `ChatRequest.Messages` must contain at least one `RoleUser` message.
+Keep task input in that message and trusted instructions in `RoleSystem`.
+A history ending in an assistant or tool message is valid if it includes an
+earlier user message. Missing user messages return `ErrMissingUserMessage`
+wrapped in `RequestValidationError` before HTTP requests or model failover;
+Loom does not invent a task or convert another role to user.
+
 `modelfactory` selects providers explicitly and does not infer them from a URL.
 It accepts plain Go configuration and has no database or ORM dependency:
 

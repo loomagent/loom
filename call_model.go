@@ -102,6 +102,9 @@ func CallModel(
 			}
 			callReq = built
 		}
+		if err := ValidateChatRequest(callReq); err != nil {
+			return nil, LocalRequestError(err)
+		}
 		resp, err := callModelOnce(ctx, purpose, current, callReq, cfg.captureContent)
 		attempt := FailoverAttempt{
 			Attempt:  attemptNum,

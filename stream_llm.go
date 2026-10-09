@@ -49,6 +49,9 @@ func StreamLLMToStep(
 	model ChatModel,
 	req ChatRequest,
 ) (*ChatResponse, error) {
+	if err := ValidateChatRequest(req); err != nil {
+		return nil, LocalRequestError(err)
+	}
 	// OTel: start the LLM span, following the GenAI semantic conventions.
 	// captureContent, which comes through turnState, decides whether the prompt and the
 	// completion are written to span attributes.

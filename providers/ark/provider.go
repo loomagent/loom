@@ -226,6 +226,9 @@ func (s *streamAdapter) Close() error {
 // Reasoning.Effort is sent unchanged after provider/model contract validation.
 func (m *Model) buildRequest(req loom.ChatRequest) (_ arkmodel.CreateChatCompletionRequest, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
+	if err := loom.ValidateChatRequest(req); err != nil {
+		return arkmodel.CreateChatCompletionRequest{}, err
+	}
 	out := arkmodel.CreateChatCompletionRequest{
 		Model:    m.name,
 		Messages: translateMessages(req.Messages),

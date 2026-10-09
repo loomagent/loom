@@ -151,6 +151,9 @@ var wire = openaicompat.Provider{
 // buildRequest translates a loom.ChatRequest into the go-openai request structure.
 func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewParams, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
+	if err := loom.ValidateChatRequest(req); err != nil {
+		return openai.ChatCompletionNewParams{}, err
+	}
 	messages, err := wire.Messages(req.Messages)
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/zhipuai: translate messages: %w", err)

@@ -41,8 +41,9 @@ func main() {
 	}}
 
 	sink := loom.NewMemorySink()
-	turn, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+	turn, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, input loom.UserMessage) error {
 		_, err := react.RunToFinalAnswer(ctx, w, react.Config{
+			Messages:  []loom.Message{{Role: loom.RoleUser, Content: input.Text}},
 			Model:     model,
 			Tools:     loom.NewToolRegistry(tool, finalize),
 			Purpose:   "glossary",

@@ -407,6 +407,8 @@ type StructuredOutput struct {
 // ChatRequest holds the parameters of one LLM call. Messages is required; a zero
 // value in any other field means the provider default.
 type ChatRequest struct {
+	// Messages must include at least one RoleUser message. The user may be
+	// earlier in the history when continuing an assistant or a tool call.
 	Messages []Message
 
 	// Tools lists the tools this call may use; nil or empty exposes none. Tool

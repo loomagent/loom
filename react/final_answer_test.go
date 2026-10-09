@@ -68,7 +68,7 @@ func TestUserReceivesFinalReasoningAndContentBeforeModelFinishes(t *testing.T) {
 					defer close(done)
 					turn, runErr = loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 						var err error
-						result, err = RunToFinalAnswer(ctx, w, Config{Model: model, Tools: loom.NewToolRegistry(terminalTool(&calls)), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}, ToolPhaseEndedPrompt: "Write the final answer now.", MaxTokens: new(1024),
+						result, err = RunToFinalAnswer(ctx, w, Config{Model: model, Messages: []loom.Message{{Role: loom.RoleUser, Content: "task"}}, Tools: loom.NewToolRegistry(terminalTool(&calls)), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}, ToolPhaseEndedPrompt: "Write the final answer now.", MaxTokens: new(1024),
 							CallModel: func(ctx context.Context, w loom.Writer, _ State, purpose string, model loom.ChatModel, req loom.ChatRequest) (*loom.ChatResponse, error) {
 								if len(req.Tools) == 0 {
 									t.Error("host research caller received final delivery")
@@ -156,7 +156,7 @@ func TestUserBudgetAndPolicyStopsStillStreamAFinalAnswer(t *testing.T) {
 				model.frames <- &loom.Chunk{ContentDelta: "answer"}
 				model.frames <- &loom.Chunk{FinishReason: loom.FinishReasonStop}
 				close(model.frames)
-				cfg := Config{Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&calls)), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}, ToolPhaseEndedPrompt: "Final response only."}
+				cfg := Config{Model: model, Messages: []loom.Message{{Role: loom.RoleUser, Content: "task"}}, Tools: loom.NewToolRegistry(lookup, terminalTool(&calls)), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}, ToolPhaseEndedPrompt: "Final response only."}
 				ctx := t.Context()
 				wantReason := route
 				switch route {
@@ -234,7 +234,7 @@ func TestUserInvalidFinalizationConfigOrEmptyDraftFails(t *testing.T) {
 		calls := 0
 		model := &scriptedModel{responses: []*loom.ChatResponse{{FinishReason: loom.FinishReasonStop}}}
 		turn, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
-			cfg := Config{Model: model, Tools: loom.NewToolRegistry(terminalTool(&calls))}
+			cfg := Config{Model: model, Messages: []loom.Message{{Role: loom.RoleUser, Content: "task"}}, Tools: loom.NewToolRegistry(terminalTool(&calls))}
 			if _, err := RunToFinalAnswer(ctx, w, cfg); err == nil {
 				t.Error("implicit reasoning accepted")
 			}
@@ -270,7 +270,7 @@ func TestUserDoesNotReceiveSuccessfulAnswerFromInvalidFinalStream(t *testing.T) 
 				model.frames <- tc.frame
 				close(model.frames)
 				turn, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
-					_, err := RunToFinalAnswer(ctx, w, Config{Model: model, Tools: loom.NewToolRegistry(), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
+					_, err := RunToFinalAnswer(ctx, w, Config{Model: model, Messages: []loom.Message{{Role: loom.RoleUser, Content: "task"}}, Tools: loom.NewToolRegistry(), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
 					return err
 				}, loom.RunOptions{ConversationID: "failed-final"})
 				// Then the partial answer stays failed and cannot seal a successful turn.
