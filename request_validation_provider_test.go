@@ -53,10 +53,7 @@ func TestUserCannotSendChatWithoutUserMessage(t *testing.T) {
 	}
 	for _, provider := range constructors {
 		for _, tc := range cases {
-			for _, entry := range []string{"chat", "stream", "call model", "stream to step"} {
-				if entry == "stream to step" && tc.valid {
-					continue
-				}
+			for _, entry := range []string{"chat", "stream", "call model", "stream to step", "final stream"} {
 				t.Run("user "+provider.name+" "+entry+" "+tc.name, func(t *testing.T) {
 					synctest.Test(t, func(t *testing.T) {
 						// Given an endpoint ledger, requests with no user must never reach it.
@@ -122,7 +119,22 @@ func TestUserCannotSendChatWithoutUserMessage(t *testing.T) {
 								}
 							}
 						case "stream to step":
-							_, err = loom.StreamLLMToStep(t.Context(), nil, "test", model, req)
+							_, err = loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+								resp, streamErr := loom.StreamLLMToStep(ctx, w, "test", model, req)
+								if streamErr != nil {
+									return streamErr
+								}
+								content = resp.Content
+								return w.FinalAnswer(ctx, content)
+							}, loom.RunOptions{ConversationID: "validation"})
+						case "final stream":
+							_, err = loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+								resp, streamErr := loom.StreamLLMToFinalAnswer(ctx, w, "test", model, req)
+								if resp != nil {
+									content = resp.Content
+								}
+								return streamErr
+							}, loom.RunOptions{ConversationID: "validation"})
 						default:
 							t.Fatal("unknown entry point")
 						}

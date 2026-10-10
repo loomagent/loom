@@ -34,6 +34,9 @@ func StreamLLMToFinalAnswer(ctx context.Context, w TurnWriter, purpose string, m
 	if len(req.Tools) != 0 || (req.ToolChoice != nil && req.ToolChoice.Mode != ToolChoiceNone) {
 		return nil, errors.New("loom.StreamLLMToFinalAnswer: request must disable tools")
 	}
+	if err := ValidateChatRequest(req); err != nil {
+		return nil, LocalRequestError(err)
+	}
 	provider, modelName := SplitModelName(model.Name())
 	if _, err := ResolveModelReasoning(provider, modelName, model.Capabilities(), req.Reasoning); err != nil {
 		return nil, err

@@ -183,7 +183,8 @@ func TestUserBudgetAndPolicyStopsStillStreamAFinalAnswer(t *testing.T) {
 						if state.ToolPhaseEnded {
 							plan.Tools = state.ToolInfos
 							plan.IsFinalStep = false
-							plan.Messages = nil
+							// Remove final instructions while retaining the required user task.
+							plan.Messages = []loom.Message{{Role: loom.RoleUser, Content: "task"}}
 							plan.ToolChoice = &loom.ToolChoice{Mode: loom.ToolChoiceRequired}
 						}
 						return nil

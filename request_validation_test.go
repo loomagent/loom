@@ -1,10 +1,56 @@
 package loom
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"testing/synctest"
 )
+
+func Test_user_final_stream_requires_user_history_with_custom_model(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		messages []Message
+		valid    bool
+	}{
+		{name: "empty"},
+		{name: "system only", messages: []Message{{Role: RoleSystem, Content: "rules"}}},
+		{name: "assistant only", messages: []Message{{Role: RoleAssistant, Content: "answer"}}},
+		{name: "tool only", messages: []Message{{Role: RoleTool, ToolCallID: "call-1", Content: "result"}}},
+		{name: "user task", messages: []Message{{Role: RoleUser, Content: "task"}}, valid: true},
+		{name: "assistant continuation", messages: []Message{{Role: RoleUser, Content: "task"}, {Role: RoleAssistant, Content: "draft"}}, valid: true},
+		{name: "tool continuation", messages: []Message{{Role: RoleUser, Content: "task"}, {Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call-1", Name: "lookup", Arguments: "{}"}}}, {Role: RoleTool, ToolCallID: "call-1", Content: "result"}}, valid: true},
+	} {
+		t.Run("user "+tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				// Given a custom model that accepts any input and returns a billable answer.
+				model := &finalStreamModel{frames: []*Chunk{{ContentDelta: "ok", FinishReason: FinishReasonStop, Usage: &Usage{TotalTokens: 2}}}}
+				sink := NewMemorySink()
+				var response *ChatResponse
+				// When the host uses the public final-answer entry point through a real Turn.
+				turn, err := Run(t.Context(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
+					var streamErr error
+					response, streamErr = StreamLLMToFinalAnswer(ctx, w, "final", model, ChatRequest{Messages: tc.messages, Reasoning: Reasoning{Mode: ReasoningModeDisabled}})
+					return streamErr
+				}, RunOptions{ConversationID: tc.name, Sinks: []Sink{sink}, StrictSink: true})
+				// Then valid user history completes; missing-user input fails locally without output or usage.
+				if tc.valid {
+					if err != nil || response == nil || response.Content != "ok" || turn.Status != TurnStatusCompleted {
+						t.Fatalf("valid history: response=%+v turn=%+v error=%v", response, turn, err)
+					}
+					return
+				}
+				var local *RequestValidationError
+				if !errors.Is(err, ErrMissingUserMessage) || !errors.As(err, &local) || response != nil || turn.Status != TurnStatusFailed {
+					t.Fatalf("missing user must fail locally: response=%+v turn=%+v error=%v", response, turn, err)
+				}
+				if len(sink.DeltaEvents()) != 0 || turn.Usage.TotalTokens != 0 {
+					t.Fatalf("rejected input produced output or usage: deltas=%v usage=%+v", sink.DeltaEvents(), turn.Usage)
+				}
+			})
+		})
+	}
+}
 
 func TestUserReceivesLocalValidationWithCustomModel(t *testing.T) {
 	for _, entry := range []string{"chat", "rebuilt request", "stream"} {
