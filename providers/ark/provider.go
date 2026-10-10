@@ -139,7 +139,7 @@ func (m *Model) chatRaw(ctx context.Context, req arkmodel.CreateChatCompletionRe
 	ctx, evidence := captureUsage(ctx)
 	out, err := m.client.CreateChatCompletion(ctx, req, m.requestOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("loom/ark: chat: %w", err)
+		return nil, fmt.Errorf("loom/ark: chat: %w", normalizeError(err))
 	}
 	if len(out.Choices) == 0 {
 		return nil, fmt.Errorf("loom/ark: chat returned 0 choices")
@@ -177,7 +177,7 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 func (m *Model) streamRaw(ctx context.Context, req arkmodel.CreateChatCompletionRequest) (loom.Stream, error) {
 	stream, err := m.client.CreateChatCompletionStream(ctx, req, m.requestOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("loom/ark: stream: %w", err)
+		return nil, fmt.Errorf("loom/ark: stream: %w", normalizeError(err))
 	}
 	decoder := &usageUnmarshaler{inner: stream.Unmarshaler}
 	stream.Unmarshaler = decoder
@@ -193,7 +193,10 @@ type streamAdapter struct {
 func (s *streamAdapter) Recv() (*loom.Chunk, error) {
 	raw, err := s.inner.Recv()
 	if err != nil {
-		return nil, err // io.EOF passes through
+		if apiErr, ok := errors.AsType[*arkmodel.APIError](err); ok && apiErr.RequestId == "" {
+			apiErr.RequestId = s.inner.Header().Get(arkmodel.ClientRequestHeader)
+		}
+		return nil, normalizeError(err) // io.EOF passes through
 	}
 	chunk := &loom.Chunk{Model: raw.Model}
 	if raw.Usage != nil {
@@ -226,6 +229,9 @@ func (s *streamAdapter) Close() error {
 // Reasoning.Effort is sent unchanged after provider/model contract validation.
 func (m *Model) buildRequest(req loom.ChatRequest) (_ arkmodel.CreateChatCompletionRequest, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
+	if err := loom.ValidateChatRequest(req); err != nil {
+		return arkmodel.CreateChatCompletionRequest{}, err
+	}
 	out := arkmodel.CreateChatCompletionRequest{
 		Model:    m.name,
 		Messages: translateMessages(req.Messages),

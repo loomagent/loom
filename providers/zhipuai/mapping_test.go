@@ -167,7 +167,7 @@ func TestBuildRequestBranches(t *testing.T) {
 
 	t.Run("unknown role is refused", func(t *testing.T) {
 		_, err := model.buildRequest(loom.ChatRequest{
-			Messages:  []loom.Message{{Role: loom.Role("assistent"), Content: "typo"}},
+			Messages:  []loom.Message{{Role: loom.RoleUser, Content: "task"}, {Role: loom.Role("assistent"), Content: "typo"}},
 			Reasoning: reasoning,
 		})
 		if err == nil || !strings.Contains(err.Error(), `unknown role "assistent"`) {

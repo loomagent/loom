@@ -50,7 +50,7 @@ func TestStreamLLMToStep_ReasoningAndContent(t *testing.T) {
 	}}
 
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
-		resp, err := StreamLLMToStep(ctx, w, "test", model, ChatRequest{})
+		resp, err := StreamLLMToStep(ctx, w, "test", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}})
 		if err != nil {
 			return err
 		}
@@ -89,7 +89,7 @@ func TestStreamLLMToStep_ToolCallOnly(t *testing.T) {
 	}}
 
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
-		resp, err := StreamLLMToStep(ctx, w, "test", model, ChatRequest{})
+		resp, err := StreamLLMToStep(ctx, w, "test", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}})
 		if err != nil {
 			return err
 		}
@@ -127,7 +127,7 @@ func TestStreamLLMToStep_ReasoningPlusToolCall(t *testing.T) {
 	}}
 
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
-		resp, err := StreamLLMToStep(ctx, w, "test", model, ChatRequest{})
+		resp, err := StreamLLMToStep(ctx, w, "test", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}})
 		if err != nil {
 			return err
 		}
@@ -166,16 +166,16 @@ func TestStreamLLMToStep_UsageAccumulation(t *testing.T) {
 
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
 		// LLM call #1, hanging off the turn root
-		if _, err := StreamLLMToStep(ctx, w, "root", makeModel(10, 5), ChatRequest{}); err != nil {
+		if _, err := StreamLLMToStep(ctx, w, "root", makeModel(10, 5), ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}); err != nil {
 			return err
 		}
 		// step A: two LLM calls, with step C nested inside
 		if err := w.Step(ctx, "A", func(ctx context.Context, stepA Step) error {
-			if _, err := StreamLLMToStep(ctx, stepA, "step_a", makeModel(20, 10), ChatRequest{}); err != nil {
+			if _, err := StreamLLMToStep(ctx, stepA, "step_a", makeModel(20, 10), ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}); err != nil {
 				return err
 			}
 			return stepA.Step(ctx, "C", func(ctx context.Context, stepC Step) error {
-				_, err := StreamLLMToStep(ctx, stepC, "step_c", makeModel(30, 15), ChatRequest{})
+				_, err := StreamLLMToStep(ctx, stepC, "step_c", makeModel(30, 15), ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}})
 				return err
 			})
 		}); err != nil {
@@ -183,7 +183,7 @@ func TestStreamLLMToStep_UsageAccumulation(t *testing.T) {
 		}
 		// step B: one LLM call, a sibling of A
 		if err := w.Step(ctx, "B", func(ctx context.Context, stepB Step) error {
-			_, err := StreamLLMToStep(ctx, stepB, "step_b", makeModel(40, 20), ChatRequest{})
+			_, err := StreamLLMToStep(ctx, stepB, "step_b", makeModel(40, 20), ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}})
 			return err
 		}); err != nil {
 			return err

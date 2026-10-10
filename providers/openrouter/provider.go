@@ -125,6 +125,9 @@ func (m *Model) Chat(ctx context.Context, req loom.ChatRequest) (*loom.ChatRespo
 func (m *Model) chatRaw(ctx context.Context, orReq openai.ChatCompletionNewParams) (*loom.ChatResponse, error) {
 	out, err := m.client.Chat.Completions.New(ctx, orReq)
 	if err != nil {
+		return nil, fmt.Errorf("loom/openrouter: chat: %w", normalizeError(err))
+	}
+	if err := completionError(out); err != nil {
 		return nil, fmt.Errorf("loom/openrouter: chat: %w", err)
 	}
 	response, err := wire.Response(out)
@@ -153,14 +156,19 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 // through in its place.
 var wire = openaicompat.Provider{
 	FinishReason:          translateFinishReason,
+	CheckFinish:           checkFinish,
 	Reasoning:             openaicompat.ReasoningContentOrReasoning,
 	ReasoningField:        openaicompat.ReasoningField,
 	ReasoningDetailsField: openaicompat.ReasoningDetailsField,
+	NormalizeError:        normalizeError,
 }
 
 // buildRequest translates a loom.ChatRequest into the go-openai request structure.
 func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewParams, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
+	if err := loom.ValidateChatRequest(req); err != nil {
+		return openai.ChatCompletionNewParams{}, err
+	}
 	// An assistant turn's reasoning goes back in OpenRouter's own field, the same one its
 	// responses use, so a reasoning model can continue the chain it started.
 	messages, err := wire.Messages(req.Messages)

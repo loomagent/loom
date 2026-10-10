@@ -21,7 +21,7 @@ func TestUserHostSchedulerCannotExecuteHiddenOrOverBudgetTools(t *testing.T) {
 	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		var err error
 		// When a host scheduler executes through the public runtime.
-		result, err = Run(ctx, w, Config{Model: m, Tools: loom.NewToolRegistry(tool, hidden), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxToolCalls: 1,
+		result, err = Run(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: m, Tools: loom.NewToolRegistry(tool, hidden), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxToolCalls: 1,
 			StepPolicies: []StepPolicy{StepPolicyFunc(func(_ context.Context, s State, p *StepPlan) error {
 				p.Tools = []*loom.ToolInfo{s.ToolInfos[0]}
 				return nil
@@ -57,7 +57,7 @@ func TestUserMalformedHostResultsFailWithoutDeliveringAnAnswer(t *testing.T) {
 			tool := loom.NewArgsTool(loom.MustArgsContract("lookup"), "lookup", func(context.Context, loom.Args) (string, error) { return "ok", nil })
 			m := &scriptedModel{responses: []*loom.ChatResponse{{ToolCalls: []loom.ToolCall{{ID: "a", Name: "lookup"}}, FinishReason: loom.FinishReasonToolCalls}}}
 			turn, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
-				_, err := Run(ctx, w, Config{Model: m, Tools: loom.NewToolRegistry(tool), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, ExecuteTools: func(context.Context, loom.Writer, State, *loom.ToolRegistry, []loom.ToolCall) ([]loom.ToolExecResult, error) {
+				_, err := Run(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: m, Tools: loom.NewToolRegistry(tool), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, ExecuteTools: func(context.Context, loom.Writer, State, *loom.ToolRegistry, []loom.ToolCall) ([]loom.ToolExecResult, error) {
 					if kind == "missing" {
 						return nil, nil
 					}
@@ -80,7 +80,7 @@ func TestUserHostCallFailuresNeverCommitSuccess(t *testing.T) {
 			dependencyErr := errors.New("dependency unavailable")
 			tool := loom.NewArgsTool(loom.MustArgsContract("lookup"), "lookup", func(context.Context, loom.Args) (string, error) { return "ok", nil })
 			m := &scriptedModel{responses: []*loom.ChatResponse{{ToolCalls: []loom.ToolCall{{ID: "a", Name: "lookup"}}, FinishReason: loom.FinishReasonToolCalls}}}
-			cfg := Config{Model: m, Tools: loom.NewToolRegistry(tool), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
+			cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: m, Tools: loom.NewToolRegistry(tool), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
 			switch kind {
 			case "nil_response":
 				cfg.CallModel = func(context.Context, loom.Writer, State, string, loom.ChatModel, loom.ChatRequest) (*loom.ChatResponse, error) {

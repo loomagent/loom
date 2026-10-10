@@ -48,7 +48,7 @@ func TestBuildRequestRejectsUnknownMessageRole(t *testing.T) {
 	}
 
 	_, err = m.buildRequest(loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.Role("invalid"), Content: "hi"}},
+		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "task"}, {Role: loom.Role("invalid"), Content: "hi"}},
 		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 	})
 	if err == nil || !strings.Contains(err.Error(), `unknown role "invalid"`) {
