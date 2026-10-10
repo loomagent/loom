@@ -348,7 +348,8 @@ pattern 会在构建契约时被拒。`integer` 按**值**判定而不是按写�
 任务输入放在该消息中，可信指令放在 `RoleSystem` 中。历史以 assistant 或 tool
 消息结尾时，只要包含更早的 user 消息就仍然有效。缺少 user 消息会在发送 HTTP
 或切换模型前返回由 `RequestValidationError` 包装的 `ErrMissingUserMessage`；
-Loom 不会自动补充任务或转换其他消息的角色。
+Loom 不会自动补充任务或转换其他消息的角色；结构化调用也会在纠错重试或下一请求
+回调之前直接拒绝缺少用户任务的输入。
 
 `modelfactory` 显式选择 provider,不会从 URL 反推。它接受普通的 Go 配置,且不依赖
 数据库或 ORM:

@@ -234,6 +234,9 @@ func ChatStructuredArgs(
 		if err == nil {
 			return args, resp, nil
 		}
+		if errors.Is(err, ErrMissingUserMessage) {
+			return Args{}, resp, err
+		}
 		lastResponse, lastErr = resp, err
 		if ctx.Err() != nil {
 			// The caller's ctx ended: that error is the story, and the callback is not asked to

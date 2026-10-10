@@ -81,3 +81,25 @@ func TestUserReceivesLocalValidationWithCustomModel(t *testing.T) {
 		})
 	}
 }
+
+func Test_user_structured_retry_cannot_replace_a_missing_user_task(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// Given a retry callback capable of turning a missing task into a valid request.
+		contract, _, _ := reviewContract()
+		model := &fakeStructuredModel{responses: []string{`{"overall_done":true,"notes":"ok"}`}}
+		var retried bool
+		// When a structured call begins with only system instructions.
+		_, response, err := ChatStructuredArgs(t.Context(), "test", model, ChatRequest{Messages: []Message{{Role: RoleSystem, Content: "rules"}}}, contract,
+			WithStructuredAttempts(2), WithStructuredNextRequest(func(_ context.Context, attempt StructuredAttempt) (*ChatRequest, error) {
+				retried = true
+				req := attempt.Request
+				req.Messages = append(req.Messages, Message{Role: RoleUser, Content: "repair"})
+				return &req, nil
+			}))
+		// Then input validation is terminal, before corrective feedback or model output.
+		var local *RequestValidationError
+		if !errors.Is(err, ErrMissingUserMessage) || !errors.As(err, &local) || response != nil || retried {
+			t.Fatalf("missing task was admitted to retry: response=%+v retried=%t error=%v", response, retried, err)
+		}
+	})
+}

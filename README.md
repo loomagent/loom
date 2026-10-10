@@ -403,7 +403,8 @@ Keep task input in that message and trusted instructions in `RoleSystem`.
 A history ending in an assistant or tool message is valid if it includes an
 earlier user message. Missing user messages return `ErrMissingUserMessage`
 wrapped in `RequestValidationError` before HTTP requests or model failover;
-Loom does not invent a task or convert another role to user.
+Loom does not invent a task or convert another role to user. Structured calls
+also reject missing tasks before corrective retries or next-request callbacks.
 
 `modelfactory` selects providers explicitly and does not infer them from a URL.
 It accepts plain Go configuration and has no database or ORM dependency:
