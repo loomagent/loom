@@ -29,7 +29,7 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 	if err == nil {
 		return loom.ErrorClassUnknown
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, loom.ErrSensitiveContentRisk) {
 		return loom.ErrorClassPermanent
 	}
 	if status, ok := httpStatusOf(err); ok {
@@ -51,6 +51,9 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 
 // httpStatusOf extracts the HTTP status code from the official SDK's error types.
 func httpStatusOf(err error) (int, bool) {
+	if apiErr, ok := errors.AsType[*APIError](err); ok {
+		return apiErr.Code, true
+	}
 	if apiErr, ok := errors.AsType[*openai.Error](err); ok {
 		return apiErr.StatusCode, true
 	}

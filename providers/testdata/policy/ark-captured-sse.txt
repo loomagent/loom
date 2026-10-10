@@ -1,0 +1,6 @@
+data: {"choices":[{"delta":{"content":"您的问题我无法回答。","role":"assistant"},"finish_reason":"content_filter","index":0}],"created":1791604964,"id":"fixture-captured-id","model":"fixture-model","service_tier":"default","object":"chat.completion.chunk","usage":{"completion_tokens":0,"prompt_tokens":0,"total_tokens":0,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}
+
+data: {"choices":[],"created":1791604964,"id":"fixture-captured-id","model":"fixture-model","service_tier":"default","object":"chat.completion.chunk","usage":{"completion_tokens":0,"prompt_tokens":0,"total_tokens":0,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}
+
+data: [DONE]
+
