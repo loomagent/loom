@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/volcengine/volcengine-go-sdk/service/arkruntime"
+	arkmodel "github.com/volcengine/volcengine-go-sdk/service/arkruntime/model"
 	arkutils "github.com/volcengine/volcengine-go-sdk/service/arkruntime/utils"
 )
 
@@ -78,6 +79,19 @@ type usageUnmarshaler struct {
 
 func (u *usageUnmarshaler) Unmarshal(raw []byte, value any) error {
 	u.evidence = usageEvidence{} // usage can disappear again in the next frame
+	if _, frame := value.(*arkmodel.ChatCompletionStreamResponse); frame {
+		// The SDK only recognizes errors when the JSON starts with {"error":.
+		// A normal SSE frame may carry the same envelope in any field order.
+		var envelope struct {
+			Error *arkmodel.APIError `json:"error"`
+		}
+		if err := jsonv2.Unmarshal(raw, &envelope); err != nil {
+			return err
+		}
+		if envelope.Error != nil {
+			return envelope.Error
+		}
+	}
 	if err := u.inner.Unmarshal(raw, value); err != nil {
 		return err
 	}

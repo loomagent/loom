@@ -2,10 +2,9 @@
 #
 # Enforce a floor on total statement coverage.
 #
-# `go test -cover` counts only each package's own tests, so this number is lower
-# than the truth for packages whose API other packages exercise. Treat it as a
-# ratchet against regressions, not as the branch-coverage target: raise the floor
-# as coverage improves, and review uncovered branches by hand in between.
+# CI uses -coverpkg=./... so cross-provider acceptance tests count the code they
+# actually execute. Keep this statement-coverage ratchet separate from the
+# branch-coverage target, and review uncovered failure paths by hand.
 set -euo pipefail
 
 profile="${1:-coverage.out}"

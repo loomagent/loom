@@ -30,7 +30,7 @@ func (classifier) ClassifyError(err error) loom.ErrorClass {
 	if err == nil {
 		return loom.ErrorClassUnknown
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, loom.ErrSensitiveContentRisk) {
 		return loom.ErrorClassPermanent
 	}
 	if apiErr, ok := errors.AsType[*arkmodel.APIError](err); ok {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/loomagent/loom"
+	"github.com/loomagent/loom/providers/internal/openaicompat"
 	"github.com/openai/openai-go/v3"
 )
 
@@ -125,6 +126,16 @@ func normalizeError(err error) error {
 			}
 		}
 		return out
+	}
+	if raw := openaicompat.StreamErrorBody(err); len(raw) > 0 {
+		var body struct {
+			Code      any    `json:"code"`
+			Message   string `json:"message"`
+			RequestID string `json:"request_id"`
+		}
+		if jsonv2.Unmarshal(raw, &body) == nil && body.Code != nil {
+			return &APIError{Code: fmt.Sprint(body.Code), Message: body.Message, RequestID: body.RequestID, Cause: err}
+		}
 	}
 	return err
 }

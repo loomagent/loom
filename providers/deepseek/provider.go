@@ -27,6 +27,7 @@ package deepseek
 
 import (
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
@@ -308,9 +309,22 @@ var contentExistsRiskMessage = regexp.MustCompile(`(?i)^content exists risk(?:\s
 func isDeepSeekContentExistsRisk(err error) bool {
 	apiErr, ok := errors.AsType[*openai.Error](err)
 	if !ok {
-		return false
+		var body struct {
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		// Once HTTP 200 is committed, the error travels in the SSE body. Require
+		// the captured business type/code as well as the exact known message.
+		raw := openaicompat.StreamErrorBody(err)
+		return len(raw) > 0 && jsonv2.Unmarshal(raw, &body) == nil &&
+			body.Code == "invalid_request_error" && body.Type == "invalid_request_error" &&
+			contentExistsRiskMessage.MatchString(strings.TrimSpace(body.Message))
 	}
 	if apiErr.StatusCode != 400 {
+		return false
+	}
+	if (apiErr.Type != "" && apiErr.Type != "invalid_request_error") || (apiErr.Code != "" && apiErr.Code != "invalid_request_error") {
 		return false
 	}
 	return contentExistsRiskMessage.MatchString(strings.TrimSpace(apiErr.Message))
