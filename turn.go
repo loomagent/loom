@@ -1,6 +1,9 @@
 package loom
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // TurnStatus is the lifecycle state of one Turn execution.
 //
@@ -60,6 +63,22 @@ const (
 	CloseCodeNoFinal         CloseCode = "no_final_answer"  // the handler returned nil without writing a final_answer
 	CloseCodeInternalError   CloseCode = "internal_error"   // an internal runtime-host failure, or orphan recovery
 )
+
+// FailureCloseCode maps a non-cancellation error to a failed Turn's close code.
+// Both request-time moderation and output moderation share content_filter;
+// provider adapters retain their distinct typed causes for retry policies and
+// diagnostics. Hosts can use the same mapping for failures outside Run.
+// Cancellation must be handled separately, as it is not a failed Turn.
+func FailureCloseCode(err error) CloseCode {
+	switch {
+	case errors.Is(err, ErrSensitiveContentRisk), errors.Is(err, ErrContentFilter):
+		return CloseCodeContentFilter
+	case errors.Is(err, ErrOutputTruncated):
+		return CloseCodeOutputTruncated
+	default:
+		return CloseCodeAgentError
+	}
+}
 
 // Turn is the complete data of one agent execution: the user's question, the
 // agent's whole process, and the final answer.
