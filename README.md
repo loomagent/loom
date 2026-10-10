@@ -430,6 +430,39 @@ Applications that select models by ID can implement
 from a file, environment variables, a secrets manager, or a database without
 coupling Loom to that storage system.
 
+### Extra request headers
+
+All built-in chat providers (Ark, DeepSeek, OpenRouter and Zhipu AI) and
+`modelfactory.Config` accept the same optional `RequestHeaders map[string]string`:
+
+```go
+model, err := modelfactory.Build(modelfactory.Config{
+	Provider: selectedProvider,
+	APIKey:   os.Getenv("MODEL_API_KEY"),
+	Model:    os.Getenv("MODEL_NAME"),
+	RequestHeaders: map[string]string{
+		"X-Application": "my-application",
+	},
+})
+```
+
+`Build`, loader-backed `Factory.Build` and direct provider constructors validate
+and snapshot these headers. HTTP, SSE and their retries use the same snapshot;
+later map changes do not affect a constructed model. Shared HTTP clients remain
+unchanged. Case-insensitive duplicate names with different values, invalid HTTP
+names/values, and SDK-owned authentication or framing/format headers fail locally
+with `loom.ErrInvalidRequestHeaders` (also `modelfactory.ErrInvalidConfig` through
+the factory). Use `APIKey` for authentication. Errors omit header values.
+
+Account requirements belong in the application's shared loader or constructor,
+selected explicitly by provider, endpoint and credential. For example, applications
+whose Ark accounts require `x-ark-moderation-scene: skip-ark-moderation` set that
+entry there, so business models and capability-probe builders inherit it. Other
+providers need no such entry; Loom applies no private account policy by default.
+Keep application boundary checks to prevent bypassing this shared construction
+path. Extra headers cannot detect a requirement the application never declared,
+or control separate SDK clients/APIs outside Loom's Chat/Stream interface.
+
 ## Model capability probing
 
 `modelprobe` observes real API behavior instead of trusting configuration. It

@@ -48,6 +48,9 @@ type Config struct {
 	// HTTPClient is optional, and replaces the client every request goes through. Use it
 	// for a proxy, custom timeouts, or a test server's in-memory client.
 	HTTPClient *http.Client
+	// RequestHeaders adds extra headers to every Chat/Stream attempt. New
+	// validates and snapshots them using loom.SnapshotRequestHeaders.
+	RequestHeaders map[string]string
 
 	// Capabilities is what the caller or modelfactory fills in from the model's real
 	// configuration. nil leaves it undeclared, so capability checks pass requests through.
@@ -89,11 +92,15 @@ func New(cfg Config) (*Model, error) {
 	if cfg.Capabilities != nil {
 		capabilities = *cfg.Capabilities
 	}
+	client, err := openaicompat.Client(cfg.APIKey, baseURL, cfg.HTTPClient, cfg.RequestHeaders)
+	if err != nil {
+		return nil, fmt.Errorf("loom/openrouter: %w", err)
+	}
 	return &Model{
 		// loom owns every retry (ChatWithRetry / StreamWithRetry), so the SDK must
 		// not retry underneath; its default retries would multiply the attempts and
 		// bypass the shared rate-limit cooldown.
-		client:       openaicompat.Client(cfg.APIKey, baseURL, cfg.HTTPClient),
+		client:       client,
 		name:         cfg.ModelName,
 		retryCfg:     retryCfg,
 		capabilities: capabilities,
