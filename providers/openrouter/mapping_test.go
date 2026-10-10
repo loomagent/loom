@@ -141,7 +141,7 @@ func TestBuildRequestBranches(t *testing.T) {
 
 	t.Run("unknown role is refused", func(t *testing.T) {
 		_, err := model.buildRequest(loom.ChatRequest{
-			Messages:  []loom.Message{{Role: loom.Role("assistent"), Content: "typo"}},
+			Messages:  []loom.Message{{Role: loom.RoleUser, Content: "task"}, {Role: loom.Role("assistent"), Content: "typo"}},
 			Reasoning: reasoning,
 		})
 		if err == nil || !strings.Contains(err.Error(), `unknown role "assistent"`) {
@@ -323,7 +323,7 @@ func TestChatRefusesALocallyInvalidRequest(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"model":"m","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
 	})
 	_, err := model.Chat(t.Context(), loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.Role("assistent"), Content: "typo"}},
+		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "task"}, {Role: loom.Role("assistent"), Content: "typo"}},
 		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 	})
 	if err == nil || !strings.Contains(err.Error(), `unknown role "assistent"`) {
@@ -334,7 +334,7 @@ func TestChatRefusesALocallyInvalidRequest(t *testing.T) {
 	}
 	// The same request through Stream, which builds before it calls.
 	if _, err := model.Stream(t.Context(), loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.Role("assistent"), Content: "typo"}},
+		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "task"}, {Role: loom.Role("assistent"), Content: "typo"}},
 		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 	}); err == nil {
 		t.Fatal("stream must refuse an untranslatable request")

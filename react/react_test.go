@@ -63,7 +63,7 @@ func TestRunSensitiveFallbackRetriesRejectedRequest(t *testing.T) {
 	var result *Result
 	_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		var runErr error
-		result, runErr = Run(ctx, w, Config{
+		result, runErr = Run(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}},
 			Model: primary,
 			Tools: loom.NewToolRegistry(),
 			SensitiveFallback: &SensitiveFallbackConfig{
@@ -98,7 +98,7 @@ func TestRunSensitiveFallbackRetriesContentFilterResponse(t *testing.T) {
 	}}}
 
 	turn, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
-		result, runErr := Run(ctx, w, Config{
+		result, runErr := Run(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}},
 			Model: primary,
 			Tools: loom.NewToolRegistry(),
 			SensitiveFallback: &SensitiveFallbackConfig{
@@ -126,7 +126,7 @@ func TestRunSensitiveFallbackSkipsSameConfiguredModelID(t *testing.T) {
 	fallback := &scriptedModel{name: "fallback", responses: []*loom.ChatResponse{{Content: "must not run", FinishReason: loom.FinishReasonStop}}}
 
 	_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
-		_, runErr := Run(ctx, w, Config{
+		_, runErr := Run(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}},
 			Model: primary,
 			Tools: loom.NewToolRegistry(),
 			SensitiveFallback: &SensitiveFallbackConfig{
@@ -197,7 +197,7 @@ func TestRunSoftLandingDisablesTools(t *testing.T) {
 	var result *Result
 	_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		var runErr error
-		result, runErr = Run(ctx, w, Config{Model: model, Tools: tools, MaxSteps: 1, SoftLandingPrompt: "finish now"})
+		result, runErr = Run(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: tools, MaxSteps: 1, SoftLandingPrompt: "finish now"})
 		if runErr != nil {
 			return runErr
 		}
@@ -223,7 +223,7 @@ func TestRunSoftLandsBeforeDeadlineReserve(t *testing.T) {
 	var result *Result
 	_, err := loom.Run(ctx, func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		var runErr error
-		result, runErr = Run(ctx, w, Config{
+		result, runErr = Run(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}},
 			Model:                     model,
 			Tools:                     tools,
 			SoftLandingReserve:        2 * time.Minute,
@@ -242,7 +242,7 @@ func TestRunSoftLandsBeforeDeadlineReserve(t *testing.T) {
 		t.Fatalf("result=%+v request=%+v", result, model.requests)
 	}
 	messages := model.requests[0].Messages
-	if len(messages) != 1 || messages[0].Content != "deadline near" {
+	if len(messages) != 2 || messages[1].Content != "deadline near" {
 		t.Fatalf("deadline prompt=%+v", messages)
 	}
 }
@@ -264,7 +264,7 @@ func TestRunFinishPolicyContinues(t *testing.T) {
 	var result *Result
 	_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		var runErr error
-		result, runErr = Run(ctx, w, Config{Model: model, Tools: loom.NewToolRegistry(), FinishPolicies: []FinishPolicy{policy}})
+		result, runErr = Run(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(), FinishPolicies: []FinishPolicy{policy}})
 		if runErr != nil {
 			return runErr
 		}
@@ -276,7 +276,7 @@ func TestRunFinishPolicyContinues(t *testing.T) {
 	if result.FinalContent != "finished" || result.Steps != 2 {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(model.requests) != 2 || len(model.requests[1].Messages) != 2 || model.requests[1].Messages[1].Content != "review again" {
+	if len(model.requests) != 2 || len(model.requests[1].Messages) != 3 || model.requests[1].Messages[2].Content != "review again" {
 		t.Fatalf("second request = %+v", model.requests[1])
 	}
 }
@@ -298,7 +298,7 @@ func TestRunEnforcesPerToolLimitWithinOneResponse(t *testing.T) {
 	}))
 
 	_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
-		result, runErr := Run(ctx, w, Config{Model: model, Tools: tools, ToolCallLimits: map[string]uint64{"echo": 1}})
+		result, runErr := Run(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: tools, ToolCallLimits: map[string]uint64{"echo": 1}})
 		if runErr != nil {
 			return runErr
 		}
@@ -311,7 +311,7 @@ func TestRunEnforcesPerToolLimitWithinOneResponse(t *testing.T) {
 		t.Fatalf("invocations = %d, want 1", invocations)
 	}
 	secondRequest := model.requests[1]
-	if len(secondRequest.Messages) != 3 || secondRequest.Messages[2].Role != loom.RoleTool || secondRequest.Messages[2].Content == "" {
+	if len(secondRequest.Messages) != 4 || secondRequest.Messages[3].Role != loom.RoleTool || secondRequest.Messages[3].Content == "" {
 		t.Fatalf("second request messages = %+v", secondRequest.Messages)
 	}
 }

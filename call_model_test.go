@@ -110,7 +110,7 @@ func TestCallModel_NoFailoverReturnsOriginalResponse(t *testing.T) {
 		name:      "primary/model",
 		responses: []*ChatResponse{{Content: "blocked", FinishReason: FinishReasonContentFilter}},
 	}
-	resp, err := CallModel(context.Background(), "test", model, ChatRequest{})
+	resp, err := CallModel(context.Background(), "test", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}})
 	if err != nil {
 		t.Fatalf("CallModel() error = %v", err)
 	}
@@ -128,11 +128,11 @@ func TestCallModel_UsageAccumulatesAtBoundTurnAndStep(t *testing.T) {
 		Content: "step", Usage: Usage{PromptTokens: 17, CompletionTokens: 5, ReasoningTokens: 2, TotalTokens: 22},
 	}}}
 	turn, err := Run(context.Background(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
-		if _, err := CallModel(ctx, "sync.root", rootModel, ChatRequest{}); err != nil {
+		if _, err := CallModel(ctx, "sync.root", rootModel, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}); err != nil {
 			return err
 		}
 		if err := w.Step(ctx, "structured", func(stepCtx context.Context, _ Step) error {
-			_, err := CallModel(stepCtx, "sync.step", stepModel, ChatRequest{})
+			_, err := CallModel(stepCtx, "sync.step", stepModel, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}})
 			return err
 		}); err != nil {
 			return err
@@ -166,7 +166,7 @@ func TestCallModel_FailoverCountsEveryPaidResponse(t *testing.T) {
 		Content: "ok", FinishReason: FinishReasonStop, Usage: Usage{PromptTokens: 9, CompletionTokens: 2, TotalTokens: 11},
 	}}}
 	turn, err := Run(context.Background(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
-		_, err := CallModel(ctx, "sync.failover", primary, ChatRequest{}, WithModelFailover(FailoverConfig{
+		_, err := CallModel(ctx, "sync.failover", primary, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, WithModelFailover(FailoverConfig{
 			ShouldFailover:   ShouldFailoverOnErrorOrFinishReason(FinishReasonContentFilter),
 			GetFailoverModel: func(context.Context, FailoverAttempt) (ChatModel, error) { return fallback, nil },
 		}))

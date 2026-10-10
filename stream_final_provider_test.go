@@ -80,7 +80,7 @@ func TestUserFinalDeltasPassThroughRealProviderAdapter(t *testing.T) {
 		go func() {
 			defer close(done)
 			turn, runErr = loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
-				_, err := react.RunToFinalAnswer(ctx, w, react.Config{Model: model, Tools: loom.NewToolRegistry(terminal), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortHigh}})
+				_, err := react.RunToFinalAnswer(ctx, w, react.Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(terminal), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortHigh}})
 				return err
 			}, loom.RunOptions{ConversationID: "wire-stream", Sinks: []loom.Sink{sink}, StrictSink: true})
 		}()

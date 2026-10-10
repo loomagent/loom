@@ -224,7 +224,7 @@ func TestChatStructuredArgsProjectsContractConstraints(t *testing.T) {
 				capabilities: ModelCapabilities{StructuredOutput: mode},
 				responses:    []string{`{"notes":"too long"}`},
 			}
-			if _, _, err := ChatStructuredArgs(t.Context(), "test.tags", tooLong, ChatRequest{}, contract); err == nil {
+			if _, _, err := ChatStructuredArgs(t.Context(), "test.tags", tooLong, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract); err == nil {
 				t.Fatal("a value that violates maxLength must be rejected")
 			}
 			if len(tooLong.requests) != 1 {
@@ -234,7 +234,7 @@ func TestChatStructuredArgsProjectsContractConstraints(t *testing.T) {
 				capabilities: ModelCapabilities{StructuredOutput: mode},
 				responses:    []string{`{"notes":"ok"}`},
 			}
-			got, _, err := ChatStructuredArgs(t.Context(), "test.tags", model, ChatRequest{}, contract)
+			got, _, err := ChatStructuredArgs(t.Context(), "test.tags", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract)
 			if err != nil || notes.Get(got) != "ok" || len(model.requests) != 1 {
 				t.Fatalf("contract validation: got=%v err=%v calls=%d", notes.Get(got), err, len(model.requests))
 			}
@@ -247,7 +247,7 @@ func TestChatStructuredArgsProjectsContractConstraints(t *testing.T) {
 				if property.MinLength == nil || *property.MinLength != 1 || property.MaxLength == nil || *property.MaxLength != 3 {
 					t.Fatalf("provider schema lost contract constraints: %+v", property)
 				}
-			} else if req.ResponseFormat != ResponseFormatJSONObject || len(req.Messages) != 0 {
+			} else if req.ResponseFormat != ResponseFormatJSONObject || len(req.Messages) != 1 || req.Messages[0].Role != RoleUser || req.Messages[0].Content != "test task" {
 				t.Fatalf("json_object must send no schema and add no messages: format=%s messages=%+v", req.ResponseFormat, req.Messages)
 			}
 		})
@@ -275,7 +275,7 @@ func TestChatStructuredArgsRejectsInvalidResponsesByDefault(t *testing.T) {
 			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
 				model := &fakeStructuredModel{capabilities: ModelCapabilities{StructuredOutput: mode},
 					responses: []string{tc.response, " \n{\"notes\":\"ok\"}\t "}}
-				got, resp, err := ChatStructuredArgs(t.Context(), "test.strict", model, ChatRequest{}, contract)
+				got, resp, err := ChatStructuredArgs(t.Context(), "test.strict", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract)
 				var outputErr *StructuredOutputError
 				if !errors.As(err, &outputErr) {
 					t.Fatalf("err = %v, want a StructuredOutputError", err)
@@ -303,7 +303,7 @@ func TestChatStructuredArgsReportsATruncatedResponse(t *testing.T) {
 		capabilities: ModelCapabilities{StructuredOutput: StructuredOutputJSONSchema},
 		responses:    []*ChatResponse{{Content: `{"overall_done":true,"notes":"cut`, FinishReason: FinishReasonLength}},
 	}
-	_, resp, err := ChatStructuredArgs(t.Context(), "test.truncated", model, ChatRequest{}, contract)
+	_, resp, err := ChatStructuredArgs(t.Context(), "test.truncated", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract)
 	var outputErr *StructuredOutputError
 	if !errors.As(err, &outputErr) || !strings.Contains(err.Error(), string(FinishReasonLength)) {
 		t.Fatalf("err = %v, want a structured error naming %s", err, FinishReasonLength)
@@ -331,7 +331,7 @@ func TestChatStructuredArgsValidatesSchemaBeforeBusinessRules(t *testing.T) {
 			invalid := &fakeStructuredModel{capabilities: ModelCapabilities{StructuredOutput: mode},
 				responses: []string{`{"notes":"missing boolean"}`}}
 			validations := 0
-			if _, _, err := ChatStructuredArgs(t.Context(), "test.validation_order", invalid, ChatRequest{}, contract, validator(&validations)); err == nil {
+			if _, _, err := ChatStructuredArgs(t.Context(), "test.validation_order", invalid, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract, validator(&validations)); err == nil {
 				t.Fatal("a schema-invalid response must be rejected")
 			}
 			if validations != 0 {
@@ -340,7 +340,7 @@ func TestChatStructuredArgsValidatesSchemaBeforeBusinessRules(t *testing.T) {
 			// A schema-valid one does, exactly once.
 			valid := &fakeStructuredModel{capabilities: ModelCapabilities{StructuredOutput: mode},
 				responses: []string{`{"overall_done":false,"notes":"ok"}`}}
-			got, _, err := ChatStructuredArgs(t.Context(), "test.validation_order", valid, ChatRequest{}, contract, validator(&validations))
+			got, _, err := ChatStructuredArgs(t.Context(), "test.validation_order", valid, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract, validator(&validations))
 			if err != nil || done.Get(got) || notes.Get(got) != "ok" || validations != 1 || len(valid.requests) != 1 {
 				t.Fatalf("validation order: got=%v/%q err=%v validations=%d calls=%d", done.Get(got), notes.Get(got), err, validations, len(valid.requests))
 			}

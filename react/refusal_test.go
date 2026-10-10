@@ -20,7 +20,7 @@ func TestConsecutiveRefusedBatchesAreBounded(t *testing.T) {
 		FinishReason: loom.FinishReasonToolCalls,
 	}
 	model := &scriptedModel{responses: []*loom.ChatResponse{mixed, mixed, mixed, mixed}}
-	cfg := Config{Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls))}
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls))}
 	result, err := runTerminalCase(t, cfg, "refusal-bound")
 	refused, ok := errors.AsType[*RefusedBatchesError](err)
 	if !ok {
@@ -63,7 +63,7 @@ func TestRefusalCounterResetsAfterExecution(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "c4", Name: "finalize_answer"}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "the answer", FinishReason: loom.FinishReasonStop},
 	}}
-	cfg := Config{Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls))}
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls))}
 	result, err := runTerminalCase(t, cfg, "refusal-reset")
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -87,7 +87,7 @@ func TestBudgetRefusalsAlsoCount(t *testing.T) {
 		FinishReason: loom.FinishReasonToolCalls,
 	}
 	model := &scriptedModel{responses: []*loom.ChatResponse{lookupOnly, lookupOnly, lookupOnly, lookupOnly}}
-	cfg := Config{Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls)), MaxToolCalls: 1}
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls)), MaxToolCalls: 1}
 	_, err := runTerminalCase(t, cfg, "budget-refusal-bound")
 	refused, ok := errors.AsType[*RefusedBatchesError](err)
 	if !ok {

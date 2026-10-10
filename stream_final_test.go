@@ -93,7 +93,7 @@ func TestUserFinalResponseStreamsOptionalReasoningAndContent(t *testing.T) {
 				// When the user requests the final response through the real Turn writer.
 				turn, err := Run(t.Context(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
 					var err error
-					response, err = StreamLLMToFinalAnswer(ctx, w, "final", model, ChatRequest{Reasoning: Reasoning{Mode: ReasoningModeEnabled}})
+					response, err = StreamLLMToFinalAnswer(ctx, w, "final", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "task"}}, Reasoning: Reasoning{Mode: ReasoningModeEnabled}})
 					return err
 				}, RunOptions{ConversationID: tc.name, Sinks: []Sink{sink}, StrictSink: true})
 				if err != nil || turn.Status != TurnStatusCompleted {
@@ -144,7 +144,7 @@ func TestUserFinalStreamFailuresCannotCommit(t *testing.T) {
 				// then no successful final answer is committed, while partial text is retained.
 				model := &finalStreamModel{frames: tc.frames, err: tc.recvErr}
 				turn, err := Run(t.Context(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
-					_, err := StreamLLMToFinalAnswer(ctx, w, "final", model, ChatRequest{Reasoning: Reasoning{Mode: ReasoningModeDisabled}})
+					_, err := StreamLLMToFinalAnswer(ctx, w, "final", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "task"}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}})
 					return err
 				}, RunOptions{ConversationID: tc.name})
 				if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) || turn.Status != TurnStatusFailed {
@@ -204,7 +204,7 @@ func TestUserPersistenceFailureDoesNotReportSuccessfulAnswer(t *testing.T) {
 				sink := &finalFailSink{MemorySink: NewMemorySink(), at: at, err: failed}
 				model := &finalStreamModel{frames: []*Chunk{{ContentDelta: "answer", FinishReason: FinishReasonStop, Usage: &Usage{CompletionTokens: 1}}}}
 				turn, err := Run(t.Context(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
-					_, err := StreamLLMToFinalAnswer(ctx, w, "final", model, ChatRequest{Reasoning: Reasoning{Mode: ReasoningModeDisabled}})
+					_, err := StreamLLMToFinalAnswer(ctx, w, "final", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "task"}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}})
 					return err
 				}, RunOptions{ConversationID: at, Sinks: []Sink{sink}, StrictSink: true})
 				if !errors.Is(err, failed) || turn.Status != TurnStatusFailed || !errors.Is(turn.CloseReason.Cause, failed) {
@@ -227,7 +227,7 @@ func TestUserCancellationKeepsPartialAnswerUncommitted(t *testing.T) {
 			}
 		}}
 		turn, err := Run(ctx, func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
-			_, err := StreamLLMToFinalAnswer(ctx, w, "final", model, ChatRequest{Reasoning: Reasoning{Mode: ReasoningModeDisabled}})
+			_, err := StreamLLMToFinalAnswer(ctx, w, "final", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "task"}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}})
 			return err
 		}, RunOptions{ConversationID: "canceled"})
 		if err != nil || turn.Status != TurnStatusCancelled || turn.Items[0].Status != ItemStatusCancelled || turn.Items[0].Text != "partial" {
@@ -246,9 +246,9 @@ func TestUserFinalRequestValidation(t *testing.T) {
 		}
 		_, _ = Run(t.Context(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
 			for _, req := range []ChatRequest{
-				{Tools: []*ToolInfo{{Name: "lookup"}}},
-				{ToolChoice: &ToolChoice{Mode: ToolChoiceRequired}},
-				{},
+				{Messages: []Message{{Role: RoleUser, Content: "task"}}, Tools: []*ToolInfo{{Name: "lookup"}}},
+				{Messages: []Message{{Role: RoleUser, Content: "task"}}, ToolChoice: &ToolChoice{Mode: ToolChoiceRequired}},
+				{Messages: []Message{{Role: RoleUser, Content: "task"}}},
 			} {
 				if _, err := StreamLLMToFinalAnswer(ctx, w, "final", model, req); err == nil {
 					t.Error("invalid request accepted")
@@ -259,7 +259,7 @@ func TestUserFinalRequestValidation(t *testing.T) {
 			}
 			canceled, cancel := context.WithCancel(ctx)
 			cancel()
-			req := ChatRequest{Reasoning: Reasoning{Mode: ReasoningModeDisabled}}
+			req := ChatRequest{Messages: []Message{{Role: RoleUser, Content: "task"}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}}
 			if _, err := StreamLLMToFinalAnswer(canceled, w, "final", model, req); !errors.Is(err, context.Canceled) {
 				t.Errorf("err=%v", err)
 			}
@@ -277,7 +277,7 @@ func TestUserCannotStartAnotherFinalResponseAfterCommit(t *testing.T) {
 		// then the writer refuses it before contacting the model.
 		model := &finalStreamModel{streamErr: errors.New("model must not be contacted")}
 		turn, err := Run(t.Context(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
-			req := ChatRequest{Reasoning: Reasoning{Mode: ReasoningModeDisabled}}
+			req := ChatRequest{Messages: []Message{{Role: RoleUser, Content: "task"}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}}
 			return w.StreamFinalAnswer(ctx, func(fs FinalAnswerStream) error {
 				if _, err := StreamLLMToFinalAnswer(ctx, w, "final", model, req); !errors.Is(err, ErrFinalAnswerInProgress) {
 					t.Errorf("err=%v", err)
@@ -292,7 +292,7 @@ func TestUserCannotStartAnotherFinalResponseAfterCommit(t *testing.T) {
 			if err := w.FinalAnswer(ctx, "committed"); err != nil {
 				return err
 			}
-			_, err := StreamLLMToFinalAnswer(ctx, w, "final", model, ChatRequest{Reasoning: Reasoning{Mode: ReasoningModeDisabled}})
+			_, err := StreamLLMToFinalAnswer(ctx, w, "final", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "task"}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}})
 			if !errors.Is(err, ErrTurnClosed) {
 				t.Errorf("err=%v", err)
 			}

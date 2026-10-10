@@ -189,6 +189,9 @@ func (m *Model) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, 
 // protocol fields. It does not infer capabilities from the provider/model name.
 func (m *Model) buildRequest(req loom.ChatRequest) (_ openai.ChatCompletionNewParams, err error) {
 	defer func() { err = loom.LocalRequestError(err) }()
+	if err := loom.ValidateChatRequest(req); err != nil {
+		return openai.ChatCompletionNewParams{}, err
+	}
 	messages, err := wire.Messages(req.Messages)
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("loom/deepseek: translate messages: %w", err)

@@ -42,7 +42,7 @@ func TestUserCustomTerminalNamesShareOneFinalizationProtocol(t *testing.T) {
 					// When the budget runs out, the configured terminal remains available.
 					turn, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 						var err error
-						result, err = RunToFinalAnswer(ctx, w, Config{Model: model, Tools: registry, TerminalToolName: name, MaxToolCalls: 1, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
+						result, err = RunToFinalAnswer(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: registry, TerminalToolName: name, MaxToolCalls: 1, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
 						return err
 					}, loom.RunOptions{ConversationID: "custom-terminal"})
 					// Then all names have the same isolation, failure and one-success semantics.
