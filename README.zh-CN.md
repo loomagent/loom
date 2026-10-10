@@ -371,6 +371,34 @@ loom 内部,所以包一层 `ChatModel` 只能限住逻辑调用,拦不下某次
 `modelfactory.Factory`。加载器可以从文件、环境变量、密钥管理服务或数据库读取,
 而不必让 Loom 耦合到那套存储系统。
 
+### 额外请求头
+
+所有内置模型 provider（Ark、DeepSeek、OpenRouter、智谱 AI）及
+`modelfactory.Config` 都支持同一个可选字段 `RequestHeaders map[string]string`：
+
+```go
+model, err := modelfactory.Build(modelfactory.Config{
+	Provider: selectedProvider,
+	APIKey:   os.Getenv("MODEL_API_KEY"),
+	Model:    os.Getenv("MODEL_NAME"),
+	RequestHeaders: map[string]string{
+		"X-Application": "my-application",
+	},
+})
+```
+
+`Build`、加载配置的 `Factory.Build` 和直接创建 provider 都会校验并保存请求头快照。
+HTTP、SSE 及重试使用同一份快照；构造后修改原始 map 不影响已创建的模型，也不修改
+共享 HTTP client。请求头名称不区分大小写，同名但不同值、非法名称/值、覆盖 SDK 管理的
+认证或 HTTP 格式/传输字段，都会在本地返回 `loom.ErrInvalidRequestHeaders`；工厂还会
+保留 `modelfactory.ErrInvalidConfig`。认证使用 `APIKey`，配置错误不显示 header 值。
+
+账号必须携带哪些头，由应用在统一加载器或构造入口按 provider、端点、凭据显式配置。
+例如你们 Ark 账号需要的 `x-ark-moderation-scene: skip-ark-moderation` 在这个入口设置一次，
+业务模型和能力探测的构造函数就能共用。其他供应商不需要设置这个头，Loom 也没有默认关闭
+审核的账号策略。应用继续通过构造入口检查阻止业务代码绕开统一入口；额外请求头本身无法
+发现应用从未声明的必填要求，也无法控制 Loom Chat/Stream 接口之外的独立 SDK 客户端/API。
+
 ## 模型能力探测
 
 `modelprobe` 观察真实的 API 行为,而不是相信配置。它会测试默认推理行为和显式推理

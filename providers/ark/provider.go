@@ -54,6 +54,7 @@ type Config struct {
 	// RequestHeaders adds provider-specific headers to every chat and stream
 	// request. The map is snapshotted by New. Callers should use this only for
 	// endpoint policy negotiated with their Ark account, never for per-user data.
+	// Validation uses loom.SnapshotRequestHeaders, shared by all chat providers.
 	RequestHeaders map[string]string
 	// HTTPClient is optional, and replaces the client every request goes through. Use it
 	// for a proxy, custom timeouts, or a test server's in-memory client. Loom still wraps
@@ -80,6 +81,10 @@ func New(cfg Config) (*Model, error) {
 	if strings.TrimSpace(cfg.ModelName) == "" {
 		return nil, fmt.Errorf("loom/ark: ModelName (the endpoint ID) must not be empty")
 	}
+	headers, err := loom.SnapshotRequestHeaders(cfg.RequestHeaders)
+	if err != nil {
+		return nil, fmt.Errorf("loom/ark: %w", err)
+	}
 	baseURL := strings.TrimSpace(cfg.BaseURL)
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
@@ -101,11 +106,8 @@ func New(cfg Config) (*Model, error) {
 	if cfg.Capabilities != nil {
 		capabilities = *cfg.Capabilities
 	}
-	requestOpts := make([]arkruntime.RequestOption, 0, len(cfg.RequestHeaders))
-	for key, value := range cfg.RequestHeaders {
-		if strings.TrimSpace(key) == "" {
-			return nil, fmt.Errorf("loom/ark: RequestHeaders contains an empty key")
-		}
+	requestOpts := make([]arkruntime.RequestOption, 0, len(headers))
+	for key, value := range headers {
 		requestOpts = append(requestOpts, arkruntime.WithCustomHeader(key, value))
 	}
 	return &Model{

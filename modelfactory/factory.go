@@ -41,6 +41,11 @@ type Config struct {
 	// HTTPClient replaces the client every provider request goes through. Use it
 	// for a proxy, custom timeouts, or a test server's in-memory client.
 	HTTPClient *http.Client
+	// RequestHeaders adds optional extra headers to every Chat/Stream request,
+	// including retries, for any Provider. Build validates and snapshots the map.
+	// Configure account-specific requirements in the application's shared loader
+	// or construction boundary; there are no implicit provider policy defaults.
+	RequestHeaders map[string]string
 
 	// AttemptLimiter, when set, paces this model's physical requests: it is asked
 	// for a permit around every attempt the retry schedule makes. Loom ships no
@@ -103,33 +108,36 @@ func Build(cfg Config) (loom.ChatModel, error) {
 	)
 	switch cfg.Provider {
 	case ProviderZhipuAI:
-		model, err = zhipuai.New(zhipuai.Config{APIKey: cfg.APIKey, ModelName: cfg.Model, BaseURL: cfg.BaseURL, Retry: retry, HTTPClient: cfg.HTTPClient, Capabilities: cfg.Capabilities})
+		model, err = zhipuai.New(zhipuai.Config{APIKey: cfg.APIKey, ModelName: cfg.Model, BaseURL: cfg.BaseURL, Retry: retry, HTTPClient: cfg.HTTPClient, Capabilities: cfg.Capabilities, RequestHeaders: cfg.RequestHeaders})
 	case ProviderArk:
 		model, err = ark.New(ark.Config{
-			APIKey:       cfg.APIKey,
-			ModelName:    cfg.Model,
-			BaseURL:      cfg.BaseURL,
-			Retry:        retry,
-			HTTPClient:   cfg.HTTPClient,
-			Capabilities: cfg.Capabilities,
+			APIKey:         cfg.APIKey,
+			ModelName:      cfg.Model,
+			BaseURL:        cfg.BaseURL,
+			Retry:          retry,
+			HTTPClient:     cfg.HTTPClient,
+			Capabilities:   cfg.Capabilities,
+			RequestHeaders: cfg.RequestHeaders,
 		})
 	case ProviderDeepSeek:
 		model, err = deepseek.New(deepseek.Config{
-			APIKey:       cfg.APIKey,
-			ModelName:    cfg.Model,
-			BaseURL:      cfg.BaseURL,
-			Retry:        retry,
-			HTTPClient:   cfg.HTTPClient,
-			Capabilities: cfg.Capabilities,
+			APIKey:         cfg.APIKey,
+			ModelName:      cfg.Model,
+			BaseURL:        cfg.BaseURL,
+			Retry:          retry,
+			HTTPClient:     cfg.HTTPClient,
+			Capabilities:   cfg.Capabilities,
+			RequestHeaders: cfg.RequestHeaders,
 		})
 	case ProviderOpenRouter:
 		model, err = openrouter.New(openrouter.Config{
-			APIKey:       cfg.APIKey,
-			ModelName:    cfg.Model,
-			BaseURL:      cfg.BaseURL,
-			Retry:        retry,
-			HTTPClient:   cfg.HTTPClient,
-			Capabilities: cfg.Capabilities,
+			APIKey:         cfg.APIKey,
+			ModelName:      cfg.Model,
+			BaseURL:        cfg.BaseURL,
+			Retry:          retry,
+			HTTPClient:     cfg.HTTPClient,
+			Capabilities:   cfg.Capabilities,
+			RequestHeaders: cfg.RequestHeaders,
 		})
 	}
 	if err != nil {

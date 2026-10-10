@@ -393,7 +393,11 @@ func (p Provider) Messages(msgs []loom.Message) ([]openai.ChatCompletionMessageP
 // Client builds an SDK client for one provider. Retries belong to Loom, so the SDK must not
 // retry underneath: its default retries would multiply the attempts and bypass the shared
 // rate-limit cooldown.
-func Client(apiKey, baseURL string, httpClient *http.Client) openai.Client {
+func Client(apiKey, baseURL string, httpClient *http.Client, requestHeaders map[string]string) (openai.Client, error) {
+	headers, err := loom.SnapshotRequestHeaders(requestHeaders)
+	if err != nil {
+		return openai.Client{}, err
+	}
 	options := []option.RequestOption{
 		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
@@ -402,5 +406,8 @@ func Client(apiKey, baseURL string, httpClient *http.Client) openai.Client {
 	if httpClient != nil {
 		options = append(options, option.WithHTTPClient(httpClient))
 	}
-	return openai.NewClient(options...)
+	for key, value := range headers {
+		options = append(options, option.WithHeader(key, value))
+	}
+	return openai.NewClient(options...), nil
 }
