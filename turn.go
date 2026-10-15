@@ -51,7 +51,7 @@ const (
 	CloseCodeFinalAnswer CloseCode = "final_answer" // the handler wrote a final_answer
 
 	// cancelled
-	CloseCodeUserCancel     CloseCode = "user_cancel"     // cancelled by the user (StopGeneration or ctx.Cancel)
+	CloseCodeUserCancel     CloseCode = "user_cancel"     // cancelled by the user: a plain context.Canceled cause
 	CloseCodeTimeout        CloseCode = "timeout"         // ctx.DeadlineExceeded
 	CloseCodeHostShutdown   CloseCode = "host_shutdown"   // the runtime host is shutting down gracefully
 	CloseCodeExternalCancel CloseCode = "external_cancel" // an authoritative external control plane required cancellation
@@ -61,7 +61,8 @@ const (
 	CloseCodeContentFilter   CloseCode = "content_filter"   // the model's content moderation
 	CloseCodeOutputTruncated CloseCode = "output_truncated" // the output hit max_tokens or the model's own limit
 	CloseCodeNoFinal         CloseCode = "no_final_answer"  // the handler returned nil without writing a final_answer
-	CloseCodeInternalError   CloseCode = "internal_error"   // an internal runtime-host failure, or orphan recovery
+	CloseCodeStalled         CloseCode = "stalled"          // the host cancelled with ErrStalled after seeing no progress
+	CloseCodeInternalError   CloseCode = "internal_error"   // an internal runtime-host failure, orphan recovery, or an unrecognised cancel cause
 )
 
 // FailureCloseCode maps a non-cancellation error to a failed Turn's close code.

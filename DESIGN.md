@@ -205,6 +205,7 @@ const (
     CloseCodeContentFilter   CloseCode = "content_filter"
     CloseCodeOutputTruncated CloseCode = "output_truncated"
     CloseCodeNoFinal         CloseCode = "no_final_answer"
+    CloseCodeStalled         CloseCode = "stalled"
     CloseCodeInternalError   CloseCode = "internal_error"
 )
 ```
@@ -347,7 +348,9 @@ Tracer 不在这里:OTel 走 SDK 的全局 TracerProvider,未配置时是 noop t
   2. closeReason 已设(FinalAnswer 自封口)        → 保留
   3. ctx.DeadlineExceeded                         → {Cancelled, timeout}
   4. ctx.Canceled + context.Cause                 → {Cancelled, user_cancel |
-   |                                                   host_shutdown | external_cancel}
+   |                                                   timeout | host_shutdown | external_cancel}
+   |                                                 ErrStalled → {Failed, stalled}
+   |                                                 无法识别的 cause → {Failed, internal_error}
   5. handlerErr != nil:
        - 取消类错误                              → {Cancelled, ...}
        - ErrContentFilter                        → {Failed, content_filter}
@@ -364,6 +367,7 @@ var (
     ErrTurnClosed            = errors.New("loom: turn closed")
     ErrHostShutdown          = errors.New("loom: host shutdown")
     ErrExternalCancel        = errors.New("loom: external cancel")
+    ErrStalled               = errors.New("loom: turn stalled")
     ErrContentFilter         = errors.New("loom: content filter")
     ErrSensitiveContentRisk  = errors.New("loom: sensitive content risk")
     ErrOutputTruncated       = errors.New("loom: output truncated")

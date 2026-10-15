@@ -198,6 +198,7 @@ const (
     CloseCodeContentFilter   CloseCode = "content_filter"
     CloseCodeOutputTruncated CloseCode = "output_truncated"
     CloseCodeNoFinal         CloseCode = "no_final_answer"
+    CloseCodeStalled         CloseCode = "stalled"
     CloseCodeInternalError   CloseCode = "internal_error"
 )
 ```
@@ -342,7 +343,9 @@ Priority:
   2. closeReason already set (sealed by FinalAnswer) → keep it
   3. ctx.DeadlineExceeded                           → {Cancelled, timeout}
   4. ctx.Canceled with a context.Cause              → {Cancelled, user_cancel |
-   |                                                    host_shutdown | external_cancel}
+   |                                                    timeout | host_shutdown | external_cancel}
+   |                                                  ErrStalled → {Failed, stalled}
+   |                                                  an unrecognised cause → {Failed, internal_error}
   5. handlerErr != nil:
        a cancellation error                       → {Cancelled, ...}
        ErrContentFilter                           → {Failed, content_filter}
@@ -359,6 +362,7 @@ var (
     ErrTurnClosed            = errors.New("loom: turn closed")
     ErrHostShutdown          = errors.New("loom: host shutdown")
     ErrExternalCancel        = errors.New("loom: external cancel")
+    ErrStalled               = errors.New("loom: turn stalled")
     ErrContentFilter         = errors.New("loom: content filter")
     ErrSensitiveContentRisk  = errors.New("loom: sensitive content risk")
     ErrOutputTruncated       = errors.New("loom: output truncated")

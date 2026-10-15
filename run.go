@@ -143,7 +143,8 @@ func Run(ctx context.Context, h Handler, opts RunOptions) (*Turn, error) {
 //  1. a non-cancellation sinkErr in strict mode → {Failed, "agent_error", cause: sinkErr}
 //  2. closeReason already set, sealed by FinalAnswer → keep it
 //  3. ctx.DeadlineExceeded   → {Cancelled, "timeout"}
-//  4. ctx.Canceled with cause → {Cancelled, "user_cancel" / "host_shutdown" / "external_cancel"}
+//  4. ctx.Canceled with cause → {Cancelled, "user_cancel" / "timeout" / "host_shutdown" / "external_cancel"},
+//     {Failed, "stalled"} for ErrStalled, {Failed, "internal_error"} for an unrecognised cause
 //  5. handlerErr != nil      → {Failed, "agent_error", cause: handlerErr}
 //  6. handlerErr nil, no FinalAnswer → {Failed, "no_final_answer"}
 //
@@ -172,19 +173,13 @@ func deriveCloseReason(state *turnState, ctx context.Context, handlerErr error) 
 				Cause: ctxCause,
 			}
 		} else {
-			state.closeReason = &CloseReason{
-				Code:  closeCodeFromContextCancelCause(ctxCause),
-				Cause: ctxCause,
-			}
+			state.closeReason = cancelCloseReason(closeCodeFromContextCancelCause(ctxCause), ctxCause)
 		}
 		return
 	}
 	if handlerErr != nil {
 		if IsCancelError(handlerErr) {
-			state.closeReason = &CloseReason{
-				Code:  closeCodeFromCancelError(handlerErr),
-				Cause: handlerErr,
-			}
+			state.closeReason = cancelCloseReason(closeCodeFromCancelError(handlerErr), handlerErr)
 			return
 		}
 		state.closeReason = &CloseReason{
@@ -259,6 +254,7 @@ func StatusFromCloseCode(code CloseCode) (TurnStatus, bool) {
 		CloseCodeContentFilter,
 		CloseCodeOutputTruncated,
 		CloseCodeNoFinal,
+		CloseCodeStalled,
 		CloseCodeInternalError:
 		return TurnStatusFailed, true
 	default:
@@ -281,14 +277,34 @@ func closeCodeFromCancelError(err error) CloseCode {
 	return closeCodeFromContextCancelCause(err)
 }
 
+// closeCodeFromContextCancelCause names who cancelled the turn. Only a plain
+// context.Canceled counts as a user stop; a cause loom does not recognise is an
+// internal error, so a new host-side cancel reason can never pass for a user stop.
 func closeCodeFromContextCancelCause(err error) CloseCode {
-	if errors.Is(err, ErrHostShutdown) {
+	switch {
+	case errors.Is(err, ErrHostShutdown):
 		return CloseCodeHostShutdown
-	}
-	if errors.Is(err, ErrExternalCancel) {
+	case errors.Is(err, ErrExternalCancel):
 		return CloseCodeExternalCancel
+	case errors.Is(err, ErrStalled):
+		return CloseCodeStalled
+	case errors.Is(err, context.DeadlineExceeded):
+		return CloseCodeTimeout
+	case errors.Is(err, context.Canceled):
+		return CloseCodeUserCancel
+	default:
+		return CloseCodeInternalError
 	}
-	return CloseCodeUserCancel
+}
+
+// cancelCloseReason keeps the cause's text when a cancellation ends the turn as
+// failed, so the stored reason says what the host saw.
+func cancelCloseReason(code CloseCode, cause error) *CloseReason {
+	reason := &CloseReason{Code: code, Cause: cause}
+	if status, _ := StatusFromCloseCode(code); status == TurnStatusFailed && cause != nil {
+		reason.Message = cause.Error()
+	}
+	return reason
 }
 
 // copyItems deep-copies the Items tree, so a Turn the caller holds shares nothing with
