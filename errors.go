@@ -29,6 +29,12 @@ var ErrHostShutdown = errors.New("loom: host shutdown")
 // current turn or run to be cancelled.
 var ErrExternalCancel = errors.New("loom: external cancel")
 
+// ErrStalled means the host saw no progress from the current turn within its
+// own stall window and cancelled it. The host cancels the turn's ctx with a
+// cause that wraps it; Run records Status=failed with
+// CloseReason.Code="stalled", so a stuck turn is never reported as a user stop.
+var ErrStalled = errors.New("loom: turn stalled")
+
 // ErrContentFilter means the model's content moderation cut the output short. A
 // handler returns it on FinishReasonContentFilter; the Run core recognises it
 // with errors.Is and records Status=failed with

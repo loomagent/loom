@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -141,17 +142,22 @@ func TestRunReturnsATurnWhenItsArgumentsAreWrong(t *testing.T) {
 	}
 }
 
-// A cancelled turn says who cancelled it: a host shutting down and a control plane asking are
-// not the same event as a user stopping one turn.
+// A cancelled turn says who cancelled it: a host shutting down, a control plane asking and a
+// host giving up on a stuck turn are not the same event as a user stopping one turn. A cause
+// loom does not recognise is an internal error, never a user stop.
 func TestRunNamesTheCanceller(t *testing.T) {
 	for _, testCase := range []struct {
-		name string
-		err  error
-		want CloseCode
+		name       string
+		err        error
+		want       CloseCode
+		wantStatus TurnStatus
 	}{
-		{name: "user", err: errors.New("stopped"), want: CloseCodeUserCancel},
-		{name: "host", err: ErrHostShutdown, want: CloseCodeHostShutdown},
-		{name: "control plane", err: ErrExternalCancel, want: CloseCodeExternalCancel},
+		{name: "user", err: context.Canceled, want: CloseCodeUserCancel, wantStatus: TurnStatusCancelled},
+		{name: "host", err: ErrHostShutdown, want: CloseCodeHostShutdown, wantStatus: TurnStatusCancelled},
+		{name: "control plane", err: ErrExternalCancel, want: CloseCodeExternalCancel, wantStatus: TurnStatusCancelled},
+		{name: "deadline passed on as a cause", err: context.DeadlineExceeded, want: CloseCodeTimeout, wantStatus: TurnStatusCancelled},
+		{name: "stalled", err: fmt.Errorf("%w: no events for 8m0s", ErrStalled), want: CloseCodeStalled, wantStatus: TurnStatusFailed},
+		{name: "unrecognised cause", err: errors.New("worker gave up"), want: CloseCodeInternalError, wantStatus: TurnStatusFailed},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancelCause(context.Background())
@@ -162,8 +168,14 @@ func TestRunNamesTheCanceller(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if turn.Status != TurnStatusCancelled || turn.CloseReason.Code != testCase.want {
+			if turn.Status != testCase.wantStatus || turn.CloseReason.Code != testCase.want {
 				t.Fatalf("turn = %+v (%+v)", turn.Status, turn.CloseReason)
+			}
+			if !errors.Is(turn.CloseReason.Cause, testCase.err) {
+				t.Fatalf("cause = %v, want %v", turn.CloseReason.Cause, testCase.err)
+			}
+			if (turn.Status == TurnStatusFailed) != (turn.CloseReason.Message != "") {
+				t.Fatalf("a failed cancellation keeps the cause text, a plain one does not: %+v", turn.CloseReason)
 			}
 		})
 	}
