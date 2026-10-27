@@ -23,6 +23,10 @@ type Config struct {
 
 	// Reasoning is sent on every model call. Its zero value defaults to enabled.
 	Reasoning loom.Reasoning
+	// FinalReasoning overrides Reasoning for the final tool-free delivery call in
+	// RunToFinalAnswer. Nil keeps the research reasoning configuration unchanged.
+	// This override does not affect tool-calling or buffered research calls.
+	FinalReasoning *loom.Reasoning
 	// MaxSteps is the number of tool-capable model rounds. When reached, Run
 	// performs one final tool-free soft-landing call. Zero means unlimited.
 	MaxSteps uint64
@@ -225,6 +229,9 @@ func RunToFinalAnswer(ctx context.Context, w loom.TurnWriter, cfg Config) (*Resu
 	if cfg.Reasoning.Mode == "" {
 		return nil, errors.New("react: Reasoning must be explicitly configured")
 	}
+	if cfg.FinalReasoning != nil && cfg.FinalReasoning.Mode == "" {
+		return nil, errors.New("react: FinalReasoning must be explicitly configured when set")
+	}
 	return run(ctx, w, w, cfg)
 }
 
@@ -250,6 +257,11 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 		provider, modelName := loom.SplitModelName(cfg.Model.Name())
 		if _, err := loom.ResolveModelReasoning(provider, modelName, cfg.Model.Capabilities(), reasoning); err != nil {
 			return nil, err
+		}
+		if cfg.FinalReasoning != nil {
+			if _, err := loom.ResolveModelReasoning(provider, modelName, cfg.Model.Capabilities(), *cfg.FinalReasoning); err != nil {
+				return nil, fmt.Errorf("react: final reasoning: %w", err)
+			}
 		}
 	}
 	if reasoning.Mode == "" {
@@ -397,11 +409,15 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 		state.Messages = append([]loom.Message(nil), plan.Messages...)
 
 		stepPurpose := fmt.Sprintf("%s.step_%d", purpose, step+1)
+		requestReasoning := reasoning
+		if plan.IsFinalStep && finalWriter != nil && cfg.FinalReasoning != nil {
+			requestReasoning = *cfg.FinalReasoning
+		}
 		request := loom.ChatRequest{
 			Messages:   plan.Messages,
 			Tools:      plan.Tools,
 			ToolChoice: plan.ToolChoice,
-			Reasoning:  reasoning,
+			Reasoning:  requestReasoning,
 			MaxTokens:  cfg.MaxTokens,
 		}
 		var response *loom.ChatResponse
