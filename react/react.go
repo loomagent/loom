@@ -21,7 +21,9 @@ type Config struct {
 	// model reports a sensitive-content rejection.
 	SensitiveFallback *SensitiveFallbackConfig
 
-	// Reasoning is sent on every model call. Its zero value defaults to enabled.
+	// Reasoning is sent on research, tool, and buffered calls. RunToFinalAnswer
+	// automatically uses the lowest reasoning allowed by the model for the final
+	// tool-free delivery call. Its zero value defaults to enabled.
 	Reasoning loom.Reasoning
 	// MaxSteps is the number of tool-capable model rounds. When reached, Run
 	// performs one final tool-free soft-landing call. Zero means unlimited.
@@ -216,8 +218,11 @@ func Run(ctx context.Context, w loom.Writer, cfg Config) (*Result, error) {
 // is retained only as a draft in model context; no tool call is fabricated.
 // Choosing this entry point explicitly permits finalization without a terminal
 // tool, so use Run when a terminal tool carries a mandatory business contract.
-// Reasoning must be explicitly configured. Final stream errors propagate without
-// automatically retrying or switching models after partial delivery.
+// Reasoning must be explicitly configured. The final tool-free delivery call
+// automatically uses the lowest reasoning allowed by the model capabilities:
+// disabled when reasoning can be turned off, otherwise the lowest declared
+// effort. Final stream errors propagate without automatically retrying or
+// switching models after partial delivery.
 func RunToFinalAnswer(ctx context.Context, w loom.TurnWriter, cfg Config) (*Result, error) {
 	if w == nil {
 		return nil, errors.New("react: TurnWriter is required")
@@ -246,10 +251,19 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 		purpose = "react"
 	}
 	reasoning := cfg.Reasoning
+	finalReasoning := reasoning
 	if finalWriter != nil {
 		provider, modelName := loom.SplitModelName(cfg.Model.Name())
 		if _, err := loom.ResolveModelReasoning(provider, modelName, cfg.Model.Capabilities(), reasoning); err != nil {
 			return nil, err
+		}
+		minimized, err := minimizeFinalReasoning(cfg.Model.Capabilities(), reasoning)
+		if err != nil {
+			return nil, fmt.Errorf("react: final reasoning: %w", err)
+		}
+		finalReasoning = minimized
+		if _, err := loom.ResolveModelReasoning(provider, modelName, cfg.Model.Capabilities(), finalReasoning); err != nil {
+			return nil, fmt.Errorf("react: final reasoning: %w", err)
 		}
 	}
 	if reasoning.Mode == "" {
@@ -397,11 +411,15 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 		state.Messages = append([]loom.Message(nil), plan.Messages...)
 
 		stepPurpose := fmt.Sprintf("%s.step_%d", purpose, step+1)
+		requestReasoning := reasoning
+		if plan.IsFinalStep && finalWriter != nil {
+			requestReasoning = finalReasoning
+		}
 		request := loom.ChatRequest{
 			Messages:   plan.Messages,
 			Tools:      plan.Tools,
 			ToolChoice: plan.ToolChoice,
-			Reasoning:  reasoning,
+			Reasoning:  requestReasoning,
 			MaxTokens:  cfg.MaxTokens,
 		}
 		var response *loom.ChatResponse

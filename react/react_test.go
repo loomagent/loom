@@ -13,10 +13,11 @@ import (
 )
 
 type scriptedModel struct {
-	name      string
-	responses []*loom.ChatResponse
-	errs      []error
-	requests  []loom.ChatRequest
+	name         string
+	capabilities loom.ModelCapabilities
+	responses    []*loom.ChatResponse
+	errs         []error
+	requests     []loom.ChatRequest
 }
 
 func (m *scriptedModel) Name() string {
@@ -26,7 +27,7 @@ func (m *scriptedModel) Name() string {
 	return "test/model"
 }
 func (m *scriptedModel) Capabilities() loom.ModelCapabilities {
-	return loom.ModelCapabilities{}
+	return m.capabilities
 }
 func (m *scriptedModel) Chat(context.Context, loom.ChatRequest) (*loom.ChatResponse, error) {
 	return nil, errors.New("unexpected Chat call")

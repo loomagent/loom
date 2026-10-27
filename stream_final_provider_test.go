@@ -42,8 +42,19 @@ func TestUserFinalDeltasPassThroughRealProviderAdapter(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			if !req.Stream || req.Thinking.Type != "enabled" || req.Effort != "high" {
+			if !req.Stream {
 				t.Errorf("explicit reasoning changed: %s", body)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if len(req.Tools) > 0 {
+				if req.Thinking.Type != "enabled" || req.Effort != "high" {
+					t.Errorf("research reasoning changed: %s", body)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+			} else if req.Thinking.Type != "disabled" || req.Effort != "" {
+				t.Errorf("final reasoning was not disabled: %s", body)
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
