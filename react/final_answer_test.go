@@ -143,65 +143,110 @@ func TestUserReceivesFinalReasoningAndContentBeforeModelFinishes(t *testing.T) {
 	}
 }
 
-func TestRunToFinalAnswerUsesFinalReasoningOnlyForFinalDelivery(t *testing.T) {
-	calls := 0
-	model := &scriptedModel{responses: []*loom.ChatResponse{
+func TestRunToFinalAnswerMinimizesFinalReasoningByCapability(t *testing.T) {
+	tests := []struct {
+		name         string
+		capabilities loom.ModelCapabilities
+		research     loom.Reasoning
+		wantFinal    loom.Reasoning
+	}{
 		{
-			ToolCalls:    []loom.ToolCall{{ID: "finish", Name: "finalize_answer"}},
-			FinishReason: loom.FinishReasonToolCalls,
+			name:      "undeclared capability keeps configured reasoning",
+			research:  loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortHigh},
+			wantFinal: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortHigh},
 		},
-		{Content: "final answer", FinishReason: loom.FinishReasonStop},
-	}}
-	finalReasoning := loom.Reasoning{Mode: loom.ReasoningModeDisabled}
+		{
+			name:         "reasoning unsupported",
+			capabilities: loom.ModelCapabilities{Reasoning: loom.ReasoningSupportNone},
+			research:     loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+			wantFinal:    loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+		},
+		{
+			name:         "toggleable reasoning is disabled",
+			capabilities: loom.ModelCapabilities{Reasoning: loom.ReasoningSupportToggleable, ReasoningEfforts: []loom.ReasoningEffort{loom.ReasoningEffortLow, loom.ReasoningEffortHigh}},
+			research:     loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortHigh},
+			wantFinal:    loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+		},
+		{
+			name:         "always-on reasoning uses the lowest known effort",
+			capabilities: loom.ModelCapabilities{Reasoning: loom.ReasoningSupportAlwaysOn, ReasoningEfforts: []loom.ReasoningEffort{loom.ReasoningEffortHigh, loom.ReasoningEffortMinimal, loom.ReasoningEffortLow}},
+			research:     loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortHigh},
+			wantFinal:    loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortMinimal},
+		},
+		{
+			name:         "always-on without efforts keeps reasoning enabled",
+			capabilities: loom.ModelCapabilities{Reasoning: loom.ReasoningSupportAlwaysOn},
+			research:     loom.Reasoning{Mode: loom.ReasoningModeEnabled},
+			wantFinal:    loom.Reasoning{Mode: loom.ReasoningModeEnabled},
+		},
+	}
 
-	var result *Result
-	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
-		var runErr error
-		result, runErr = RunToFinalAnswer(ctx, w, Config{
-			Model:            model,
-			Messages:         []loom.Message{{Role: loom.RoleUser, Content: "task"}},
-			Tools:            loom.NewToolRegistry(terminalTool(&calls)),
-			Reasoning:        loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortHigh},
-			FinalReasoning:   &finalReasoning,
-			TerminalToolName: "finalize_answer",
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			model := &scriptedModel{
+				capabilities: tt.capabilities,
+				responses: []*loom.ChatResponse{
+					{
+						ToolCalls:    []loom.ToolCall{{ID: "finish", Name: "finalize_answer"}},
+						FinishReason: loom.FinishReasonToolCalls,
+					},
+					{Content: "final answer", FinishReason: loom.FinishReasonStop},
+				},
+			}
+
+			var result *Result
+			_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+				var runErr error
+				result, runErr = RunToFinalAnswer(ctx, w, Config{
+					Model:            model,
+					Messages:         []loom.Message{{Role: loom.RoleUser, Content: "task"}},
+					Tools:            loom.NewToolRegistry(terminalTool(&calls)),
+					Reasoning:        tt.research,
+					TerminalToolName: "finalize_answer",
+				})
+				return runErr
+			}, loom.RunOptions{ConversationID: "final-reasoning-minimize"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result == nil || result.FinalContent != "final answer" || !result.FinalAnswerCommitted {
+				t.Fatalf("result = %+v", result)
+			}
+			if len(model.requests) != 2 {
+				t.Fatalf("model requests = %d, want 2", len(model.requests))
+			}
+			if research := model.requests[0].Reasoning; research != tt.research {
+				t.Fatalf("research reasoning = %+v, want %+v", research, tt.research)
+			}
+			if got := model.requests[1].Reasoning; got != tt.wantFinal {
+				t.Fatalf("final reasoning = %+v, want %+v", got, tt.wantFinal)
+			}
+			if len(model.requests[1].Tools) != 0 {
+				t.Fatalf("final request exposed tools: %+v", model.requests[1].Tools)
+			}
 		})
-		return runErr
-	}, loom.RunOptions{ConversationID: "final-reasoning-override"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result == nil || result.FinalContent != "final answer" || !result.FinalAnswerCommitted {
-		t.Fatalf("result = %+v", result)
-	}
-	if len(model.requests) != 2 {
-		t.Fatalf("model requests = %d, want 2", len(model.requests))
-	}
-	research := model.requests[0].Reasoning
-	if research.Mode != loom.ReasoningModeEnabled || research.Effort != loom.ReasoningEffortHigh {
-		t.Fatalf("research reasoning = %+v", research)
-	}
-	if got := model.requests[1].Reasoning; got.Mode != loom.ReasoningModeDisabled || got.Effort != "" {
-		t.Fatalf("final reasoning = %+v", got)
-	}
-	if len(model.requests[1].Tools) != 0 {
-		t.Fatalf("final request exposed tools: %+v", model.requests[1].Tools)
 	}
 }
 
-func TestRunToFinalAnswerRejectsUnsetFinalReasoningMode(t *testing.T) {
-	model := &scriptedModel{}
+func TestRunToFinalAnswerRejectsAmbiguousCustomEffortsBeforeCallingModel(t *testing.T) {
+	model := &scriptedModel{
+		capabilities: loom.ModelCapabilities{
+			Reasoning:        loom.ReasoningSupportAlwaysOn,
+			ReasoningEfforts: []loom.ReasoningEffort{"turbo", "ultra"},
+		},
+	}
 	var runErr error
 	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		_, runErr = RunToFinalAnswer(ctx, w, Config{
-			Model:          model,
-			Messages:       []loom.Message{{Role: loom.RoleUser, Content: "task"}},
-			Tools:          loom.NewToolRegistry(),
-			Reasoning:      loom.Reasoning{Mode: loom.ReasoningModeEnabled},
-			FinalReasoning: &loom.Reasoning{},
+			Model:     model,
+			Messages:  []loom.Message{{Role: loom.RoleUser, Content: "task"}},
+			Tools:     loom.NewToolRegistry(),
+			Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "turbo"},
 		})
 		return runErr
-	}, loom.RunOptions{ConversationID: "invalid-final-reasoning"})
-	if err == nil || runErr == nil || !strings.Contains(runErr.Error(), "FinalReasoning") {
+	}, loom.RunOptions{ConversationID: "ambiguous-final-reasoning"})
+	if err == nil || runErr == nil || !strings.Contains(runErr.Error(), "lowest effort") {
 		t.Fatalf("err = %v, runErr = %v", err, runErr)
 	}
 	if len(model.requests) != 0 {
