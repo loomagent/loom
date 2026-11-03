@@ -28,7 +28,12 @@ type Config struct {
 	// MaxSteps is the number of tool-capable model rounds. When reached, Run
 	// performs one final tool-free soft-landing call. Zero means unlimited.
 	MaxSteps uint64
-	// MaxToolCalls limits successful tool reservations across the run.
+	// MaxToolRounds limits batches that reserve at least one non-exempt tool.
+	// Internal-only, terminal and entirely refused batches do not consume rounds.
+	// Exhaustion hides budgeted tools, leaving helpers and terminals available.
+	// Zero means unlimited. Use MaxSteps independently to bound all model rounds.
+	MaxToolRounds uint64
+	// MaxToolCalls limits non-exempt tool reservations across the run.
 	MaxToolCalls uint64
 	// ToolCallLimits applies per-tool limits. Missing and zero values are unlimited.
 	ToolCallLimits map[string]uint64
@@ -95,11 +100,13 @@ type SensitiveFallbackConfig struct {
 
 // State is the observable state supplied to policies.
 type State struct {
-	Step          uint64
-	Messages      []loom.Message
-	ToolInfos     []*loom.ToolInfo
-	ToolCallsUsed uint64
-	ToolUses      map[string]uint64
+	Step      uint64
+	Messages  []loom.Message
+	ToolInfos []*loom.ToolInfo
+	// ToolRoundsUsed counts batches with at least one budgeted reservation.
+	ToolRoundsUsed uint64
+	ToolCallsUsed  uint64
+	ToolUses       map[string]uint64
 	// ToolPhaseEnded reports that a terminal tool has succeeded: no tool is available from the
 	// next call on, and its content is the final answer.
 	ToolPhaseEnded bool
@@ -288,6 +295,12 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			allTools[i] = &copy
 		}
 	}
+	exemptTools := make(map[string]bool)
+	for _, info := range allTools {
+		if info != nil && (info.BudgetExempt || info.EndsToolPhase) {
+			exemptTools[info.Name] = true
+		}
+	}
 	terminalTools := terminalToolNames(allTools)
 	for name := range terminalTools {
 		if _, set := cfg.ToolCallLimits[name]; set {
@@ -304,16 +317,16 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 	var finalizationReason string
 	msgs := append([]loom.Message(nil), cfg.Messages...)
 	uses := make(map[string]uint64, len(cfg.ToolCallLimits))
-	var totalUses uint64
+	var totalUses, toolRounds uint64
 
 	for step := uint64(0); ; step++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		state := snapshotState(step, msgs, allTools, totalUses, uses, toolPhaseEnded)
+		state := snapshotState(step, msgs, allTools, totalUses, toolRounds, uses, toolPhaseEnded)
 		plan := StepPlan{
 			Messages: append([]loom.Message(nil), msgs...),
-			Tools:    availableTools(allTools, cfg, totalUses, uses),
+			Tools:    availableTools(allTools, cfg, totalUses, toolRounds, uses),
 		}
 		loopLimitReached := cfg.MaxSteps > 0 && step >= cfg.MaxSteps
 		deadlineNear := false
@@ -508,7 +521,11 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 				results = append(results, result)
 			}
 		} else {
-			results, executed, lastRefusal, err = executeStepTools(ctx, w, state, cfg, plan.Tools, response.ToolCalls, &totalUses, uses, terminalTools)
+			previousUses := totalUses
+			results, executed, lastRefusal, err = executeStepTools(ctx, w, state, cfg, plan.Tools, response.ToolCalls, &totalUses, uses, exemptTools)
+			if totalUses > previousUses {
+				toolRounds++
+			}
 			if err != nil {
 				return nil, fmt.Errorf("%s: step %d tools: %w", purpose, step+1, err)
 			}
@@ -526,7 +543,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 		}
 		msgs = loom.AppendAssistantTurn(plan.Messages, response, promptResults)
 
-		state = snapshotState(step, msgs, allTools, totalUses, uses, toolPhaseEnded)
+		state = snapshotState(step, msgs, allTools, totalUses, toolRounds, uses, toolPhaseEnded)
 		for _, policy := range cfg.AfterToolsPolicies {
 			if policy == nil {
 				continue
@@ -689,10 +706,10 @@ func writeFallbackNote(
 	return nil
 }
 
-func snapshotState(step uint64, messages []loom.Message, tools []*loom.ToolInfo, total uint64, uses map[string]uint64, phaseEnded bool) State {
+func snapshotState(step uint64, messages []loom.Message, tools []*loom.ToolInfo, total, rounds uint64, uses map[string]uint64, phaseEnded bool) State {
 	useCopy := make(map[string]uint64, len(uses))
 	maps.Copy(useCopy, uses)
-	return State{Step: step, Messages: append([]loom.Message(nil), messages...), ToolInfos: append([]*loom.ToolInfo(nil), tools...), ToolCallsUsed: total, ToolUses: useCopy, ToolPhaseEnded: phaseEnded}
+	return State{Step: step, Messages: append([]loom.Message(nil), messages...), ToolInfos: append([]*loom.ToolInfo(nil), tools...), ToolCallsUsed: total, ToolRoundsUsed: rounds, ToolUses: useCopy, ToolPhaseEnded: phaseEnded}
 }
 
 // terminalToolNames returns the tools marked as ending the tool phase. The marker comes from the
@@ -740,8 +757,8 @@ func mixedTerminalBatch(calls []loom.ToolCall, terminalTools map[string]bool) st
 // next reply can only be the answer.
 const defaultToolPhaseEndedPrompt = "The tool phase is over: no tool is available any more. Write the final answer now."
 
-func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[string]uint64) []*loom.ToolInfo {
-	outOfBudget := cfg.MaxToolCalls > 0 && total >= cfg.MaxToolCalls
+func availableTools(all []*loom.ToolInfo, cfg Config, total, rounds uint64, uses map[string]uint64) []*loom.ToolInfo {
+	outOfBudget := cfg.MaxToolCalls > 0 && total >= cfg.MaxToolCalls || cfg.MaxToolRounds > 0 && rounds >= cfg.MaxToolRounds
 	out := make([]*loom.ToolInfo, 0, len(all))
 	for _, info := range all {
 		if info == nil {
@@ -749,7 +766,7 @@ func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[str
 		}
 		// A terminal tool is not a research tool: it is the only way the phase can end, so no
 		// budget withholds it.
-		if info.EndsToolPhase {
+		if info.EndsToolPhase || info.BudgetExempt {
 			out = append(out, info)
 			continue
 		}
@@ -764,9 +781,12 @@ func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[str
 	return out
 }
 
-func toolBudgetReason(name string, cfg Config, total uint64, uses map[string]uint64, exempt map[string]bool) string {
+func toolBudgetReason(name string, cfg Config, total, rounds uint64, uses map[string]uint64, exempt map[string]bool) string {
 	if exempt[name] {
 		return ""
+	}
+	if cfg.MaxToolRounds > 0 && rounds >= cfg.MaxToolRounds {
+		return fmt.Sprintf("tool round limit %d reached", cfg.MaxToolRounds)
 	}
 	if cfg.MaxToolCalls > 0 && total >= cfg.MaxToolCalls {
 		return fmt.Sprintf("total tool call limit %d reached", cfg.MaxToolCalls)
@@ -777,8 +797,8 @@ func toolBudgetReason(name string, cfg Config, total uint64, uses map[string]uin
 	return ""
 }
 
-func reserveTool(name string, cfg Config, total *uint64, uses map[string]uint64, exempt map[string]bool) string {
-	if reason := toolBudgetReason(name, cfg, *total, uses, exempt); reason != "" {
+func reserveTool(name string, cfg Config, total *uint64, rounds uint64, uses map[string]uint64, exempt map[string]bool) string {
+	if reason := toolBudgetReason(name, cfg, *total, rounds, uses, exempt); reason != "" {
 		return reason
 	}
 	if !exempt[name] {

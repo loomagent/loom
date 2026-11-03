@@ -41,3 +41,25 @@ concurrency. Host adapters must not implement a second iteration loop.
 
 No paid provider calls are needed: use protocol fakes, existing real HTTP provider
 contract tests and the backend PostgreSQL streaming integration test.
+
+## Internal helpers and research budgets
+
+Register trusted internal helpers with `loom.WithBudgetExempt()`. The default is
+budgeted, even for offline tools; networking and budget classification are
+independent. The marker bypasses `MaxToolCalls`, `ToolCallLimits` and the new
+`MaxToolRounds` research budget, but never terminal isolation or final closure.
+
+`MaxToolRounds` counts a batch once when it reserves at least one budgeted tool.
+Mixed batches count only their budgeted calls; failed executions keep their
+reservations. Internal-only and entirely refused batches consume no research
+round. `State.ToolRoundsUsed` reports this counter separately from physical
+`State.Step`. When research budgets run out, helpers and terminals stay available
+until a normal finish, terminal success, policy stop or safety boundary.
+
+Set `MaxSteps` independently to bound all model rounds, including internal-only
+loops and refused finishes. It preserves its existing semantics and allows one
+final tool-free call. Deadlines, cancellation and consecutive refusal limits are
+unchanged. Neither budget exemption nor tool-round counting changes actual
+provider usage or accounting. Host schedulers receive only admitted calls and
+must place persistent reservations before invoking those calls, rather than
+charging tool-call diagnostic events that also represent rejected requests.

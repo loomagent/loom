@@ -30,11 +30,11 @@ func executeStepTools(ctx context.Context, w loom.Writer, state State, cfg Confi
 	refusal := ""
 	for i, call := range calls {
 		code, reason := "", ""
-		if why := toolBudgetReason(call.Name, cfg, *total, uses, exempt); why != "" {
+		if why := toolBudgetReason(call.Name, cfg, *total, state.ToolRoundsUsed, uses, exempt); why != "" {
 			code, reason = "tool_budget_exhausted", why
 		} else if _, ok := registry.Lookup(call.Name); !ok {
 			code, reason = "tool_not_available", fmt.Sprintf("tool %q not registered for this step", call.Name)
-		} else if why := reserveTool(call.Name, cfg, total, uses, exempt); why != "" {
+		} else if why := reserveTool(call.Name, cfg, total, state.ToolRoundsUsed, uses, exempt); why != "" {
 			code, reason = "tool_budget_exhausted", why
 		}
 		if reason != "" {
