@@ -210,6 +210,13 @@ type ModelCapabilities struct {
 	MaxContextTokens uint64
 }
 
+// Clone returns an independent capability declaration. It preserves effort order,
+// nil versus empty efforts, unknown values, and diagnostic probe state.
+func (c ModelCapabilities) Clone() ModelCapabilities {
+	c.ReasoningEfforts = slices.Clone(c.ReasoningEfforts)
+	return c
+}
+
 // ReasoningSend is the decision to send reasoning parameters, as ResolveReasoning
 // returns it, independent of any provider.
 type ReasoningSend string
@@ -509,6 +516,8 @@ type ChatModel interface {
 
 	// Capabilities returns what the model declared at initialization, which the
 	// caller uses to decide whether to ask for structured output and the like.
+	// The returned declaration must be independent: editing its slices must not
+	// change the model's declaration or another caller's snapshot.
 	Capabilities() ModelCapabilities
 
 	// Chat is the synchronous call; it blocks until the complete result arrives.

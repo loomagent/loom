@@ -104,7 +104,7 @@ func New(cfg Config) (*Model, error) {
 	// check passes requests through.
 	capabilities := loom.ModelCapabilities{}
 	if cfg.Capabilities != nil {
-		capabilities = *cfg.Capabilities
+		capabilities = cfg.Capabilities.Clone()
 	}
 	requestOpts := make([]arkruntime.RequestOption, 0, len(headers))
 	for key, value := range headers {
@@ -123,7 +123,7 @@ func (m *Model) Name() string {
 
 // Capabilities returns the model capabilities declared at initialization.
 func (m *Model) Capabilities() loom.ModelCapabilities {
-	return m.capabilities
+	return m.capabilities.Clone()
 }
 
 // Chat implements loom.ChatModel.Chat with automatic retries.

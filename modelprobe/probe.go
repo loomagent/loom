@@ -23,6 +23,8 @@ const (
 // with reasoning declared unsupported so a disabled request omits the provider
 // parameter, and once with undeclared capabilities so explicit parameters pass
 // through without local capability gating.
+// Options are snapshotted before either Builder call; subsequent host edits do
+// not change the declaration, candidates, or source URLs used by this audit.
 func Probe(ctx context.Context, builder Builder, options Options) (Report, error) {
 	if builder == nil {
 		return Report{}, errors.New("modelprobe: Builder is required")
@@ -30,6 +32,12 @@ func Probe(ctx context.Context, builder Builder, options Options) (Report, error
 	if err := ctx.Err(); err != nil {
 		return Report{}, err
 	}
+	if options.DeclaredCapabilities != nil {
+		declared := options.DeclaredCapabilities.Clone()
+		options.DeclaredCapabilities = &declared
+	}
+	options.ReasoningEfforts = slices.Clone(options.ReasoningEfforts)
+	options.DeclarationSourceURLs = slices.Clone(options.DeclarationSourceURLs)
 	timeout := options.PerCallTimeout
 	if timeout <= 0 {
 		timeout = defaultPerCallTimeout
