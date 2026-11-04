@@ -463,6 +463,22 @@ Keep application boundary checks to prevent bypassing this shared construction
 path. Extra headers cannot detect a requirement the application never declared,
 or control separate SDK clients/APIs outside Loom's Chat/Stream interface.
 
+## Model capability snapshots
+
+Built-in providers own a copy of the capabilities supplied at construction.
+`Capabilities()` returns an independent copy, so later edits to the input or a
+returned effort slice do not change the model's declaration. Use
+`ModelCapabilities.Clone()` when retaining a declaration in a custom model.
+Cloning preserves effort order, unknown values, and nil versus empty efforts;
+it does not infer capabilities or select defaults.
+
+`modelprobe.Probe` snapshots its declared capabilities, candidate efforts and
+source URLs before invoking the builder. Hosts may reload their configuration
+from a builder callback without changing that audit's inputs. As with provider
+construction, callers must not mutate the inputs concurrently with the initial
+copy. These snapshots describe local configuration; they do not pin the remote
+model behind a provider alias.
+
 ## Model capability probing
 
 `modelprobe` observes real API behavior instead of trusting configuration. It

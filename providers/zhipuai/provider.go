@@ -76,7 +76,7 @@ func New(cfg Config) (*Model, error) {
 	// check passes requests through.
 	capabilities := loom.ModelCapabilities{}
 	if cfg.Capabilities != nil {
-		capabilities = *cfg.Capabilities
+		capabilities = cfg.Capabilities.Clone()
 	}
 	client, err := openaicompat.Client(cfg.APIKey, baseURL, cfg.HTTPClient, cfg.RequestHeaders)
 	if err != nil {
@@ -97,7 +97,7 @@ func (m *Model) Name() string {
 
 // Capabilities returns the model capabilities declared at initialization.
 func (m *Model) Capabilities() loom.ModelCapabilities {
-	return m.capabilities
+	return m.capabilities.Clone()
 }
 
 // Chat implements loom.ChatModel.Chat with automatic retries.
