@@ -26,11 +26,13 @@ type FailoverConfig struct {
 
 // FailoverAttempt describes one model attempt that has already finished.
 type FailoverAttempt struct {
-	Attempt  uint64
-	Model    ChatModel
-	Request  ChatRequest
-	Response *ChatResponse
-	Error    error
+	// ModelInfo is the target captured before this attempt, including failed calls without usage.
+	ModelInfo ModelInfo
+	Attempt   uint64
+	Model     ChatModel
+	Request   ChatRequest
+	Response  *ChatResponse
+	Error     error
 }
 
 // WithModelFailover enables failover for this CallModel.
@@ -105,13 +107,15 @@ func CallModel(
 		if err := ValidateChatRequest(callReq); err != nil {
 			return nil, LocalRequestError(err)
 		}
-		resp, err := callModelOnce(ctx, purpose, current, callReq, cfg.captureContent)
+		info := DescribeModel(current)
+		resp, err := callModelOnce(ctx, purpose, current, callReq, cfg.captureContent, info)
 		attempt := FailoverAttempt{
-			Attempt:  attemptNum,
-			Model:    current,
-			Request:  callReq,
-			Response: resp,
-			Error:    err,
+			ModelInfo: info,
+			Attempt:   attemptNum,
+			Model:     current,
+			Request:   callReq,
+			Response:  resp,
+			Error:     err,
 		}
 		if !shouldFailover(ctx, cfg.failover, attempt) {
 			return resp, err
@@ -139,7 +143,8 @@ func CallModel(
 	}
 }
 
-func callModelOnce(ctx context.Context, purpose string, model ChatModel, req ChatRequest, captureContent bool) (*ChatResponse, error) {
+func callModelOnce(ctx context.Context, purpose string, model ChatModel, req ChatRequest, captureContent bool, info ModelInfo) (*ChatResponse, error) {
+	displayName := model.Name()
 	llmCtx, span := startLLMSpan(ctx, model, req, purpose, captureContent)
 	resp, err := model.Chat(llmCtx, req)
 	finalizeLLMSpan(span, resp, captureContent, err)
@@ -147,9 +152,9 @@ func callModelOnce(ctx context.Context, purpose string, model ChatModel, req Cha
 		if scope := usageScopeFromContext(ctx); scope != nil {
 			modelID := resp.Model
 			if modelID == "" {
-				modelID = model.Name()
+				modelID = displayName
 			}
-			scope.state.emitLLMCalled(ctx, scope, modelID, purpose, resp.Usage)
+			scope.state.emitLLMCalled(ctx, scope, modelID, purpose, resp.Usage, info, resp.Model)
 		}
 	}
 	return resp, err

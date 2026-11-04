@@ -39,6 +39,8 @@ const DefaultBaseURL = "https://ark.cn-beijing.volces.com/api/v3"
 
 // Config holds the Ark provider's construction parameters.
 type Config struct {
+	// Ref is an optional host-owned instance/snapshot reference; never sent on the wire.
+	Ref loom.ModelRef
 	// APIKey is required, and is sent as a bearer token.
 	APIKey string
 	// ModelName is required: the Ark endpoint ID, such as "ep-20260301165020-2bltp".
@@ -64,6 +66,7 @@ type Config struct {
 
 // Model is one Ark model instance, implementing loom.ChatModel.
 type Model struct {
+	ref          loom.ModelRef
 	client       *arkruntime.Client
 	name         string
 	retryCfg     *loom.RetryConfig
@@ -89,7 +92,9 @@ func New(cfg Config) (*Model, error) {
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
-	opts := []arkruntime.ConfigOption{arkruntime.WithBaseUrl(baseURL)}
+	// Loom owns retry scheduling and admission for every physical attempt. SDK
+	// retries would bypass the limiter and the attempt's captured model identity.
+	opts := []arkruntime.ConfigOption{arkruntime.WithBaseUrl(baseURL), arkruntime.WithRetryTimes(0)}
 	if cfg.HTTPClient != nil {
 		opts = append(opts, arkruntime.WithHTTPClient(cfg.HTTPClient))
 	}
@@ -99,6 +104,9 @@ func New(cfg Config) (*Model, error) {
 	if retryCfg == nil {
 		retryCfg = loom.DefaultRetryConfig()
 	}
+	capturedRetry := *retryCfg
+	capturedRetry.AttemptMeta.ModelInfo = loom.ModelInfo{Ref: cfg.Ref, Provider: "ark", RequestModel: cfg.ModelName}
+	retryCfg = &capturedRetry
 	// Capabilities come from the caller or modelfactory; no model default is hardcoded
 	// here. Building the model without them leaves every capability undeclared, so each
 	// check passes requests through.
@@ -111,6 +119,7 @@ func New(cfg Config) (*Model, error) {
 		requestOpts = append(requestOpts, arkruntime.WithCustomHeader(key, value))
 	}
 	return &Model{
+		ref:    cfg.Ref,
 		client: client, name: cfg.ModelName, retryCfg: retryCfg,
 		capabilities: capabilities, requestOpts: requestOpts,
 	}, nil
@@ -119,6 +128,11 @@ func New(cfg Config) (*Model, error) {
 // Name returns an identifier of the form "ark/<endpoint>".
 func (m *Model) Name() string {
 	return "ark/" + m.name
+}
+
+// ModelInfo returns the configured target, independently of response model aliases.
+func (m *Model) ModelInfo() loom.ModelInfo {
+	return loom.ModelInfo{Ref: m.ref, Provider: "ark", RequestModel: m.name}
 }
 
 // Capabilities returns the model capabilities declared at initialization.

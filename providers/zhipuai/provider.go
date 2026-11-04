@@ -22,6 +22,8 @@ const DefaultBaseURL = "https://open.bigmodel.cn/api/paas/v4"
 
 // Config holds the Zhipu AI provider's construction parameters.
 type Config struct {
+	// Ref is an optional host-owned instance/snapshot reference; never sent on the wire.
+	Ref loom.ModelRef
 	// APIKey is required.
 	APIKey string
 	// ModelName is required: the Zhipu AI model identifier, such as "glm-5.3".
@@ -45,6 +47,7 @@ type Config struct {
 
 // Model is one Zhipu AI model instance, implementing loom.ChatModel.
 type Model struct {
+	ref          loom.ModelRef
 	client       openai.Client
 	name         string
 	retryCfg     *loom.RetryConfig
@@ -71,6 +74,9 @@ func New(cfg Config) (*Model, error) {
 	if retryCfg == nil {
 		retryCfg = loom.DefaultRetryConfig()
 	}
+	capturedRetry := *retryCfg
+	capturedRetry.AttemptMeta.ModelInfo = loom.ModelInfo{Ref: cfg.Ref, Provider: "zhipuai", RequestModel: cfg.ModelName}
+	retryCfg = &capturedRetry
 	// Capabilities come from the caller or modelfactory; no model default is hardcoded
 	// here. Building the model without them leaves every capability undeclared, so each
 	// check passes requests through.
@@ -83,6 +89,7 @@ func New(cfg Config) (*Model, error) {
 		return nil, fmt.Errorf("loom/zhipuai: %w", err)
 	}
 	return &Model{
+		ref:          cfg.Ref,
 		client:       client,
 		name:         cfg.ModelName,
 		retryCfg:     retryCfg,
@@ -93,6 +100,11 @@ func New(cfg Config) (*Model, error) {
 // Name returns an identifier of the form "zhipuai/<model>".
 func (m *Model) Name() string {
 	return "zhipuai/" + m.name
+}
+
+// ModelInfo returns the configured target, independently of response model aliases.
+func (m *Model) ModelInfo() loom.ModelInfo {
+	return loom.ModelInfo{Ref: m.ref, Provider: "zhipuai", RequestModel: m.name}
 }
 
 // Capabilities returns the model capabilities declared at initialization.

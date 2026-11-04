@@ -52,6 +52,7 @@ func StreamLLMToStep(
 	if err := ValidateChatRequest(req); err != nil {
 		return nil, LocalRequestError(err)
 	}
+	info := DescribeModel(model)
 	// OTel: start the LLM span, following the GenAI semantic conventions.
 	// captureContent, which comes through turnState, decides whether the prompt and the
 	// completion are written to span attributes.
@@ -221,7 +222,7 @@ func StreamLLMToStep(
 	if usage != nil && nonZeroUsage(*usage) {
 		if sa, ok := w.(scopeAccessor); ok {
 			scope := sa.underlyingScope()
-			scope.state.emitLLMCalled(ctx, scope, modelID, purpose, *usage)
+			scope.state.emitLLMCalled(ctx, scope, modelID, purpose, *usage, info, modelID)
 		}
 	}
 

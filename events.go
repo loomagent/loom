@@ -61,11 +61,15 @@ type ItemFinishedEvent struct {
 // root. The framework core or a helper such as StreamLLMToStep emits it when the
 // call returns.
 type LLMCalledEvent struct {
-	TurnIndex uint64
-	TurnPath  string
-	StepPath  string // the owning step (empty = the turn root)
-	Model     string // provider/model id
-	Purpose   string // free text for debugging and auditing ("react.turn3", "researcher.plan", ...)
-	Usage     Usage
-	Time      time.Time
+	// ModelInfo is captured before invocation. Its Ref is unknown unless supplied
+	// by the host; ProviderReportedModel is never used to resolve that binding.
+	ModelInfo             ModelInfo
+	ProviderReportedModel string
+	TurnIndex             uint64
+	TurnPath              string
+	StepPath              string // the owning step (empty = the turn root)
+	Model                 string // legacy display value; prefer ModelInfo.RequestModel and ProviderReportedModel
+	Purpose               string // free text for debugging and auditing ("react.turn3", "researcher.plan", ...)
+	Usage                 Usage
+	Time                  time.Time
 }

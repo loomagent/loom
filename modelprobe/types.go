@@ -114,6 +114,10 @@ type ObservedCapabilities struct {
 // Report is a serializable behavioral capability profile. Probe can return a
 // partial Report alongside an error; completed checks remain valid evidence.
 type Report struct {
+	// TargetRef is the host's explicit target binding, not the synthetic diagnostic capabilities.
+	TargetRef      *loom.ModelRef       `json:"target_ref,omitempty"`
+	StartedAt      time.Time            `json:"started_at,omitzero"`
+	FinishedAt     time.Time            `json:"finished_at,omitzero"`
 	EffortCoverage *EffortCoverage      `json:"effort_coverage,omitempty"`
 	SchemaVersion  int                  `json:"schema_version"`
 	Model          string               `json:"model,omitempty"`
@@ -125,6 +129,9 @@ type Report struct {
 // Options controls probing. Calls are deliberately sequential to reduce rate
 // limit pressure and make provider-side behavior easier to audit.
 type Options struct {
+	// TargetRef binds evidence to a host snapshot. Missing means unknown, never
+	// inferred from Name. Known builder bindings must match an explicit target.
+	TargetRef      *loom.ModelRef
 	PerCallTimeout time.Duration
 	// DeclaredCapabilities supplies administrator-supplied effort declarations.
 	// It never changes the synthetic models or fills in business defaults.

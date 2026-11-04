@@ -58,6 +58,7 @@ func StreamLLMToFinalAnswer(ctx context.Context, w TurnWriter, purpose string, m
 		}
 		captureContent = state.captureContent
 	}
+	info := DescribeModel(model)
 	ctx, span := startLLMSpan(ctx, model, req, purpose, captureContent)
 	defer func() { finalizeLLMSpan(span, response, captureContent, retErr) }()
 	stream, err := model.Stream(ctx, req)
@@ -82,7 +83,7 @@ func StreamLLMToFinalAnswer(ctx context.Context, w TurnWriter, purpose string, m
 				usageReported = true
 				if sa, ok := w.(scopeAccessor); ok {
 					scope := sa.underlyingScope()
-					scope.state.emitLLMCalled(ctx, scope, response.Model, purpose, *usage)
+					scope.state.emitLLMCalled(ctx, scope, response.Model, purpose, *usage, info, response.Model)
 				}
 			}
 		}

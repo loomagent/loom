@@ -10,6 +10,8 @@ import (
 // exported as a metric label. QuotaLabel is a host-defined, stable, non-secret,
 // low-cardinality label suitable for metrics (for example, an API authority).
 type AttemptMeta struct {
+	// ModelInfo is fixed at model construction; quota identity remains private and separate.
+	ModelInfo  ModelInfo
 	QuotaKey   string
 	QuotaLabel string
 	Model      string
