@@ -10,6 +10,14 @@ concurrency. Host adapters must not implement a second iteration loop.
 - `CallModel` replaces non-delivery calls only (including buffered final rounds).
   `RunToFinalAnswer` always delivers its final round through Loom's streaming
   writer; the host cannot replace it with a buffered call or replay it on failure.
+- `PrepareModelCallContext` runs once per iteration after all step policies and
+  final instructions, before either `CallModel` or streamed final delivery.
+  Its value-only `ModelCallInfo` contains the zero-based step, span purpose,
+  settled final-phase flag and finalization reason. Return a child context to
+  attach request metadata, or an error to stop before the model is called. A nil
+  context is rejected. Policies, tools and later iterations retain the original
+  run context; provider retries and fallback stay inside the prepared call.
+  This hook does not capture the provider's final wire request or count tokens.
 - `ExecuteTools` receives only allowed, budget-reserved calls and the current
   registry subset. It may schedule concurrently, but returns exactly one result
   per call in input order. The core validates result identity before history use.

@@ -55,6 +55,11 @@ type Config struct {
 	// CallModel replaces research/buffered calls only. Final streamed delivery
 	// always uses StreamLLMToFinalAnswer, without host retries or fallback.
 	CallModel ModelCaller
+	// PrepareModelCallContext runs after policies have determined the final phase,
+	// immediately before either the custom caller or streamed final delivery. It
+	// must return a child of ctx. The returned context belongs only to that call;
+	// policies and tool execution continue with the original run context.
+	PrepareModelCallContext ModelCallContextPreparer
 	// ExecuteTools schedules already reserved calls against the visible registry.
 	ExecuteTools ToolExecutor
 	// MaxTokens is applied to every request, including final delivery.
@@ -77,6 +82,19 @@ type Config struct {
 // ModelCaller performs one non-delivery model call, including host fallback if
 // configured. State.Step is zero-based. Returning nil without an error is invalid.
 type ModelCaller func(context.Context, loom.Writer, State, string, loom.ChatModel, loom.ChatRequest) (*loom.ChatResponse, error)
+
+// ModelCallInfo describes the settled ReAct plan. Step is zero-based; it counts
+// ReAct iterations, not provider retries or fallback invocations.
+type ModelCallInfo struct {
+	Step               uint64
+	Purpose            string
+	IsFinalStep        bool
+	FinalizationReason string
+}
+
+// ModelCallContextPreparer attaches host-owned metadata or rejects admission.
+// It runs once per ReAct iteration, including tool-free final delivery.
+type ModelCallContextPreparer func(context.Context, ModelCallInfo) (context.Context, error)
 
 // ToolExecutor executes each input call once and returns one result per call in
 // the same order. The registry contains only this step's visible tools. Budget
@@ -422,13 +440,26 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			Reasoning:  requestReasoning,
 			MaxTokens:  cfg.MaxTokens,
 		}
+		callCtx := ctx
+		if cfg.PrepareModelCallContext != nil {
+			callCtx, err = cfg.PrepareModelCallContext(ctx, ModelCallInfo{
+				Step: step, Purpose: stepPurpose, IsFinalStep: plan.IsFinalStep,
+				FinalizationReason: finalizationReason,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("%s: step %d model context: %w", purpose, step+1, err)
+			}
+			if callCtx == nil {
+				return nil, fmt.Errorf("%s: step %d model context is nil", purpose, step+1)
+			}
+		}
 		var response *loom.ChatResponse
 		if plan.IsFinalStep && finalWriter != nil {
-			response, err = loom.StreamLLMToFinalAnswer(ctx, finalWriter, stepPurpose, cfg.Model, request)
+			response, err = loom.StreamLLMToFinalAnswer(callCtx, finalWriter, stepPurpose, cfg.Model, request)
 		} else if cfg.CallModel != nil {
-			response, err = cfg.CallModel(ctx, w, state, stepPurpose, cfg.Model, request)
+			response, err = cfg.CallModel(callCtx, w, state, stepPurpose, cfg.Model, request)
 		} else {
-			response, err = streamWithSensitiveFallback(ctx, w, stepPurpose, cfg.Model, request, cfg.SensitiveFallback)
+			response, err = streamWithSensitiveFallback(callCtx, w, stepPurpose, cfg.Model, request, cfg.SensitiveFallback)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: step %d model: %w", purpose, step+1, err)
