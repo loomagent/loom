@@ -61,6 +61,8 @@ type ItemFinishedEvent struct {
 // root. The framework core or a helper such as StreamLLMToStep emits it when the
 // call returns.
 type LLMCalledEvent struct {
+	CallID       string
+	InvocationID string
 	// ModelInfo is captured before invocation. Its Ref is unknown unless supplied
 	// by the host; ProviderReportedModel is never used to resolve that binding.
 	ModelInfo             ModelInfo

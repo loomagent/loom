@@ -266,7 +266,9 @@ func (s *turnState) emitLLMCalled(ctx context.Context, scope *writerScope, model
 	if stepPath == s.turnPath {
 		stepPath = "" // the turn root
 	}
+	invocation := InvocationFromContext(ctx)
 	ev := LLMCalledEvent{
+		CallID: invocation.CallID, InvocationID: invocation.InvocationID,
 		ModelInfo:             info,
 		ProviderReportedModel: reportedModel,
 		TurnIndex:             s.turnIdx,

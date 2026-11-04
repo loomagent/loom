@@ -94,6 +94,7 @@ func CallModel(
 		}
 	}
 
+	ctx = WithCallScope(ctx, purpose)
 	current := model
 	for attemptNum := uint64(1); ; attemptNum++ {
 		callReq := req
@@ -144,9 +145,11 @@ func CallModel(
 }
 
 func callModelOnce(ctx context.Context, purpose string, model ChatModel, req ChatRequest, captureContent bool, info ModelInfo) (*ChatResponse, error) {
+	ctx = modelObserverContext(ctx, model)
+	ctx = prepareInvocation(ctx, info, false)
 	displayName := model.Name()
 	llmCtx, span := startLLMSpan(ctx, model, req, purpose, captureContent)
-	resp, err := model.Chat(llmCtx, req)
+	resp, err := ObserveChat(llmCtx, info, func(callCtx context.Context) (*ChatResponse, error) { return model.Chat(callCtx, req) })
 	finalizeLLMSpan(span, resp, captureContent, err)
 	if resp != nil && nonZeroUsage(resp.Usage) {
 		if scope := usageScopeFromContext(ctx); scope != nil {
@@ -161,6 +164,9 @@ func callModelOnce(ctx context.Context, purpose string, model ChatModel, req Cha
 }
 
 func shouldFailover(ctx context.Context, cfg *FailoverConfig, attempt FailoverAttempt) bool {
+	if _, ok := errors.AsType[*ObservationError](attempt.Error); ok {
+		return false
+	}
 	if cfg == nil || cfg.GetFailoverModel == nil {
 		return false
 	}

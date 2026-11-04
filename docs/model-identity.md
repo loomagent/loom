@@ -53,7 +53,9 @@ of the private quota key. Caller retry configuration is copied before binding it
 The Ark SDK's internal retries are disabled so that every HTTP attempt passes
 through Loom's retry/admission layer.
 
-These fields do not create durable call or attempt IDs, or a lifecycle audit log.
+ModelInfo itself does not create a lifecycle audit log. The optional
+[call lifecycle](call-lifecycle.md) supplies CallID/InvocationID/AttemptID and
+mandatory observer error propagation; hosts still own durable storage.
 LLMCalled remains a usage event and is not emitted for unmetered failures. A host
 requiring durable audit must persist call starts, failed attempts and snapshot
 references through its own lifecycle/persistence boundary, including persistence

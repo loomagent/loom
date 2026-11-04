@@ -115,6 +115,9 @@ func (e *ClassifiedError) Unwrap() error { return e.Err }
 
 // ErrorClassOf reads the common error class from an error chain.
 func ErrorClassOf(err error) (ErrorClass, bool) {
+	if _, ok := errors.AsType[*ObservationError](err); ok {
+		return ErrorClassPermanent, true
+	}
 	var classified *ClassifiedError
 	if !errors.As(err, &classified) {
 		return ErrorClassUnknown, false
@@ -285,12 +288,13 @@ func ChatWithRetry(
 	var rateLimitStarted time.Time
 	resp, err := backoff.Retry(ctx, func() (*ChatResponse, error) {
 		totalAttempts++
-		permit, acquireErr := acquireAttempt(ctx, cfg, rateLimitStarted)
+		attemptCtx := newAttemptContext(ctx)
+		permit, acquireErr := acquireAttempt(attemptCtx, cfg, rateLimitStarted)
 		if acquireErr != nil {
 			lastClass = ErrorClassPermanent
 			return nil, backoff.Permanent(acquireErr)
 		}
-		callCtx, cancel := context.WithTimeout(ctx, cfg.PerCallTimeout)
+		callCtx, cancel := context.WithTimeout(attemptCtx, cfg.PerCallTimeout)
 		resp, err := fn(callCtx)
 		attemptCtxErr := callCtx.Err()
 		parentCtxErr := ctx.Err()
@@ -307,11 +311,11 @@ func ChatWithRetry(
 				err = &AttemptTimeoutError{Timeout: cfg.PerCallTimeout, Cause: err}
 				lastClass = ErrorClassTransient
 				finishAttempt(permit, AttemptResult{ErrorClass: lastClass, Err: err})
-				return nil, classifyForBackoff(err, ErrorClassTransient, cfg, &nonRateLimitAttempts, &rateLimitStarted)
+				return nil, classifyForBackoff(attemptCtx, err, ErrorClassTransient, cfg, &nonRateLimitAttempts, &rateLimitStarted)
 			}
 			lastClass = classifier.ClassifyError(err)
 			finishAttempt(permit, failedAttempt(classifier, lastClass, err))
-			return nil, classifyForBackoff(err, lastClass, cfg, &nonRateLimitAttempts, &rateLimitStarted)
+			return nil, classifyForBackoff(attemptCtx, err, lastClass, cfg, &nonRateLimitAttempts, &rateLimitStarted)
 		}
 		finishAttempt(permit, AttemptResult{Success: true})
 		return resp, nil
@@ -370,12 +374,13 @@ func StreamWithRetry(
 	var rateLimitStarted time.Time
 	stream, err := backoff.Retry(ctx, func() (Stream, error) {
 		totalAttempts++
-		permit, acquireErr := acquireAttempt(ctx, cfg, rateLimitStarted)
+		attemptCtx := newAttemptContext(ctx)
+		permit, acquireErr := acquireAttempt(attemptCtx, cfg, rateLimitStarted)
 		if acquireErr != nil {
 			lastClass = ErrorClassPermanent
 			return nil, backoff.Permanent(acquireErr)
 		}
-		stream, err := fn(ctx)
+		stream, err := fn(attemptCtx)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				lastClass = ErrorClassPermanent
@@ -384,7 +389,7 @@ func StreamWithRetry(
 			}
 			lastClass = classifier.ClassifyError(err)
 			finishAttempt(permit, failedAttempt(classifier, lastClass, err))
-			return nil, classifyForBackoff(err, lastClass, cfg, &nonRateLimitAttempts, &rateLimitStarted)
+			return nil, classifyForBackoff(attemptCtx, err, lastClass, cfg, &nonRateLimitAttempts, &rateLimitStarted)
 		}
 		// Probe the first frame: Stream() not returning an error does not mean the server
 		// accepted the request, because some providers only return a 4xx or 5xx body with
@@ -399,7 +404,7 @@ func StreamWithRetry(
 			}
 			lastClass = classifier.ClassifyError(recvErr)
 			finishAttempt(permit, failedAttempt(classifier, lastClass, recvErr))
-			return nil, classifyForBackoff(recvErr, lastClass, cfg, &nonRateLimitAttempts, &rateLimitStarted)
+			return nil, classifyForBackoff(attemptCtx, recvErr, lastClass, cfg, &nonRateLimitAttempts, &rateLimitStarted)
 		}
 		firstEOF := errors.Is(recvErr, io.EOF)
 		wrapped := &prefixStream{inner: stream, first: first, firstEOF: firstEOF, permit: permit, classifier: classifier}
@@ -431,12 +436,16 @@ func StreamWithRetry(
 // nonRateLimitAttempts is the running count of non-RateLimit errors, maintained by the
 // caller.
 func classifyForBackoff(
+	ctx context.Context,
 	err error,
 	class ErrorClass,
 	cfg *RetryConfig,
 	nonRateLimitAttempts *int,
 	rateLimitStarted *time.Time,
 ) error {
+	if failure := lifecycleFailure(ctx); failure != nil {
+		return backoff.Permanent(failure)
+	}
 	if cfg.Mode == RetryModeDisabled {
 		return backoff.Permanent(err)
 	}
@@ -510,7 +519,7 @@ func (s *prefixStream) finish(result AttemptResult) {
 	s.finishOnce.Do(func() { finishAttempt(s.permit, result) })
 }
 
-func acquireAttempt(ctx context.Context, cfg *RetryConfig, rateLimitStarted time.Time) (AttemptPermit, error) {
+func acquireQuotaAttempt(ctx context.Context, cfg *RetryConfig, rateLimitStarted time.Time) (AttemptPermit, error) {
 	if cfg.AttemptLimiter == nil {
 		return nil, nil
 	}
