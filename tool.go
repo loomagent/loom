@@ -44,6 +44,10 @@ type ToolInfo struct {
 	Description     string
 	Parameters      *Schema
 	RequiresNetwork bool
+	// BudgetExempt marks trusted runtime helpers that do not consume tool-call
+	// or tool-round budgets. It does not bypass MaxSteps, deadlines, cancellation,
+	// terminal isolation, or final-phase closure. It is independent of networking.
+	BudgetExempt bool
 	// EndsToolPhase marks a tool whose successful execution ends the tool phase: every later
 	// request carries no tools, so that call's content is the final answer by construction. A
 	// batch that calls it must call nothing else, and it is never withheld by a tool budget —
@@ -93,6 +97,12 @@ func WithEndsToolPhase() ToolOption {
 	return func(info *ToolInfo) {
 		info.EndsToolPhase = true
 	}
+}
+
+// WithBudgetExempt exempts a runtime helper from research tool budgets.
+// Only the host registering the tool may grant this classification.
+func WithBudgetExempt() ToolOption {
+	return func(info *ToolInfo) { info.BudgetExempt = true }
 }
 
 func WithRequiresNetwork() ToolOption {
