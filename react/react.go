@@ -60,6 +60,11 @@ type Config struct {
 	// CallModel replaces research/buffered calls only. Final streamed delivery
 	// always uses StreamLLMToFinalAnswer, without host retries or fallback.
 	CallModel ModelCaller
+	// ReserveTools admits one immutable snapshot of the accepted tool batch,
+	// after runtime budget checks and before any accepted tool is executed.
+	// Hosts can atomically persist reservations here. An error stops the run
+	// without executing the batch. Nil keeps in-memory reservation behavior.
+	ReserveTools ToolBatchReserver
 	// ExecuteTools schedules already reserved calls against the visible registry.
 	ExecuteTools ToolExecutor
 	// MaxTokens is applied to every request, including final delivery.
@@ -522,7 +527,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			}
 		} else {
 			previousUses := totalUses
-			results, executed, lastRefusal, err = executeStepTools(ctx, w, state, cfg, plan.Tools, response.ToolCalls, &totalUses, uses, exemptTools)
+			results, executed, lastRefusal, err = executeStepTools(ctx, w, state, cfg, plan.Tools, response.ToolCalls, &totalUses, uses, exemptTools, terminalTools)
 			if totalUses > previousUses {
 				toolRounds++
 			}
