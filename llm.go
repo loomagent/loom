@@ -459,9 +459,8 @@ type ChatResponse struct {
 	FinishReason FinishReason
 	Usage        Usage
 
-	// Model is the model id the provider actually used, for auditing and
-	// observability. It may differ from the one requested when the provider resolves
-	// an alias.
+	// Model is the provider-reported model identifier. It may differ from the
+	// requested alias; it is not an independently verified remote model version.
 	Model string
 }
 

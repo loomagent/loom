@@ -52,6 +52,10 @@ func StreamLLMToStep(
 	if err := ValidateChatRequest(req); err != nil {
 		return nil, LocalRequestError(err)
 	}
+	ctx = WithCallScope(ctx, purpose)
+	info := DescribeModel(model)
+	ctx = modelObserverContext(ctx, model)
+	ctx = prepareInvocation(ctx, info, true)
 	// OTel: start the LLM span, following the GenAI semantic conventions.
 	// captureContent, which comes through turnState, decides whether the prompt and the
 	// completion are written to span attributes.
@@ -61,7 +65,7 @@ func StreamLLMToStep(
 	}
 	llmCtx, llmSpan := startLLMSpan(ctx, model, req, purpose, captureContent)
 
-	stream, err := model.Stream(llmCtx, req)
+	stream, err := ObserveStream(llmCtx, info, func(callCtx context.Context) (Stream, error) { return model.Stream(callCtx, req) })
 	if err != nil {
 		finalizeLLMSpan(llmSpan, nil, captureContent, err)
 		return nil, err
@@ -221,7 +225,7 @@ func StreamLLMToStep(
 	if usage != nil && nonZeroUsage(*usage) {
 		if sa, ok := w.(scopeAccessor); ok {
 			scope := sa.underlyingScope()
-			scope.state.emitLLMCalled(ctx, scope, modelID, purpose, *usage)
+			scope.state.emitLLMCalled(ctx, scope, modelID, purpose, *usage, info, modelID)
 		}
 	}
 

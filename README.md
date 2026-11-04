@@ -406,6 +406,10 @@ wrapped in `RequestValidationError` before HTTP requests or model failover;
 Loom does not invent a task or convert another role to user. Structured calls
 also reject missing tasks before corrective retries or next-request callbacks.
 
+[Call lifecycle observers](docs/call-lifecycle.md) add explicit call/invocation/attempt identities and preserve mandatory persistence failures across retries, failover and streams. Hosts own snapshot storage, execution fencing and retention.
+
+Optional `ModelInfo` and host-owned `ModelRef` keep the configured request target separate from provider-reported model aliases. See [model identity and snapshot references](docs/model-identity.md) for event, attempt, probe and persistence boundaries.
+
 `modelfactory` selects providers explicitly and does not infer them from a URL.
 It accepts plain Go configuration and has no database or ORM dependency:
 

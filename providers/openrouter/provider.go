@@ -36,6 +36,8 @@ const DefaultBaseURL = "https://openrouter.ai/api/v1"
 
 // Config holds the OpenRouter provider's construction parameters.
 type Config struct {
+	// Ref is an optional host-owned instance/snapshot reference; never sent on the wire.
+	Ref loom.ModelRef
 	// APIKey is required.
 	APIKey string
 	// ModelName is required: the OpenRouter model identifier, such as "x-ai/grok-4.3".
@@ -59,6 +61,7 @@ type Config struct {
 
 // Model is one OpenRouter model instance, implementing loom.ChatModel.
 type Model struct {
+	ref          loom.ModelRef
 	client       openai.Client
 	name         string
 	retryCfg     *loom.RetryConfig
@@ -85,6 +88,9 @@ func New(cfg Config) (*Model, error) {
 	if retryCfg == nil {
 		retryCfg = loom.DefaultRetryConfig()
 	}
+	capturedRetry := *retryCfg
+	capturedRetry.AttemptMeta.ModelInfo = loom.ModelInfo{Ref: cfg.Ref, Provider: "openrouter", RequestModel: cfg.ModelName}
+	retryCfg = &capturedRetry
 	// Capabilities come from the caller or modelfactory; no model default is hardcoded
 	// here. Building the model without them leaves every capability undeclared, so each
 	// check passes requests through.
@@ -97,6 +103,7 @@ func New(cfg Config) (*Model, error) {
 		return nil, fmt.Errorf("loom/openrouter: %w", err)
 	}
 	return &Model{
+		ref: cfg.Ref,
 		// loom owns every retry (ChatWithRetry / StreamWithRetry), so the SDK must
 		// not retry underneath; its default retries would multiply the attempts and
 		// bypass the shared rate-limit cooldown.
@@ -110,6 +117,11 @@ func New(cfg Config) (*Model, error) {
 // Name returns an identifier of the form "openrouter/<model>".
 func (m *Model) Name() string {
 	return "openrouter/" + m.name
+}
+
+// ModelInfo returns the configured target, independently of response model aliases.
+func (m *Model) ModelInfo() loom.ModelInfo {
+	return loom.ModelInfo{Ref: m.ref, Provider: "openrouter", RequestModel: m.name}
 }
 
 // Capabilities returns the model capabilities declared at initialization.

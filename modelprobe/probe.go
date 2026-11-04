@@ -25,12 +25,16 @@ const (
 // through without local capability gating.
 // Options are snapshotted before either Builder call; subsequent host edits do
 // not change the declaration, candidates, or source URLs used by this audit.
-func Probe(ctx context.Context, builder Builder, options Options) (Report, error) {
+func Probe(ctx context.Context, builder Builder, options Options) (report Report, runErr error) {
 	if builder == nil {
 		return Report{}, errors.New("modelprobe: Builder is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return Report{}, err
+	}
+	startedAt := time.Now().UTC()
+	if options.TargetRef != nil {
+		options.TargetRef = new(*options.TargetRef)
 	}
 	if options.DeclaredCapabilities != nil {
 		declared := options.DeclaredCapabilities.Clone()
@@ -61,12 +65,25 @@ func Probe(ctx context.Context, builder Builder, options Options) (Report, error
 		return Report{}, fmt.Errorf("modelprobe: Builder returned different models %q and %q", omitModel.Name(), rawModel.Name())
 	}
 
+	omitRef, rawRef := loom.DescribeModel(omitModel).Ref, loom.DescribeModel(rawModel).Ref
+	if omitRef != (loom.ModelRef{}) && rawRef != (loom.ModelRef{}) && omitRef != rawRef {
+		return Report{}, errors.New("modelprobe: Builder returned different model bindings")
+	}
+	for _, model := range []loom.ChatModel{omitModel, rawModel} {
+		ref := loom.DescribeModel(model).Ref
+		if options.TargetRef != nil && ref != (loom.ModelRef{}) && ref != *options.TargetRef {
+			return Report{}, errors.New("modelprobe: Builder model binding does not match TargetRef")
+		}
+	}
+
 	coverage := effortCoverage(options)
 	efforts := coverage.Candidates
 	if err := validateEfforts(efforts); err != nil {
 		return Report{}, err
 	}
-	report := Report{SchemaVersion: 2, Model: rawModel.Name(), Checks: []Check{}, EffortCoverage: coverage}
+	report = Report{TargetRef: options.TargetRef, StartedAt: startedAt, SchemaVersion: 2, Model: rawModel.Name(), Checks: []Check{}, EffortCoverage: coverage}
+
+	defer func() { report.FinishedAt = time.Now().UTC() }()
 
 	for _, experiment := range []struct {
 		model    loom.ChatModel

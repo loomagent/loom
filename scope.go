@@ -247,7 +247,7 @@ func (s *turnState) emitItemFinished(ctx context.Context, item Item) {
 //
 // Serialisation: as with emitItem*, the fan-out happens outside the lock, so
 // Sink.LLMCalled must not assume mu is held.
-func (s *turnState) emitLLMCalled(ctx context.Context, scope *writerScope, model, purpose string, usage Usage) {
+func (s *turnState) emitLLMCalled(ctx context.Context, scope *writerScope, model, purpose string, usage Usage, info ModelInfo, reportedModel string) {
 	s.mu.Lock()
 	if !s.isClosed() {
 		// Accumulate item.Usage up the index chain, skipping the turn root where indices is
@@ -266,14 +266,18 @@ func (s *turnState) emitLLMCalled(ctx context.Context, scope *writerScope, model
 	if stepPath == s.turnPath {
 		stepPath = "" // the turn root
 	}
+	invocation := InvocationFromContext(ctx)
 	ev := LLMCalledEvent{
-		TurnIndex: s.turnIdx,
-		TurnPath:  s.turnPath,
-		StepPath:  stepPath,
-		Model:     model,
-		Purpose:   purpose,
-		Usage:     usage,
-		Time:      time.Now(),
+		CallID: invocation.CallID, InvocationID: invocation.InvocationID,
+		ModelInfo:             info,
+		ProviderReportedModel: reportedModel,
+		TurnIndex:             s.turnIdx,
+		TurnPath:              s.turnPath,
+		StepPath:              stepPath,
+		Model:                 model,
+		Purpose:               purpose,
+		Usage:                 usage,
+		Time:                  time.Now(),
 	}
 	s.fanOut(func(sink Sink) error { return sink.LLMCalled(ctx, ev) })
 }

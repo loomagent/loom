@@ -234,6 +234,9 @@ func ChatStructuredArgs(
 		if err == nil {
 			return args, resp, nil
 		}
+		if _, persistenceFailure := errors.AsType[*ObservationError](err); persistenceFailure {
+			return Args{}, resp, err
+		}
 		if errors.Is(err, ErrMissingUserMessage) {
 			return Args{}, resp, err
 		}

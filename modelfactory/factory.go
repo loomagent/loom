@@ -24,6 +24,8 @@ var ErrInvalidConfig = errors.New("modelfactory: invalid config")
 // Config contains the provider-neutral settings needed to construct a model.
 // Secrets are consumed in memory and are never logged by this package.
 type Config struct {
+	// Ref is supplied by the host and is passed unchanged to the selected provider.
+	Ref loom.ModelRef
 	// Provider is required and must be one of ProviderValues.
 	Provider Provider
 	// APIKey is required by every built-in provider.
@@ -108,9 +110,10 @@ func Build(cfg Config) (loom.ChatModel, error) {
 	)
 	switch cfg.Provider {
 	case ProviderZhipuAI:
-		model, err = zhipuai.New(zhipuai.Config{APIKey: cfg.APIKey, ModelName: cfg.Model, BaseURL: cfg.BaseURL, Retry: retry, HTTPClient: cfg.HTTPClient, Capabilities: cfg.Capabilities, RequestHeaders: cfg.RequestHeaders})
+		model, err = zhipuai.New(zhipuai.Config{Ref: cfg.Ref, APIKey: cfg.APIKey, ModelName: cfg.Model, BaseURL: cfg.BaseURL, Retry: retry, HTTPClient: cfg.HTTPClient, Capabilities: cfg.Capabilities, RequestHeaders: cfg.RequestHeaders})
 	case ProviderArk:
 		model, err = ark.New(ark.Config{
+			Ref:            cfg.Ref,
 			APIKey:         cfg.APIKey,
 			ModelName:      cfg.Model,
 			BaseURL:        cfg.BaseURL,
@@ -121,6 +124,7 @@ func Build(cfg Config) (loom.ChatModel, error) {
 		})
 	case ProviderDeepSeek:
 		model, err = deepseek.New(deepseek.Config{
+			Ref:            cfg.Ref,
 			APIKey:         cfg.APIKey,
 			ModelName:      cfg.Model,
 			BaseURL:        cfg.BaseURL,
@@ -131,6 +135,7 @@ func Build(cfg Config) (loom.ChatModel, error) {
 		})
 	case ProviderOpenRouter:
 		model, err = openrouter.New(openrouter.Config{
+			Ref:            cfg.Ref,
 			APIKey:         cfg.APIKey,
 			ModelName:      cfg.Model,
 			BaseURL:        cfg.BaseURL,
