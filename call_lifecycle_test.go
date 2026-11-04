@@ -2,13 +2,66 @@ package loom
 
 import (
 	"context"
+	json "encoding/json/v2"
 	"errors"
 	"io"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 )
+
+func TestLifecycleSelectedRequestEvidenceNeverSerializesContent(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"chat", "research stream", "final stream", "direct observe"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			request := ChatRequest{Messages: []Message{{Role: RoleUser, Content: "private-request-marker"}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}, MaxTokens: new(123)}
+			starts := 0
+			ctx := WithLifecycleObserver(t.Context(), LifecycleObserverFunc(func(_ context.Context, event LifecycleEvent) error {
+				if event.Kind == "call_started" {
+					starts++
+					if event.Request == nil || !reflect.DeepEqual(*event.Request, request) {
+						t.Fatalf("selected request evidence=%+v", event.Request)
+					}
+				}
+				data, err := json.Marshal(event)
+				if err != nil {
+					return err
+				}
+				if strings.Contains(string(data), "private-request-marker") || strings.Contains(string(data), "Messages") {
+					t.Fatal("transient input leaked into serialized lifecycle")
+				}
+				return nil
+			}))
+			var err error
+			switch name {
+			case "chat":
+				_, err = CallModel(ctx, "test", &fakeCallModel{responses: []*ChatResponse{{Content: "answer"}}}, request)
+			case "direct observe":
+				_, err = ObserveChat(ctx, ModelInfo{}, func(context.Context) (*ChatResponse, error) { return &ChatResponse{}, nil }, WithObservedRequest(request))
+			default:
+				_, err = Run(ctx, func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
+					model := &mockChatModel{chunks: []*Chunk{{ContentDelta: "answer", FinishReason: FinishReasonStop}}}
+					if name == "final stream" {
+						_, err := StreamLLMToFinalAnswer(ctx, w, "final", model, request)
+						return err
+					}
+					response, err := StreamLLMToStep(ctx, w, "research", model, request)
+					if err != nil {
+						return err
+					}
+					return w.FinalAnswer(ctx, response.Content)
+				}, RunOptions{ConversationID: name})
+			}
+			if err != nil || starts != 1 {
+				t.Fatalf("starts=%d err=%v", starts, err)
+			}
+		})
+	}
+}
 
 type lifecycleLog struct {
 	mu       sync.Mutex

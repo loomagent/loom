@@ -64,7 +64,7 @@ func StreamLLMToFinalAnswer(ctx context.Context, w TurnWriter, purpose string, m
 	ctx = prepareInvocation(ctx, info, true)
 	ctx, span := startLLMSpan(ctx, model, req, purpose, captureContent)
 	defer func() { finalizeLLMSpan(span, response, captureContent, retErr) }()
-	stream, err := ObserveStream(ctx, info, func(callCtx context.Context) (Stream, error) { return model.Stream(callCtx, req) })
+	stream, err := ObserveStream(ctx, info, func(callCtx context.Context) (Stream, error) { return model.Stream(callCtx, req) }, WithObservedRequest(req))
 	if err != nil {
 		return nil, err
 	}
