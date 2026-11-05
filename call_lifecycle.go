@@ -248,7 +248,7 @@ type lifecycleStream struct {
 	ctx       context.Context
 	mu        sync.Mutex
 	response  ChatResponse
-	done      bool
+	finishing chan struct{}
 	finishErr error
 	closeOnce sync.Once
 	closeErr  error
@@ -256,12 +256,19 @@ type lifecycleStream struct {
 
 func (s *lifecycleStream) end(outcome string, err error) error {
 	s.mu.Lock()
-	if s.done {
-		err := s.finishErr
+	if s.finishing != nil {
+		// A concurrent end path must observe the same terminal record instead
+		// of returning before the first caller finished persisting it.
+		finished := s.finishing
 		s.mu.Unlock()
-		return err
+		<-finished
+		s.mu.Lock()
+		finishErr := s.finishErr
+		s.mu.Unlock()
+		return finishErr
 	}
-	s.done = true
+	finished := make(chan struct{})
+	s.finishing = finished
 	response := s.response
 	s.mu.Unlock()
 	err = errors.Join(err, lifecycleFailure(s.ctx))
@@ -272,6 +279,7 @@ func (s *lifecycleStream) end(outcome string, err error) error {
 	s.mu.Lock()
 	s.finishErr = finishErr
 	s.mu.Unlock()
+	close(finished)
 	return finishErr
 }
 func (s *lifecycleStream) Recv() (*Chunk, error) {

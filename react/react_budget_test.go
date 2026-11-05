@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/loomagent/loom"
@@ -35,7 +36,7 @@ func TestInternalToolsPreserveResearchBudgets(t *testing.T) {
 				loom.NewArgsTool(loom.MustArgsContract("archive_read"), "read", func(context.Context, loom.Args) (string, error) { reads++; return "saved evidence", nil }, loom.WithBudgetExempt(), loom.WithRequiresNetwork()),
 				loom.NewArgsTool(loom.MustArgsContract("finish"), "finish", func(context.Context, loom.Args) (string, error) { return "ok", nil }, loom.WithEndsToolPhase()),
 			)
-			cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "research"}}, Model: model, Tools: tools, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxSteps: 10, TerminalToolName: "finish", ToolCallLimits: map[string]uint64{"archive_read": 1}}
+			cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "research"}}, Model: model, Tools: tools, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxSteps: 10, TerminalToolName: "finish", ToolCallLimits: map[string]uint64{}}
 			wantResearch := 2
 			switch budget {
 			case "rounds":
@@ -140,5 +141,18 @@ func TestToolRoundLimitCannotBeReopenedByPolicy(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("failed business reservations/policy bypass: calls=%d", count)
+	}
+}
+
+func TestBudgetExemptToolLimitIsRejected(t *testing.T) {
+	t.Parallel()
+	tool := loom.NewArgsTool(loom.MustArgsContract("archive_read"), "read", func(context.Context, loom.Args) (string, error) { return "saved", nil }, loom.WithBudgetExempt())
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "research"}}, Model: &scriptedModel{}, Tools: loom.NewToolRegistry(tool), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, ToolCallLimits: map[string]uint64{"archive_read": 1}}
+	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+		_, e := Run(ctx, w, cfg)
+		return e
+	}, loom.RunOptions{ConversationID: "exempt-limit"})
+	if err == nil || !strings.Contains(err.Error(), `budget-exempt tool "archive_read" cannot have a tool limit`) {
+		t.Fatalf("config conflict accepted: %v", err)
 	}
 }

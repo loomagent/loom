@@ -237,3 +237,43 @@ func TestLifecycleFailureIsNotStructuredRepairInput(t *testing.T) {
 		t.Fatalf("audit failure triggered structured repair: err=%v callbacks=%d requests=%d", err, callbacks, len(model.requests))
 	}
 }
+
+func TestLifecycleConcurrentEndWaitsForTerminalRecord(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	failure := errors.New("terminal record failed")
+	var once sync.Once
+	log := LifecycleObserverFunc(func(_ context.Context, event LifecycleEvent) error {
+		if event.Kind != "call_finished" {
+			return nil
+		}
+		once.Do(func() { close(entered) })
+		<-release
+		return failure
+	})
+	ctx := WithLifecycleObserver(t.Context(), log)
+	stream, err := ObserveStream(ctx, ModelInfo{}, func(context.Context) (Stream, error) {
+		return &mockStream{chunks: []*Chunk{{ContentDelta: "ok", Model: "remote"}}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatal(err)
+	}
+	recvErr := make(chan error, 1)
+	go func() {
+		_, err := stream.Recv() // EOF enters end() first and blocks inside the observer.
+		recvErr <- err
+	}()
+	<-entered
+	closeErr := make(chan error, 1)
+	go func() { closeErr <- stream.Close() }()
+	close(release)
+	if err := <-recvErr; !errors.Is(err, failure) {
+		t.Fatalf("recv end lost terminal failure: %v", err)
+	}
+	if err := <-closeErr; !errors.Is(err, failure) {
+		t.Fatalf("concurrent close bypassed terminal record: %v", err)
+	}
+}

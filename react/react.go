@@ -330,6 +330,13 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			return nil, fmt.Errorf("%s: terminal tool %q cannot have a tool limit", purpose, name)
 		}
 	}
+	for name := range exemptTools {
+		// An exempt tool ignores business budgets by design; a per-tool limit
+		// on it would be silently ineffective, so the combination is invalid.
+		if _, set := cfg.ToolCallLimits[name]; set && !terminalTools[name] {
+			return nil, fmt.Errorf("%s: budget-exempt tool %q cannot have a tool limit", purpose, name)
+		}
+	}
 	maxRefusals := cfg.MaxConsecutiveRefusals
 	if maxRefusals == 0 {
 		maxRefusals = defaultMaxConsecutiveRefusals

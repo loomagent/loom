@@ -68,6 +68,11 @@ func executeStepTools(ctx context.Context, w loom.Writer, state State, cfg Confi
 			return nil, false, refusal, fmt.Errorf("reserve tool batch: %w", err)
 		}
 	}
+	// A cancel that lands while the host commits the reservation must not start
+	// the batch: the reservation stays committed, the calls stay unexecuted.
+	if err := ctx.Err(); err != nil {
+		return nil, false, refusal, fmt.Errorf("execute tool batch: %w", err)
+	}
 	var done []loom.ToolExecResult
 	if cfg.ExecuteTools != nil {
 		// Keep an immutable copy for contract validation after the host returns.

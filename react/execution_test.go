@@ -208,3 +208,29 @@ func TestFailedExecutionKeepsItsRecordedReservation(t *testing.T) {
 		t.Fatalf("status=%s err=%v used=%d reserved=%d", turn.Status, err, used, reserved)
 	}
 }
+
+func TestToolBatchSkippedWhenCancelLandsDuringReservation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	executed, scheduled := 0, false
+	tool := loom.NewArgsTool(loom.MustArgsContract("business"), "business", func(context.Context, loom.Args) (string, error) {
+		executed++
+		return "ok", nil
+	})
+	cfg := Config{Model: &scriptedModel{responses: []*loom.ChatResponse{{ToolCalls: []loom.ToolCall{{ID: "a", Name: "business"}}, FinishReason: loom.FinishReasonToolCalls}}},
+		Tools:     loom.NewToolRegistry(tool),
+		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+		ReserveTools: func(context.Context, ToolReservationBatch) error {
+			// The host transaction commits and the user cancels right after.
+			cancel()
+			return nil
+		},
+		ExecuteTools: func(context.Context, loom.Writer, State, *loom.ToolRegistry, []loom.ToolCall) ([]loom.ToolExecResult, error) {
+			scheduled = true
+			return nil, nil
+		}}
+	turn, err := runReservationTest(t, ctx, cfg)
+	// loom maps a plain user cancel to a cancelled turn without an API error.
+	if err != nil || turn.Status != loom.TurnStatusCancelled || executed != 0 || scheduled {
+		t.Fatalf("err=%v status=%s executed=%d scheduled=%v", err, turn.Status, executed, scheduled)
+	}
+}
