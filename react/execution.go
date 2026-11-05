@@ -14,7 +14,7 @@ var ErrInvalidToolExecution = errors.New("invalid tool executor results")
 
 // executeStepTools reserves in model order before handing an eligible batch to
 // a scheduler. Rejected calls keep their original position in model history.
-func executeStepTools(ctx context.Context, w loom.Writer, state State, cfg Config, visible []*loom.ToolInfo, calls []loom.ToolCall, total *uint64, uses map[string]uint64, exempt, terminal map[string]bool) ([]loom.ToolExecResult, bool, string, error) {
+func executeStepTools(ctx context.Context, w loom.Writer, state State, cfg Config, visible []*loom.ToolInfo, calls []loom.ToolCall, total *uint64, uses map[string]uint64, free, terminal map[string]bool) ([]loom.ToolExecResult, bool, string, error) {
 	names := make([]string, 0, len(visible))
 	for _, info := range visible {
 		if info != nil {
@@ -33,11 +33,11 @@ func executeStepTools(ctx context.Context, w loom.Writer, state State, cfg Confi
 	previousUses := *total
 	for i, call := range calls {
 		code, reason := "", ""
-		if why := toolBudgetReason(call.Name, cfg, *total, state.ToolRoundsUsed, uses, exempt); why != "" {
+		if why := toolBudgetReason(call.Name, cfg, *total, state.ToolRoundsUsed, uses, free); why != "" {
 			code, reason = "tool_budget_exhausted", why
 		} else if _, ok := registry.Lookup(call.Name); !ok {
 			code, reason = "tool_not_available", fmt.Sprintf("tool %q not registered for this step", call.Name)
-		} else if why := reserveTool(call.Name, cfg, total, state.ToolRoundsUsed, uses, exempt); why != "" {
+		} else if why := reserveTool(call.Name, cfg, total, state.ToolRoundsUsed, uses, free); why != "" {
 			code, reason = "tool_budget_exhausted", why
 		}
 		if reason != "" {
@@ -52,7 +52,7 @@ func executeStepTools(ctx context.Context, w loom.Writer, state State, cfg Confi
 		pending = append(pending, call)
 		positions = append(positions, i)
 		if cfg.ReserveTools != nil {
-			reservations = append(reservations, ToolReservation{Index: uint64(i), CallID: call.ID, Name: call.Name, BudgetExempt: exempt[call.Name], EndsToolPhase: terminal[call.Name]})
+			reservations = append(reservations, ToolReservation{Index: uint64(i), CallID: call.ID, Name: call.Name, Billable: !free[call.Name], EndsToolPhase: terminal[call.Name]})
 		}
 	}
 	if len(pending) == 0 {

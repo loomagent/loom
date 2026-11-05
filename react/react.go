@@ -28,12 +28,12 @@ type Config struct {
 	// MaxSteps is the number of tool-capable model rounds. When reached, Run
 	// performs one final tool-free soft-landing call. Zero means unlimited.
 	MaxSteps uint64
-	// MaxToolRounds limits batches that reserve at least one non-exempt tool.
-	// Internal-only, terminal and entirely refused batches do not consume rounds.
-	// Exhaustion hides budgeted tools, leaving helpers and terminals available.
+	// MaxToolRounds limits batches that reserve at least one billable tool.
+	// Free-only, terminal and entirely refused batches do not consume rounds.
+	// Exhaustion hides billable tools, leaving free helpers and terminals available.
 	// Zero means unlimited. Use MaxSteps independently to bound all model rounds.
 	MaxToolRounds uint64
-	// MaxToolCalls limits non-exempt tool reservations across the run.
+	// MaxToolCalls limits billable tool reservations across the run.
 	MaxToolCalls uint64
 	// ToolCallLimits applies per-tool limits. Missing and zero values are unlimited.
 	ToolCallLimits map[string]uint64
@@ -74,12 +74,6 @@ type Config struct {
 	ExecuteTools ToolExecutor
 	// MaxTokens is applied to every request, including final delivery.
 	MaxTokens *int
-	// TerminalToolName gives an existing registered tool the terminal protocol:
-	// call alone, exempt from research budgets, end the phase only on success.
-	// The name is arbitrary; no business tool names are built into the runtime.
-	// A configured terminal remains available when research budgets are exhausted.
-	// Empty uses only the tools already marked EndsToolPhase.
-	TerminalToolName string
 
 	StepPolicies       []StepPolicy
 	AfterToolsPolicies []AfterToolsPolicy
@@ -126,7 +120,7 @@ type State struct {
 	Step      uint64
 	Messages  []loom.Message
 	ToolInfos []*loom.ToolInfo
-	// ToolRoundsUsed counts batches with at least one budgeted reservation.
+	// ToolRoundsUsed counts batches with at least one billable reservation.
 	ToolRoundsUsed uint64
 	ToolCallsUsed  uint64
 	ToolUses       map[string]uint64
@@ -304,37 +298,30 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 	if err != nil {
 		return nil, fmt.Errorf("%s: list tools: %w", purpose, err)
 	}
-	if name := cfg.TerminalToolName; name != "" {
-		if _, ok := cfg.Tools.Lookup(name); !ok {
-			return nil, fmt.Errorf("%s: unknown terminal tool %q", purpose, name)
-		}
-	}
 	// Decorate this run's metadata snapshot, never mutate the shared registry.
 	for i, info := range allTools {
-		if info != nil && (info.EndsToolPhase || cfg.TerminalToolName != "" && info.Name == cfg.TerminalToolName) {
-			copy := *info
-			copy.EndsToolPhase = true
-			copy.Description = loom.TerminalToolDescription
-			allTools[i] = &copy
+		if info != nil && info.EndsToolPhase {
+			copied := *info
+			copied.Description = loom.PhaseEndToolDescription
+			allTools[i] = &copied
 		}
 	}
-	exemptTools := make(map[string]bool)
-	for _, info := range allTools {
-		if info != nil && (info.BudgetExempt || info.EndsToolPhase) {
-			exemptTools[info.Name] = true
-		}
-	}
+	freeTools := make(map[string]bool)
 	terminalTools := terminalToolNames(allTools)
 	for name := range terminalTools {
 		if _, set := cfg.ToolCallLimits[name]; set {
-			return nil, fmt.Errorf("%s: terminal tool %q cannot have a tool limit", purpose, name)
+			return nil, fmt.Errorf("%s: phase-ending tool %q cannot have a tool limit", purpose, name)
 		}
 	}
-	for name := range exemptTools {
-		// An exempt tool ignores business budgets by design; a per-tool limit
+	for _, info := range allTools {
+		if info == nil || info.Billable {
+			continue
+		}
+		freeTools[info.Name] = true
+		// A free tool ignores business budgets by design; a per-tool limit
 		// on it would be silently ineffective, so the combination is invalid.
-		if _, set := cfg.ToolCallLimits[name]; set && !terminalTools[name] {
-			return nil, fmt.Errorf("%s: budget-exempt tool %q cannot have a tool limit", purpose, name)
+		if _, set := cfg.ToolCallLimits[info.Name]; set && !terminalTools[info.Name] {
+			return nil, fmt.Errorf("%s: free tool %q cannot have a tool limit", purpose, info.Name)
 		}
 	}
 	maxRefusals := cfg.MaxConsecutiveRefusals
@@ -395,7 +382,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 				finalPrompt = prompt
 			}
 		}
-		if finalWriter != nil && !plan.IsFinalStep && (len(allTools) == 0 || researchBudgetExhausted(allTools, plan.Tools) && cfg.TerminalToolName == "") {
+		if finalWriter != nil && !plan.IsFinalStep && (len(allTools) == 0 || researchBudgetExhausted(allTools, plan.Tools)) {
 			finalizationReason = "tool_budget"
 			if len(allTools) == 0 {
 				finalizationReason = "no_tools"
@@ -565,7 +552,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			}
 		} else {
 			previousUses := totalUses
-			results, executed, lastRefusal, err = executeStepTools(ctx, w, state, cfg, plan.Tools, response.ToolCalls, &totalUses, uses, exemptTools, terminalTools)
+			results, executed, lastRefusal, err = executeStepTools(ctx, w, state, cfg, plan.Tools, response.ToolCalls, &totalUses, uses, freeTools, terminalTools)
 			if totalUses > previousUses {
 				toolRounds++
 			}
@@ -807,9 +794,9 @@ func availableTools(all []*loom.ToolInfo, cfg Config, total, rounds uint64, uses
 		if info == nil {
 			continue
 		}
-		// A terminal tool is not a research tool: it is the only way the phase can end, so no
-		// budget withholds it.
-		if info.EndsToolPhase || info.BudgetExempt {
+		// A free tool never competes with paid budgets, and a phase-ending tool
+		// is the only way the phase can end, so no budget withholds either.
+		if !info.Billable {
 			out = append(out, info)
 			continue
 		}
@@ -824,8 +811,8 @@ func availableTools(all []*loom.ToolInfo, cfg Config, total, rounds uint64, uses
 	return out
 }
 
-func toolBudgetReason(name string, cfg Config, total, rounds uint64, uses map[string]uint64, exempt map[string]bool) string {
-	if exempt[name] {
+func toolBudgetReason(name string, cfg Config, total, rounds uint64, uses map[string]uint64, free map[string]bool) string {
+	if free[name] {
 		return ""
 	}
 	if cfg.MaxToolRounds > 0 && rounds >= cfg.MaxToolRounds {
@@ -840,11 +827,11 @@ func toolBudgetReason(name string, cfg Config, total, rounds uint64, uses map[st
 	return ""
 }
 
-func reserveTool(name string, cfg Config, total *uint64, rounds uint64, uses map[string]uint64, exempt map[string]bool) string {
-	if reason := toolBudgetReason(name, cfg, *total, rounds, uses, exempt); reason != "" {
+func reserveTool(name string, cfg Config, total *uint64, rounds uint64, uses map[string]uint64, free map[string]bool) string {
+	if reason := toolBudgetReason(name, cfg, *total, rounds, uses, free); reason != "" {
 		return reason
 	}
-	if !exempt[name] {
+	if !free[name] {
 		*total++
 		uses[name]++
 	}

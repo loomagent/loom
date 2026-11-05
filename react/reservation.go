@@ -10,16 +10,16 @@ type ToolReservation struct {
 	Index         uint64
 	CallID        string
 	Name          string
-	BudgetExempt  bool
+	Billable      bool
 	EndsToolPhase bool
 }
 
 // ToolReservationBatch is a value snapshot after reserving the whole accepted
 // batch and before execution starts. Step follows State.Step's zero-based
-// main-model index. Business counts include failed or not-yet-started calls;
-// exempt calls, including terminal calls, do not enter these counts.
-// ToolUses is the per-business-tool count, not a count of all executions.
-// Reservations includes accepted internal and terminal calls in model order.
+// main-model index. Billable counts include failed or not-yet-started calls;
+// free calls, including terminal calls, do not enter these counts.
+// ToolUses is the per-billable-tool count, not a count of all executions.
+// Reservations includes accepted free and terminal calls in model order.
 // A host may retain or change the snapshot without changing runtime state.
 type ToolReservationBatch struct {
 	Step           uint64

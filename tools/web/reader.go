@@ -95,5 +95,5 @@ func NewReaderTool(reader WebReader, options ReaderToolOptions) (loom.Tool, erro
 			return "", fmt.Errorf("web reader: marshal document: %w", err)
 		}
 		return string(data), nil
-	}, loom.WithRequiresNetwork()), nil
+	}, loom.WithBillable()), nil
 }

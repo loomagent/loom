@@ -45,8 +45,8 @@ func TestToolBatchReservationPrecedesExecutionAndPreservesModelOrder(t *testing.
 		{ToolCalls: []loom.ToolCall{{ID: "f", Name: "finish"}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "answer", FinishReason: loom.FinishReasonStop},
 	}}
-	cfg := Config{Model: model, Tools: loom.NewToolRegistry(tool("business"), tool("helper", loom.WithBudgetExempt()), tool("hidden"), tool("finish")),
-		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxToolCalls: 1, MaxToolRounds: 1, TerminalToolName: "finish",
+	cfg := Config{Model: model, Tools: loom.NewToolRegistry(tool("business", loom.WithBillable()), tool("helper"), tool("hidden"), tool("finish", loom.WithEndsToolPhase())),
+		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxToolCalls: 1, MaxToolRounds: 1,
 		StepPolicies: []StepPolicy{StepPolicyFunc(func(_ context.Context, _ State, plan *StepPlan) error {
 			visible := plan.Tools[:0]
 			for _, info := range plan.Tools {
@@ -84,12 +84,12 @@ func TestToolBatchReservationPrecedesExecutionAndPreservesModelOrder(t *testing.
 	if !reflect.DeepEqual(executed, []string{"business", "helper", "helper", "finish"}) || len(batches) != 3 {
 		t.Fatalf("executed=%v batches=%+v", executed, batches)
 	}
-	want := []ToolReservation{{Index: 0, CallID: "a", Name: "business"}, {Index: 2, CallID: "c", Name: "helper", BudgetExempt: true}}
+	want := []ToolReservation{{Index: 0, CallID: "a", Name: "business", Billable: true}, {Index: 2, CallID: "c", Name: "helper"}}
 	if !reflect.DeepEqual(batches[0].Reservations, want) {
 		t.Fatalf("accepted positions/classification=%+v", batches[0].Reservations)
 	}
-	if got := batches[2].Reservations; len(got) != 1 || !got[0].EndsToolPhase || !got[0].BudgetExempt {
-		t.Fatalf("configured terminal classification=%+v", got)
+	if got := batches[2].Reservations; len(got) != 1 || !got[0].EndsToolPhase || got[0].Billable {
+		t.Fatalf("phase-ending reservation classification=%+v", got)
 	}
 	if len(model.requests[len(model.requests)-1].Tools) != 0 {
 		t.Fatal("terminal reservation reopened tools")
@@ -113,7 +113,7 @@ func TestToolBatchReservationFailurePreventsAllAcceptedExecution(t *testing.T) {
 				calls = []loom.ToolCall{{ID: "f", Name: "finish"}}
 			}
 			cfg := Config{Model: &scriptedModel{responses: []*loom.ChatResponse{{ToolCalls: calls, FinishReason: loom.FinishReasonToolCalls}}},
-				Tools:     loom.NewToolRegistry(tool("business"), tool("helper", loom.WithBudgetExempt()), tool("finish", loom.WithEndsToolPhase())),
+				Tools:     loom.NewToolRegistry(tool("business"), tool("helper"), tool("finish", loom.WithEndsToolPhase())),
 				Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 				ReserveTools: func(_ context.Context, batch ToolReservationBatch) error {
 					reserved++
@@ -138,7 +138,7 @@ func TestRefusedToolBatchesAreNotReserved(t *testing.T) {
 	for _, name := range []string{"unknown", "hidden", "mixed_terminal", "over_budget"} {
 		t.Run(name, func(t *testing.T) {
 			used, reserved := 0, 0
-			business := loom.NewArgsTool(loom.MustArgsContract("business"), "business", func(context.Context, loom.Args) (string, error) { used++; return "ok", nil })
+			business := loom.NewArgsTool(loom.MustArgsContract("business"), "business", func(context.Context, loom.Args) (string, error) { used++; return "ok", nil }, loom.WithBillable())
 			terminal := loom.NewArgsTool(loom.MustArgsContract("finish"), "finish", func(context.Context, loom.Args) (string, error) { t.Fatal("refused terminal ran"); return "", nil }, loom.WithEndsToolPhase())
 			calls := []loom.ToolCall{{ID: "a", Name: "missing"}}
 			if name != "unknown" {
@@ -184,7 +184,7 @@ func TestFailedExecutionKeepsItsRecordedReservation(t *testing.T) {
 		}
 		used++
 		return "", errors.New("upstream failed")
-	})
+	}, loom.WithBillable())
 	model := &scriptedModel{responses: []*loom.ChatResponse{
 		{ToolCalls: []loom.ToolCall{{ID: "a", Name: "business"}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "cannot complete research", FinishReason: loom.FinishReasonStop},

@@ -11,7 +11,7 @@ import (
 func TestUserHostSchedulerCannotExecuteHiddenOrOverBudgetTools(t *testing.T) {
 	// Given a visible lookup, a hidden tool and only one research reservation.
 	used := 0
-	tool := loom.NewArgsTool(loom.MustArgsContract("lookup"), "lookup", func(context.Context, loom.Args) (string, error) { used++; return "evidence", nil })
+	tool := loom.NewArgsTool(loom.MustArgsContract("lookup"), "lookup", func(context.Context, loom.Args) (string, error) { used++; return "evidence", nil }, loom.WithBillable())
 	hidden := loom.NewArgsTool(loom.MustArgsContract("hidden"), "hidden", func(context.Context, loom.Args) (string, error) { t.Error("hidden tool ran"); return "", nil })
 	m := &scriptedModel{responses: []*loom.ChatResponse{
 		{ToolCalls: []loom.ToolCall{{ID: "a", Name: "lookup"}, {ID: "b", Name: "lookup"}, {ID: "c", Name: "hidden"}}, FinishReason: loom.FinishReasonToolCalls},
@@ -74,7 +74,7 @@ func TestUserMalformedHostResultsFailWithoutDeliveringAnAnswer(t *testing.T) {
 }
 
 func TestUserHostCallFailuresNeverCommitSuccess(t *testing.T) {
-	for _, kind := range []string{"nil_response", "model_error", "executor_error", "invalid_visible_tool", "unknown_terminal", "limited_terminal", "ambiguous_fallback"} {
+	for _, kind := range []string{"nil_response", "model_error", "executor_error", "invalid_visible_tool", "ambiguous_fallback"} {
 		t.Run("user_"+kind, func(t *testing.T) {
 			// Given an invalid host configuration or a failed dependency.
 			dependencyErr := errors.New("dependency unavailable")
@@ -99,11 +99,6 @@ func TestUserHostCallFailuresNeverCommitSuccess(t *testing.T) {
 					p.Tools = []*loom.ToolInfo{{Name: "missing"}}
 					return nil
 				})}
-			case "unknown_terminal":
-				cfg.TerminalToolName = "missing"
-			case "limited_terminal":
-				cfg.TerminalToolName = "lookup"
-				cfg.ToolCallLimits = map[string]uint64{"lookup": 1}
 			case "ambiguous_fallback":
 				cfg.SensitiveFallback = &SensitiveFallbackConfig{Model: m}
 				cfg.CallModel = func(context.Context, loom.Writer, State, string, loom.ChatModel, loom.ChatRequest) (*loom.ChatResponse, error) {

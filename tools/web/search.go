@@ -112,5 +112,5 @@ func NewSearchTool(searcher WebSearcher, options SearchToolOptions) (loom.Tool, 
 			return "", fmt.Errorf("web search: marshal response: %w", err)
 		}
 		return string(data), nil
-	}, loom.WithRequiresNetwork()), nil
+	}, loom.WithBillable()), nil
 }

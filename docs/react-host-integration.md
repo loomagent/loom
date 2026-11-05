@@ -22,12 +22,12 @@ concurrency. Host adapters must not implement a second iteration loop.
   registry subset. It may schedule concurrently, but returns exactly one result
   per call in input order. The core validates result identity before history use.
 - `MaxTokens` applies to research and final requests alike.
-- `TerminalToolName` assigns the terminal protocol to any existing registered
-  tool by name. Configured and `EndsToolPhase` tools use the same state machine:
-  exclusive batch, no research budget charge, transition only on success.
-  Explicitly configured terminals remain available after research budget exhaustion.
-  Their descriptions are replaced with the shared `loom.TerminalToolDescription`.
-  The shared registry is unchanged; naming is local to each run.
+- Tools marked `EndsToolPhase` with `loom.WithEndsToolPhase()` own the terminal
+  protocol: exclusive batch, free of research budgets, transition only on
+  success. Terminals remain available after research budget exhaustion.
+  Their descriptions are replaced with the shared `loom.PhaseEndToolDescription`.
+  The replacement lives in each run's metadata snapshot; the shared registry is
+  unchanged.
 - `AfterToolsDecision.Stop` retains buffered early-return semantics for business
   pipelines. Streaming delivery always enters a final model round.
 - Existing step policies may keep schemas stable for prompt cache reuse. Actual
@@ -39,9 +39,10 @@ concurrency. Host adapters must not implement a second iteration loop.
    terminal tool or an accepted natural draft, even with a custom research caller.
 2. user cannot execute a hidden tool or exceed a budget through a custom parallel
    scheduler; tool results preserve call identity and order.
-3. user can choose any terminal name, including a report-specific name. Mixed
-   batches execute nothing; a failed terminal stays retryable. One successful
-   terminal ends tools and enters a tool-free completion.
+3. user can end the tool phase with any host-chosen tool name by marking it
+   `EndsToolPhase` at construction. Mixed batches execute nothing; a failed
+   terminal stays retryable. One successful terminal ends tools and enters a
+   tool-free completion.
 4. user gets an explicit failure for malformed scheduler results, sink failure or
    provider failure; cancellation never becomes a successful answer.
 5. user retains backend review, fallback reasoning configuration, dated context,
@@ -50,24 +51,29 @@ concurrency. Host adapters must not implement a second iteration loop.
 No paid provider calls are needed: use protocol fakes, existing real HTTP provider
 contract tests and the backend PostgreSQL streaming integration test.
 
-## Internal helpers and research budgets
+## Billable tools and research budgets
 
-Register trusted internal helpers with `loom.WithBudgetExempt()`. The default is
-budgeted, even for offline tools; networking and budget classification are
-independent. The marker bypasses `MaxToolCalls`, `ToolCallLimits` and the new
-`MaxToolRounds` research budget, but never terminal isolation or final closure.
+Tools are free by default. Mark paid third-party tools with
+`loom.WithBillable()`: only billable tools consume business budgets. The
+classification follows cost, not capability — a networked internal reader can
+stay free, and a billable tool must be enabled per mode by explicit opt-in.
+Free tools never enter `MaxToolCalls`, `ToolCallLimits` or `MaxToolRounds`, and
+configuring a per-tool limit on a free tool is rejected as invalid, because the
+limit would be silently ineffective. A phase-ending tool can never be billable:
+the phase must always remain endable.
 
-`MaxToolRounds` counts a batch once when it reserves at least one budgeted tool.
-Mixed batches count only their budgeted calls; failed executions keep their
-reservations. Internal-only and entirely refused batches consume no research
+`MaxToolRounds` counts a batch once when it reserves at least one billable tool.
+Mixed batches count only their billable calls; failed executions keep their
+reservations. Free-only and entirely refused batches consume no research
 round. `State.ToolRoundsUsed` reports this counter separately from physical
-`State.Step`. When research budgets run out, helpers and terminals stay available
-until a normal finish, terminal success, policy stop or safety boundary.
+`State.Step`. When research budgets run out, free helpers and terminals stay
+available until a normal finish, terminal success, policy stop or safety
+boundary.
 
-Set `MaxSteps` independently to bound all model rounds, including internal-only
+Set `MaxSteps` independently to bound all model rounds, including free-only
 loops and refused finishes. It preserves its existing semantics and allows one
 final tool-free call. Deadlines, cancellation and consecutive refusal limits are
-unchanged. Neither budget exemption nor tool-round counting changes actual
+unchanged. Neither budget classification nor tool-round counting changes actual
 provider usage or accounting. Host schedulers receive only admitted calls and
 must place persistent reservations before invoking those calls, rather than
 charging tool-call diagnostic events that also represent rejected requests.

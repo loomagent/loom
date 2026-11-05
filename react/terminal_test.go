@@ -70,6 +70,12 @@ func TestTerminalToolEndsTheToolPhase(t *testing.T) {
 	if len(model.requests[0].Tools) != 1 {
 		t.Fatalf("the first request must offer the tool: %d", len(model.requests[0].Tools))
 	}
+	if got := model.requests[0].Tools[0].Description; got != loom.PhaseEndToolDescription {
+		t.Fatalf("the offered tool must carry the shared phase-end instruction, got %q", got)
+	}
+	if infos, err := cfg.Tools.InfoList(t.Context()); err != nil || len(infos) != 1 || infos[0].Description != "End the tool-using phase, on its own." || !infos[0].EndsToolPhase {
+		t.Fatalf("the shared registry must keep its own metadata: %+v (%v)", infos, err)
+	}
 	if len(model.requests[1].Tools) != 0 {
 		t.Fatalf("the final phase must carry no tools, got %d", len(model.requests[1].Tools))
 	}
@@ -174,7 +180,7 @@ func TestTerminalToolSurvivesToolBudgets(t *testing.T) {
 	t.Parallel()
 	terminalCalls, lookupCalls := 0, 0
 	lookup := loom.NewArgsTool(loom.MustArgsContract("lookup"), "Look a term up.",
-		func(context.Context, loom.Args) (string, error) { lookupCalls++; return `{}`, nil })
+		func(context.Context, loom.Args) (string, error) { lookupCalls++; return `{}`, nil }, loom.WithBillable())
 	model := &scriptedModel{responses: []*loom.ChatResponse{
 		{ToolCalls: []loom.ToolCall{{ID: "c1", Name: "lookup"}}, FinishReason: loom.FinishReasonToolCalls},
 		{ToolCalls: []loom.ToolCall{{ID: "c2", Name: "finalize_answer"}}, FinishReason: loom.FinishReasonToolCalls},
