@@ -205,3 +205,33 @@ func TestTerminalToolSurvivesToolBudgets(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 }
+
+// Research exhaustion must not force a tool-free soft landing while a phase-ending
+// tool is still offered: the streaming path has to let the model call the terminal.
+func TestExhaustedBudgetStillOffersPhaseEndInStreamingFinal(t *testing.T) {
+	t.Parallel()
+	terminalCalls, lookupCalls := 0, 0
+	lookup := loom.NewArgsTool(loom.MustArgsContract("lookup"), "Look a term up.",
+		func(context.Context, loom.Args) (string, error) { lookupCalls++; return `{}`, nil }, loom.WithBillable())
+	model := &scriptedModel{responses: []*loom.ChatResponse{
+		{ToolCalls: []loom.ToolCall{{ID: "c1", Name: "lookup"}}, FinishReason: loom.FinishReasonToolCalls},
+		{ToolCalls: []loom.ToolCall{{ID: "c2", Name: "finalize_answer"}}, FinishReason: loom.FinishReasonToolCalls},
+		{Content: "the answer", FinishReason: loom.FinishReasonStop},
+	}}
+	var result *Result
+	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+		var runErr error
+		result, runErr = RunToFinalAnswer(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls)), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxToolCalls: 1})
+		return runErr
+	}, loom.RunOptions{ConversationID: "terminal-stream-budget"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if lookupCalls != 1 || terminalCalls != 1 || result == nil || result.EndedByTool != "finalize_answer" || !result.FinalAnswerCommitted {
+		t.Fatalf("lookup=%d terminal=%d result=%+v", lookupCalls, terminalCalls, result)
+	}
+	offered := model.requests[1].Tools
+	if len(offered) != 1 || offered[0].Name != "finalize_answer" {
+		t.Fatalf("exhausted budget must still offer only the terminal, got %+v", offered)
+	}
+}
