@@ -430,7 +430,7 @@ func TestRunEnforcesPerToolLimitWithinOneResponse(t *testing.T) {
 	), "echo", func(context.Context, loom.Args) (string, error) {
 		invocations++
 		return "ok", nil
-	}))
+	}, loom.WithBillable()))
 
 	_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		result, runErr := Run(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: tools, ToolCallLimits: map[string]uint64{"echo": 1}})

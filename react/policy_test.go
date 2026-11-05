@@ -9,11 +9,12 @@ import (
 	"github.com/loomagent/loom"
 )
 
-// lookupTool is a tool the loop can call, standing in for a real one.
+// lookupTool is a billable research tool the loop can call, standing in for a
+// paid third-party one.
 func lookupTool() loom.Tool {
 	return loom.NewArgsTool(loom.MustArgsContract("lookup"), "lookup", func(context.Context, loom.Args) (string, error) {
 		return "ok", nil
-	})
+	}, loom.WithBillable())
 }
 
 // runInTurn executes react.Run inside a real Turn, which is what a caller does and what

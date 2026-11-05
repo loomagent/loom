@@ -81,7 +81,7 @@ func TestBudgetRefusalsAlsoCount(t *testing.T) {
 	t.Parallel()
 	terminalCalls, lookupCalls := 0, 0
 	lookup := loom.NewArgsTool(loom.MustArgsContract("lookup"), "Look a term up.",
-		func(context.Context, loom.Args) (string, error) { lookupCalls++; return `{}`, nil })
+		func(context.Context, loom.Args) (string, error) { lookupCalls++; return `{}`, nil }, loom.WithBillable())
 	lookupOnly := &loom.ChatResponse{
 		ToolCalls:    []loom.ToolCall{{ID: "c1", Name: "lookup"}},
 		FinishReason: loom.FinishReasonToolCalls,

@@ -455,17 +455,30 @@ func TestToolRegistrySubset(t *testing.T) {
 	}
 }
 
-// A tool that needs the network says so, which is what lets a host run an offline tool set.
+// A paid third-party tool says so, which is what lets a host keep every other
+// tool free and unlimited.
 func TestToolOptions(t *testing.T) {
-	contract := MustArgsContract("offline")
+	contract := MustArgsContract("paid")
 	// A nil option is skipped rather than panicking on the way in.
-	tool := NewArgsTool(contract, "Offline.", func(context.Context, Args) (string, error) { return "ok", nil }, nil, WithRequiresNetwork())
+	tool := NewArgsTool(contract, "Paid.", func(context.Context, Args) (string, error) { return "ok", nil }, nil, WithBillable())
 	info, err := tool.Info(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.RequiresNetwork || info.Name != "offline" || info.Parameters == nil {
+	if !info.Billable || info.Name != "paid" || info.Parameters == nil {
 		t.Fatalf("info = %+v", info)
+	}
+}
+
+// A phase-ending tool must stay free: a budget could otherwise withhold the
+// only exit from the tool phase.
+func TestRegistryRejectsPhaseEndingBillableTool(t *testing.T) {
+	tool := NewArgsTool(MustArgsContract("finish"), "End research.",
+		func(context.Context, Args) (string, error) { return "ok", nil }, WithEndsToolPhase(), WithBillable())
+	var registry ToolRegistry
+	err := registry.Register(tool)
+	if err == nil || !strings.Contains(err.Error(), `phase-ending tool "finish" cannot be billable`) {
+		t.Fatalf("err = %v", err)
 	}
 }
 

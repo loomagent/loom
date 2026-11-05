@@ -199,11 +199,10 @@ func TestRunToFinalAnswerMinimizesFinalReasoningByCapability(t *testing.T) {
 			_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 				var runErr error
 				result, runErr = RunToFinalAnswer(ctx, w, Config{
-					Model:            model,
-					Messages:         []loom.Message{{Role: loom.RoleUser, Content: "task"}},
-					Tools:            loom.NewToolRegistry(terminalTool(&calls)),
-					Reasoning:        tt.research,
-					TerminalToolName: "finalize_answer",
+					Model:     model,
+					Messages:  []loom.Message{{Role: loom.RoleUser, Content: "task"}},
+					Tools:     loom.NewToolRegistry(terminalTool(&calls)),
+					Reasoning: tt.research,
 				})
 				return runErr
 			}, loom.RunOptions{ConversationID: "final-reasoning-minimize"})
@@ -260,7 +259,7 @@ func TestUserBudgetAndPolicyStopsStillStreamAFinalAnswer(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				// Given a research round that reaches a budget or policy boundary.
 				calls := 0
-				lookup := loom.NewArgsTool(loom.MustArgsContract("lookup"), "Look up a fact", func(context.Context, loom.Args) (string, error) { return "evidence", nil })
+				lookup := loom.NewArgsTool(loom.MustArgsContract("lookup"), "Look up a fact", func(context.Context, loom.Args) (string, error) { return "evidence", nil }, loom.WithBillable())
 				first := &loom.ChatResponse{ToolCalls: []loom.ToolCall{{ID: "lookup", Name: "lookup", Arguments: `{}`}}, FinishReason: loom.FinishReasonToolCalls}
 				model := &finalPhaseModel{frames: make(chan *loom.Chunk, 3)}
 				model.responses = []*loom.ChatResponse{first}

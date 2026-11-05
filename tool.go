@@ -27,8 +27,8 @@ func ValidateToolName(name string) error {
 	return nil
 }
 
-// TerminalToolDescription is the shared model-facing instruction for ending tool use.
-const TerminalToolDescription = "End the tool-using phase. Call this tool alone when no more tools are needed. After it succeeds, write the complete final answer from the accumulated context."
+// PhaseEndToolDescription is the shared model-facing instruction for ending tool use.
+const PhaseEndToolDescription = "End the tool-using phase. Call this tool alone when no more tools are needed. After it succeeds, write the complete final answer from the accumulated context."
 
 // ToolInfo is a tool's metadata, which the model uses to decide when and how to
 // call it.
@@ -40,14 +40,16 @@ const TerminalToolDescription = "End the tool-using phase. Call this tool alone 
 // Parameters is a JSON Schema, draft 2020-12 or draft-07. nil means no arguments; an
 // empty *Schema{} accepts any JSON.
 type ToolInfo struct {
-	Name            string
-	Description     string
-	Parameters      *Schema
-	RequiresNetwork bool
-	// BudgetExempt marks trusted runtime helpers that do not consume tool-call
-	// or tool-round budgets. It does not bypass MaxSteps, deadlines, cancellation,
-	// terminal isolation, or final-phase closure. It is independent of networking.
-	BudgetExempt bool
+	Name        string
+	Description string
+	Parameters  *Schema
+	// Billable marks a paid third-party tool. Only billable tools count against
+	// tool-call and tool-round budgets, may carry per-tool limits, and are enabled
+	// per mode by explicit opt-in. Tools without it are free: unlimited by count,
+	// never billed against business budgets, and always registered and available,
+	// while still bound by physical safety limits such as MaxSteps, execution
+	// deadlines, and consecutive-refusal bounds.
+	Billable bool
 	// EndsToolPhase marks a tool whose successful execution ends the tool phase: every later
 	// request carries no tools, so that call's content is the final answer by construction. A
 	// batch that calls it must call nothing else, and it is never withheld by a tool budget —
@@ -99,16 +101,10 @@ func WithEndsToolPhase() ToolOption {
 	}
 }
 
-// WithBudgetExempt exempts a runtime helper from research tool budgets.
+// WithBillable marks a paid third-party tool that consumes business tool budgets.
 // Only the host registering the tool may grant this classification.
-func WithBudgetExempt() ToolOption {
-	return func(info *ToolInfo) { info.BudgetExempt = true }
-}
-
-func WithRequiresNetwork() ToolOption {
-	return func(info *ToolInfo) {
-		info.RequiresNetwork = true
-	}
+func WithBillable() ToolOption {
+	return func(info *ToolInfo) { info.Billable = true }
 }
 
 func newTool(name, description string, params *Schema, fn invokeFunc, opts ...ToolOption) Tool {
@@ -246,6 +242,11 @@ func (r *ToolRegistry) Register(t Tool) error {
 	}
 	if err := ValidateToolName(info.Name); err != nil {
 		return fmt.Errorf("loom: invalid tool name %q: %w", info.Name, err)
+	}
+	// The phase must always be endable, so a phase-ending tool can never be
+	// billable: a budget could otherwise withhold the only exit.
+	if info.EndsToolPhase && info.Billable {
+		return fmt.Errorf("loom: phase-ending tool %q cannot be billable", info.Name)
 	}
 	if r.tools == nil {
 		r.tools = make(map[string]Tool)
