@@ -328,6 +328,10 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 	if maxRefusals == 0 {
 		maxRefusals = defaultMaxConsecutiveRefusals
 	}
+	// A registry that still offers a phase-ending tool must not be force-finalized
+	// by research exhaustion: the model is instructed to end the phase through that
+	// tool on its own, and a tool-free soft landing would bypass it.
+	hasPhaseEnd := len(terminalTools) > 0
 	var refusedInARow uint64
 	var toolPhaseEnded bool
 	var endedByTool string
@@ -382,7 +386,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 				finalPrompt = prompt
 			}
 		}
-		if finalWriter != nil && !plan.IsFinalStep && (len(allTools) == 0 || researchBudgetExhausted(allTools, plan.Tools)) {
+		if finalWriter != nil && !plan.IsFinalStep && (len(allTools) == 0 || researchBudgetExhausted(allTools, plan.Tools) && !hasPhaseEnd) {
 			finalizationReason = "tool_budget"
 			if len(allTools) == 0 {
 				finalizationReason = "no_tools"

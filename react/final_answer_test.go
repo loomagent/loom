@@ -260,6 +260,12 @@ func TestUserBudgetAndPolicyStopsStillStreamAFinalAnswer(t *testing.T) {
 				// Given a research round that reaches a budget or policy boundary.
 				calls := 0
 				lookup := loom.NewArgsTool(loom.MustArgsContract("lookup"), "Look up a fact", func(context.Context, loom.Args) (string, error) { return "evidence", nil }, loom.WithBillable())
+				// Budget routes exercise exhaustion soft-landing in isolation: no
+				// phase-ending tool stays offered, so the loop must finalize itself.
+				registry := []loom.Tool{lookup}
+				if route != "tool_budget" && route != "per_tool_budget" {
+					registry = append(registry, terminalTool(&calls))
+				}
 				first := &loom.ChatResponse{ToolCalls: []loom.ToolCall{{ID: "lookup", Name: "lookup", Arguments: `{}`}}, FinishReason: loom.FinishReasonToolCalls}
 				model := &finalPhaseModel{frames: make(chan *loom.Chunk, 3)}
 				model.responses = []*loom.ChatResponse{first}
@@ -267,7 +273,7 @@ func TestUserBudgetAndPolicyStopsStillStreamAFinalAnswer(t *testing.T) {
 				model.frames <- &loom.Chunk{ContentDelta: "answer"}
 				model.frames <- &loom.Chunk{FinishReason: loom.FinishReasonStop}
 				close(model.frames)
-				cfg := Config{Model: model, Messages: []loom.Message{{Role: loom.RoleUser, Content: "task"}}, Tools: loom.NewToolRegistry(lookup, terminalTool(&calls)), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}, ToolPhaseEndedPrompt: "Final response only."}
+				cfg := Config{Model: model, Messages: []loom.Message{{Role: loom.RoleUser, Content: "task"}}, Tools: loom.NewToolRegistry(registry...), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}, ToolPhaseEndedPrompt: "Final response only."}
 				ctx := t.Context()
 				wantReason := route
 				switch route {
