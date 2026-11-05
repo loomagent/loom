@@ -239,41 +239,51 @@ func TestLifecycleFailureIsNotStructuredRepairInput(t *testing.T) {
 }
 
 func TestLifecycleConcurrentEndWaitsForTerminalRecord(t *testing.T) {
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	failure := errors.New("terminal record failed")
-	var once sync.Once
-	log := LifecycleObserverFunc(func(_ context.Context, event LifecycleEvent) error {
-		if event.Kind != "call_finished" {
-			return nil
+	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		failure := errors.New("terminal record failed")
+		var once sync.Once
+		log := LifecycleObserverFunc(func(_ context.Context, event LifecycleEvent) error {
+			if event.Kind != "call_finished" {
+				return nil
+			}
+			once.Do(func() { close(entered) })
+			<-release
+			return failure
+		})
+		ctx := WithLifecycleObserver(t.Context(), log)
+		stream, err := ObserveStream(ctx, ModelInfo{}, func(context.Context) (Stream, error) {
+			return &mockStream{chunks: []*Chunk{{ContentDelta: "ok", Model: "remote"}}}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		once.Do(func() { close(entered) })
-		<-release
-		return failure
+		if _, err := stream.Recv(); err != nil {
+			t.Fatal(err)
+		}
+		recvErr := make(chan error, 1)
+		go func() {
+			_, err := stream.Recv() // EOF enters end() first and blocks inside the observer.
+			recvErr <- err
+		}()
+		<-entered
+		closeErr := make(chan error, 1)
+		go func() { closeErr <- stream.Close() }()
+		// 让气泡内所有协程跑到阻塞：等待实现的 Close 必须仍停在终态记录上，
+		// 提前返回 nil 的旧实现在这里就已经完成并被捕获。
+		synctest.Wait()
+		select {
+		case err := <-closeErr:
+			t.Fatalf("close finished before the terminal record: %v", err)
+		default:
+		}
+		close(release)
+		if err := <-recvErr; !errors.Is(err, failure) {
+			t.Fatalf("recv end lost terminal failure: %v", err)
+		}
+		if err := <-closeErr; !errors.Is(err, failure) {
+			t.Fatalf("concurrent close bypassed terminal record: %v", err)
+		}
 	})
-	ctx := WithLifecycleObserver(t.Context(), log)
-	stream, err := ObserveStream(ctx, ModelInfo{}, func(context.Context) (Stream, error) {
-		return &mockStream{chunks: []*Chunk{{ContentDelta: "ok", Model: "remote"}}}, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := stream.Recv(); err != nil {
-		t.Fatal(err)
-	}
-	recvErr := make(chan error, 1)
-	go func() {
-		_, err := stream.Recv() // EOF enters end() first and blocks inside the observer.
-		recvErr <- err
-	}()
-	<-entered
-	closeErr := make(chan error, 1)
-	go func() { closeErr <- stream.Close() }()
-	close(release)
-	if err := <-recvErr; !errors.Is(err, failure) {
-		t.Fatalf("recv end lost terminal failure: %v", err)
-	}
-	if err := <-closeErr; !errors.Is(err, failure) {
-		t.Fatalf("concurrent close bypassed terminal record: %v", err)
-	}
 }
