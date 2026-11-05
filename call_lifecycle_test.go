@@ -2,13 +2,66 @@ package loom
 
 import (
 	"context"
+	json "encoding/json/v2"
 	"errors"
 	"io"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 )
+
+func TestLifecycleSelectedRequestEvidenceNeverSerializesContent(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"chat", "research stream", "final stream", "direct observe"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			request := ChatRequest{Messages: []Message{{Role: RoleUser, Content: "private-request-marker"}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}, MaxTokens: new(123)}
+			starts := 0
+			ctx := WithLifecycleObserver(t.Context(), LifecycleObserverFunc(func(_ context.Context, event LifecycleEvent) error {
+				if event.Kind == "call_started" {
+					starts++
+					if event.Request == nil || !reflect.DeepEqual(*event.Request, request) {
+						t.Fatalf("selected request evidence=%+v", event.Request)
+					}
+				}
+				data, err := json.Marshal(event)
+				if err != nil {
+					return err
+				}
+				if strings.Contains(string(data), "private-request-marker") || strings.Contains(string(data), "Messages") {
+					t.Fatal("transient input leaked into serialized lifecycle")
+				}
+				return nil
+			}))
+			var err error
+			switch name {
+			case "chat":
+				_, err = CallModel(ctx, "test", &fakeCallModel{responses: []*ChatResponse{{Content: "answer"}}}, request)
+			case "direct observe":
+				_, err = ObserveChat(ctx, ModelInfo{}, func(context.Context) (*ChatResponse, error) { return &ChatResponse{}, nil }, WithObservedRequest(request))
+			default:
+				_, err = Run(ctx, func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
+					model := &mockChatModel{chunks: []*Chunk{{ContentDelta: "answer", FinishReason: FinishReasonStop}}}
+					if name == "final stream" {
+						_, err := StreamLLMToFinalAnswer(ctx, w, "final", model, request)
+						return err
+					}
+					response, err := StreamLLMToStep(ctx, w, "research", model, request)
+					if err != nil {
+						return err
+					}
+					return w.FinalAnswer(ctx, response.Content)
+				}, RunOptions{ConversationID: name})
+			}
+			if err != nil || starts != 1 {
+				t.Fatalf("starts=%d err=%v", starts, err)
+			}
+		})
+	}
+}
 
 type lifecycleLog struct {
 	mu       sync.Mutex
@@ -183,4 +236,54 @@ func TestLifecycleFailureIsNotStructuredRepairInput(t *testing.T) {
 	if _, ok := errors.AsType[*ObservationError](err); !ok || callbacks != 0 || len(model.requests) != 1 {
 		t.Fatalf("audit failure triggered structured repair: err=%v callbacks=%d requests=%d", err, callbacks, len(model.requests))
 	}
+}
+
+func TestLifecycleConcurrentEndWaitsForTerminalRecord(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		failure := errors.New("terminal record failed")
+		var once sync.Once
+		log := LifecycleObserverFunc(func(_ context.Context, event LifecycleEvent) error {
+			if event.Kind != "call_finished" {
+				return nil
+			}
+			once.Do(func() { close(entered) })
+			<-release
+			return failure
+		})
+		ctx := WithLifecycleObserver(t.Context(), log)
+		stream, err := ObserveStream(ctx, ModelInfo{}, func(context.Context) (Stream, error) {
+			return &mockStream{chunks: []*Chunk{{ContentDelta: "ok", Model: "remote"}}}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := stream.Recv(); err != nil {
+			t.Fatal(err)
+		}
+		recvErr := make(chan error, 1)
+		go func() {
+			_, err := stream.Recv() // EOF enters end() first and blocks inside the observer.
+			recvErr <- err
+		}()
+		<-entered
+		closeErr := make(chan error, 1)
+		go func() { closeErr <- stream.Close() }()
+		// 让气泡内所有协程跑到阻塞：等待实现的 Close 必须仍停在终态记录上，
+		// 提前返回 nil 的旧实现在这里就已经完成并被捕获。
+		synctest.Wait()
+		select {
+		case err := <-closeErr:
+			t.Fatalf("close finished before the terminal record: %v", err)
+		default:
+		}
+		close(release)
+		if err := <-recvErr; !errors.Is(err, failure) {
+			t.Fatalf("recv end lost terminal failure: %v", err)
+		}
+		if err := <-closeErr; !errors.Is(err, failure) {
+			t.Fatalf("concurrent close bypassed terminal record: %v", err)
+		}
+	})
 }

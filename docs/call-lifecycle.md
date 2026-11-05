@@ -30,7 +30,14 @@ A host must propagate it and must not treat an accompanying response as success.
 
 Only metadata, available usage and provider-reported model identifiers are
 serializable. Err remains an in-memory classification input with `json:"-"`.
-Neither prompts nor generated text are part of the event. ModelInfo is captured
+`call_started` additionally provides a transient, read-only `Request` when called
+through the standard model helpers. Custom instrumentation can opt in with
+`WithObservedRequest(request)` on ObserveChat/ObserveStream. A trusted observer
+can synchronously compute a private fingerprint; it must not retain or persist
+raw input. Request is always excluded from JSON, like Err. This is the selected
+helper-level ChatRequest, including failover rebuilding, not final HTTP bytes.
+Nested observers still reuse the original invocation and produce one start.
+Neither prompts nor generated text are part of the serialized event. ModelInfo is captured
 before invocation; response model identifiers never replace its request target.
 
 For streaming, a normal EOF records completed, an error records failed/cancelled,

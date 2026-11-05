@@ -23,6 +23,10 @@ type Invocation struct {
 // LifecycleEvent is metadata-only. Err is delivered to trusted host code for
 // classification but is never serialized. It must not be persisted verbatim.
 type LifecycleEvent struct {
+	// Request is available synchronously on call_started when supplied by the
+	// caller. It is read-only and MUST NOT be retained or persisted as raw content.
+	// It is excluded from serialization regardless of content-capture settings.
+	Request               *ChatRequest `json:"-"`
 	ID                    string       `json:"id"`
 	Kind                  string       `json:"kind"`
 	Invocation            Invocation   `json:"invocation"`
@@ -34,6 +38,17 @@ type LifecycleEvent struct {
 	FinishReason          FinishReason `json:"finish_reason,omitempty"`
 	Usage                 *Usage       `json:"usage,omitempty"`
 	Err                   error        `json:"-"`
+}
+
+type observationConfig struct{ request *ChatRequest }
+
+// ObservationOption adds transient evidence to a lifecycle observation.
+type ObservationOption func(*observationConfig)
+
+// WithObservedRequest exposes the selected helper-level request to the trusted
+// observer before model execution. It is not the provider's final HTTP payload.
+func WithObservedRequest(request ChatRequest) ObservationOption {
+	return func(cfg *observationConfig) { cfg.request = &request }
 }
 
 // LifecycleObserver persists metadata before requests and before success is
@@ -140,7 +155,7 @@ func lifecycleFailure(ctx context.Context) error {
 	defer state.mu.Unlock()
 	return state.failure
 }
-func beginInvocation(ctx context.Context, info ModelInfo, streaming bool) (context.Context, bool, error) {
+func beginInvocation(ctx context.Context, info ModelInfo, streaming bool, opts ...ObservationOption) (context.Context, bool, error) {
 	ctx = prepareInvocation(ctx, info, streaming)
 	state := ctx.Value(invocationKey{}).(*invocationState)
 	observer, _ := ctx.Value(observerKey{}).(LifecycleObserver)
@@ -152,7 +167,14 @@ func beginInvocation(ctx context.Context, info ModelInfo, streaming bool) (conte
 	state.active = true
 	state.observer = observer
 	state.mu.Unlock()
+	var cfg observationConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
 	event := LifecycleEvent{ID: state.value.InvocationID + ":start", Kind: "call_started", Invocation: state.value, Time: time.Now().UTC()}
+	event.Request = cfg.request
 	return ctx, true, recordLifecycle(ctx, event)
 }
 func endInvocation(ctx context.Context, response *ChatResponse, outcome string, err error) error {
@@ -183,8 +205,8 @@ func callOutcome(err error) string {
 
 // ObserveChat instruments a selected model. Nested wrappers reuse the same
 // invocation; a missing observer leaves provider behavior unchanged.
-func ObserveChat(ctx context.Context, info ModelInfo, call func(context.Context) (*ChatResponse, error)) (*ChatResponse, error) {
-	ctx, owned, err := beginInvocation(ctx, info, false)
+func ObserveChat(ctx context.Context, info ModelInfo, call func(context.Context) (*ChatResponse, error), opts ...ObservationOption) (*ChatResponse, error) {
+	ctx, owned, err := beginInvocation(ctx, info, false, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -199,8 +221,8 @@ func ObserveChat(ctx context.Context, info ModelInfo, call func(context.Context)
 
 // ObserveStream records terminal consumption or early close exactly once.
 // A failed terminal record replaces EOF so a host cannot commit a false success.
-func ObserveStream(ctx context.Context, info ModelInfo, call func(context.Context) (Stream, error)) (Stream, error) {
-	ctx, owned, err := beginInvocation(ctx, info, true)
+func ObserveStream(ctx context.Context, info ModelInfo, call func(context.Context) (Stream, error), opts ...ObservationOption) (Stream, error) {
+	ctx, owned, err := beginInvocation(ctx, info, true, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +248,7 @@ type lifecycleStream struct {
 	ctx       context.Context
 	mu        sync.Mutex
 	response  ChatResponse
-	done      bool
+	finishing chan struct{}
 	finishErr error
 	closeOnce sync.Once
 	closeErr  error
@@ -234,12 +256,19 @@ type lifecycleStream struct {
 
 func (s *lifecycleStream) end(outcome string, err error) error {
 	s.mu.Lock()
-	if s.done {
-		err := s.finishErr
+	if s.finishing != nil {
+		// A concurrent end path must observe the same terminal record instead
+		// of returning before the first caller finished persisting it.
+		finished := s.finishing
 		s.mu.Unlock()
-		return err
+		<-finished
+		s.mu.Lock()
+		finishErr := s.finishErr
+		s.mu.Unlock()
+		return finishErr
 	}
-	s.done = true
+	finished := make(chan struct{})
+	s.finishing = finished
 	response := s.response
 	s.mu.Unlock()
 	err = errors.Join(err, lifecycleFailure(s.ctx))
@@ -250,6 +279,7 @@ func (s *lifecycleStream) end(outcome string, err error) error {
 	s.mu.Lock()
 	s.finishErr = finishErr
 	s.mu.Unlock()
+	close(finished)
 	return finishErr
 }
 func (s *lifecycleStream) Recv() (*Chunk, error) {

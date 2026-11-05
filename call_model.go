@@ -149,7 +149,7 @@ func callModelOnce(ctx context.Context, purpose string, model ChatModel, req Cha
 	ctx = prepareInvocation(ctx, info, false)
 	displayName := model.Name()
 	llmCtx, span := startLLMSpan(ctx, model, req, purpose, captureContent)
-	resp, err := ObserveChat(llmCtx, info, func(callCtx context.Context) (*ChatResponse, error) { return model.Chat(callCtx, req) })
+	resp, err := ObserveChat(llmCtx, info, func(callCtx context.Context) (*ChatResponse, error) { return model.Chat(callCtx, req) }, WithObservedRequest(req))
 	finalizeLLMSpan(span, resp, captureContent, err)
 	if resp != nil && nonZeroUsage(resp.Usage) {
 		if scope := usageScopeFromContext(ctx); scope != nil {

@@ -20,6 +20,140 @@ type scriptedModel struct {
 	requests     []loom.ChatRequest
 }
 
+type modelContextKey struct{}
+
+type contextCheckingModel struct {
+	loom.ChatModel
+	t     *testing.T
+	calls []ModelCallInfo
+}
+
+func (m *contextCheckingModel) Stream(ctx context.Context, req loom.ChatRequest) (loom.Stream, error) {
+	info, ok := ctx.Value(modelContextKey{}).(ModelCallInfo)
+	if !ok {
+		m.t.Fatal("provider did not receive the prepared call context")
+	}
+	if info.IsFinalStep && len(req.Tools) != 0 {
+		m.t.Fatal("final context tagged before tools were removed")
+	}
+	m.calls = append(m.calls, info)
+	return m.ChatModel.Stream(ctx, req)
+}
+
+func TestModelCallContextCoversDeliveryWithoutLeakingToPolicies(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		reason   string
+		buffered bool
+		custom   bool
+	}{
+		{name: "terminal", reason: "terminal_tool"},
+		{name: "natural finish", reason: "natural_finish"},
+		{name: "step limit", reason: "step_limit"},
+		{name: "policy changes phase", reason: "policy"},
+		{name: "no tools", reason: "no_tools"},
+		{name: "custom research caller", reason: "terminal_tool", custom: true},
+		{name: "buffered", buffered: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			first := &loom.ChatResponse{ToolCalls: []loom.ToolCall{{ID: "finish", Name: "finalize_answer", Arguments: `{}`}}, FinishReason: loom.FinishReasonToolCalls}
+			if tc.reason == "natural_finish" || tc.buffered {
+				first = &loom.ChatResponse{Content: "draft", FinishReason: loom.FinishReasonStop}
+			}
+			responses := []*loom.ChatResponse{first, {Content: "answer", FinishReason: loom.FinishReasonStop}}
+			if tc.reason == "policy" || tc.reason == "no_tools" {
+				responses = responses[1:]
+			}
+			model := &contextCheckingModel{t: t, ChatModel: &scriptedModel{responses: responses}}
+			calls := 0
+			cfg := Config{
+				Model: model, Tools: loom.NewToolRegistry(terminalTool(&calls)),
+				Reasoning:            loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+				Messages:             []loom.Message{{Role: loom.RoleUser, Content: "task"}},
+				ToolPhaseEndedPrompt: "settled final instruction", Purpose: "test",
+				PrepareModelCallContext: func(ctx context.Context, info ModelCallInfo) (context.Context, error) {
+					return context.WithValue(ctx, modelContextKey{}, info), nil
+				},
+				StepPolicies: []StepPolicy{StepPolicyFunc(func(ctx context.Context, _ State, plan *StepPlan) error {
+					if ctx.Value(modelContextKey{}) != nil {
+						t.Fatal("request context leaked into a policy or later iteration")
+					}
+					if tc.reason == "policy" {
+						plan.IsFinalStep = true
+					}
+					return nil
+				})},
+			}
+			if tc.reason == "no_tools" {
+				cfg.Tools = loom.NewToolRegistry()
+			}
+			if tc.reason == "step_limit" {
+				cfg.MaxSteps = 1
+				cfg.Tools = loom.NewToolRegistry(loom.NewArgsTool(loom.MustArgsContract("finalize_answer"), "lookup", func(context.Context, loom.Args) (string, error) { return "evidence", nil }))
+			}
+			if tc.custom {
+				cfg.CallModel = func(ctx context.Context, w loom.Writer, _ State, purpose string, model loom.ChatModel, req loom.ChatRequest) (*loom.ChatResponse, error) {
+					return loom.StreamLLMToStep(ctx, w, purpose, model, req)
+				}
+			}
+			_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+				if tc.buffered {
+					result, err := Run(ctx, w, cfg)
+					if err != nil {
+						return err
+					}
+					return w.FinalAnswer(ctx, result.FinalContent)
+				}
+				_, err := RunToFinalAnswer(ctx, w, cfg)
+				return err
+			}, loom.RunOptions{ConversationID: tc.name})
+			if err != nil {
+				t.Fatal(err)
+			}
+			last := model.calls[len(model.calls)-1]
+			if last.IsFinalStep == tc.buffered || last.FinalizationReason != tc.reason {
+				t.Fatalf("final call metadata = %+v", last)
+			}
+			for i, call := range model.calls {
+				if call.Step != uint64(i) || call.Purpose != fmt.Sprintf("test.step_%d", i+1) {
+					t.Fatalf("call %d = %+v", i, call)
+				}
+			}
+		})
+	}
+}
+
+func TestModelCallContextAdmissionFailurePreventsProviderCall(t *testing.T) {
+	t.Parallel()
+	denied := errors.New("admission denied")
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "rejected", err: denied},
+		{name: "nil context"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			model := &scriptedModel{}
+			_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
+				_, err := RunToFinalAnswer(ctx, w, Config{
+					Model: model, Messages: []loom.Message{{Role: loom.RoleUser, Content: "task"}},
+					Tools:                   loom.NewToolRegistry(),
+					Reasoning:               loom.Reasoning{Mode: loom.ReasoningModeDisabled},
+					PrepareModelCallContext: func(context.Context, ModelCallInfo) (context.Context, error) { return nil, tc.err },
+				})
+				return err
+			}, loom.RunOptions{ConversationID: tc.name})
+			if err == nil || tc.err != nil && !errors.Is(err, tc.err) || len(model.requests) != 0 {
+				t.Fatalf("error=%v provider calls=%d", err, len(model.requests))
+			}
+		})
+	}
+}
+
 func (m *scriptedModel) Name() string {
 	if m.name != "" {
 		return m.name

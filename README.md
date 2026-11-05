@@ -629,6 +629,19 @@ extend it without forking the loop through three small policy interfaces:
 `react/review.Policy` supplies a stateful quality gate while leaving the actual
 reviewer, criteria, and instructions to the application.
 
+Set `cfg.ReserveTools` when accepted calls must be recorded before execution.
+The callback receives one batch in model order, its original call positions,
+trusted helper/terminal classification, and business counters after reservation.
+Persist the whole batch in one transaction before returning success. A callback
+error stops the run before the batch reaches the tool scheduler. Rejected calls
+never enter the batch; accepted helpers and terminal calls do, without consuming
+business quotas. Snapshot mutations cannot change runtime state or call identity.
+
+Bind the batch's zero-based `Step` and each call's `Index` to an application-owned
+execution scope; a model's call ID alone is not a durable identity. Reservation
+is distinct from execution and completion. This hook does not restore budgets
+after a restart, retry failed persistence, or replace execution lifecycle events.
+
 ### Stream the final reasoning and answer
 
 Use `react.RunToFinalAnswer(ctx, turnWriter, cfg)` for a user-facing turn. It uses

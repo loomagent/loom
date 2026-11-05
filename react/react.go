@@ -28,7 +28,12 @@ type Config struct {
 	// MaxSteps is the number of tool-capable model rounds. When reached, Run
 	// performs one final tool-free soft-landing call. Zero means unlimited.
 	MaxSteps uint64
-	// MaxToolCalls limits successful tool reservations across the run.
+	// MaxToolRounds limits batches that reserve at least one non-exempt tool.
+	// Internal-only, terminal and entirely refused batches do not consume rounds.
+	// Exhaustion hides budgeted tools, leaving helpers and terminals available.
+	// Zero means unlimited. Use MaxSteps independently to bound all model rounds.
+	MaxToolRounds uint64
+	// MaxToolCalls limits non-exempt tool reservations across the run.
 	MaxToolCalls uint64
 	// ToolCallLimits applies per-tool limits. Missing and zero values are unlimited.
 	ToolCallLimits map[string]uint64
@@ -55,6 +60,16 @@ type Config struct {
 	// CallModel replaces research/buffered calls only. Final streamed delivery
 	// always uses StreamLLMToFinalAnswer, without host retries or fallback.
 	CallModel ModelCaller
+	// PrepareModelCallContext runs after policies have determined the final phase,
+	// immediately before either the custom caller or streamed final delivery. It
+	// must return a child of ctx. The returned context belongs only to that call;
+	// policies and tool execution continue with the original run context.
+	PrepareModelCallContext ModelCallContextPreparer
+	// ReserveTools admits one immutable snapshot of the accepted tool batch,
+	// after runtime budget checks and before any accepted tool is executed.
+	// Hosts can atomically persist reservations here. An error stops the run
+	// without executing the batch. Nil keeps in-memory reservation behavior.
+	ReserveTools ToolBatchReserver
 	// ExecuteTools schedules already reserved calls against the visible registry.
 	ExecuteTools ToolExecutor
 	// MaxTokens is applied to every request, including final delivery.
@@ -78,6 +93,19 @@ type Config struct {
 // configured. State.Step is zero-based. Returning nil without an error is invalid.
 type ModelCaller func(context.Context, loom.Writer, State, string, loom.ChatModel, loom.ChatRequest) (*loom.ChatResponse, error)
 
+// ModelCallInfo describes the settled ReAct plan. Step is zero-based; it counts
+// ReAct iterations, not provider retries or fallback invocations.
+type ModelCallInfo struct {
+	Step               uint64
+	Purpose            string
+	IsFinalStep        bool
+	FinalizationReason string
+}
+
+// ModelCallContextPreparer attaches host-owned metadata or rejects admission.
+// It runs once per ReAct iteration, including tool-free final delivery.
+type ModelCallContextPreparer func(context.Context, ModelCallInfo) (context.Context, error)
+
 // ToolExecutor executes each input call once and returns one result per call in
 // the same order. The registry contains only this step's visible tools. Budget
 // reservation and terminal isolation happen before this extension runs.
@@ -95,11 +123,13 @@ type SensitiveFallbackConfig struct {
 
 // State is the observable state supplied to policies.
 type State struct {
-	Step          uint64
-	Messages      []loom.Message
-	ToolInfos     []*loom.ToolInfo
-	ToolCallsUsed uint64
-	ToolUses      map[string]uint64
+	Step      uint64
+	Messages  []loom.Message
+	ToolInfos []*loom.ToolInfo
+	// ToolRoundsUsed counts batches with at least one budgeted reservation.
+	ToolRoundsUsed uint64
+	ToolCallsUsed  uint64
+	ToolUses       map[string]uint64
 	// ToolPhaseEnded reports that a terminal tool has succeeded: no tool is available from the
 	// next call on, and its content is the final answer.
 	ToolPhaseEnded bool
@@ -288,10 +318,23 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			allTools[i] = &copy
 		}
 	}
+	exemptTools := make(map[string]bool)
+	for _, info := range allTools {
+		if info != nil && (info.BudgetExempt || info.EndsToolPhase) {
+			exemptTools[info.Name] = true
+		}
+	}
 	terminalTools := terminalToolNames(allTools)
 	for name := range terminalTools {
 		if _, set := cfg.ToolCallLimits[name]; set {
 			return nil, fmt.Errorf("%s: terminal tool %q cannot have a tool limit", purpose, name)
+		}
+	}
+	for name := range exemptTools {
+		// An exempt tool ignores business budgets by design; a per-tool limit
+		// on it would be silently ineffective, so the combination is invalid.
+		if _, set := cfg.ToolCallLimits[name]; set && !terminalTools[name] {
+			return nil, fmt.Errorf("%s: budget-exempt tool %q cannot have a tool limit", purpose, name)
 		}
 	}
 	maxRefusals := cfg.MaxConsecutiveRefusals
@@ -304,16 +347,16 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 	var finalizationReason string
 	msgs := append([]loom.Message(nil), cfg.Messages...)
 	uses := make(map[string]uint64, len(cfg.ToolCallLimits))
-	var totalUses uint64
+	var totalUses, toolRounds uint64
 
 	for step := uint64(0); ; step++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		state := snapshotState(step, msgs, allTools, totalUses, uses, toolPhaseEnded)
+		state := snapshotState(step, msgs, allTools, totalUses, toolRounds, uses, toolPhaseEnded)
 		plan := StepPlan{
 			Messages: append([]loom.Message(nil), msgs...),
-			Tools:    availableTools(allTools, cfg, totalUses, uses),
+			Tools:    availableTools(allTools, cfg, totalUses, toolRounds, uses),
 		}
 		loopLimitReached := cfg.MaxSteps > 0 && step >= cfg.MaxSteps
 		deadlineNear := false
@@ -422,13 +465,26 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			Reasoning:  requestReasoning,
 			MaxTokens:  cfg.MaxTokens,
 		}
+		callCtx := ctx
+		if cfg.PrepareModelCallContext != nil {
+			callCtx, err = cfg.PrepareModelCallContext(ctx, ModelCallInfo{
+				Step: step, Purpose: stepPurpose, IsFinalStep: plan.IsFinalStep,
+				FinalizationReason: finalizationReason,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("%s: step %d model context: %w", purpose, step+1, err)
+			}
+			if callCtx == nil {
+				return nil, fmt.Errorf("%s: step %d model context is nil", purpose, step+1)
+			}
+		}
 		var response *loom.ChatResponse
 		if plan.IsFinalStep && finalWriter != nil {
-			response, err = loom.StreamLLMToFinalAnswer(ctx, finalWriter, stepPurpose, cfg.Model, request)
+			response, err = loom.StreamLLMToFinalAnswer(callCtx, finalWriter, stepPurpose, cfg.Model, request)
 		} else if cfg.CallModel != nil {
-			response, err = cfg.CallModel(ctx, w, state, stepPurpose, cfg.Model, request)
+			response, err = cfg.CallModel(callCtx, w, state, stepPurpose, cfg.Model, request)
 		} else {
-			response, err = streamWithSensitiveFallback(ctx, w, stepPurpose, cfg.Model, request, cfg.SensitiveFallback)
+			response, err = streamWithSensitiveFallback(callCtx, w, stepPurpose, cfg.Model, request, cfg.SensitiveFallback)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: step %d model: %w", purpose, step+1, err)
@@ -508,7 +564,11 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 				results = append(results, result)
 			}
 		} else {
-			results, executed, lastRefusal, err = executeStepTools(ctx, w, state, cfg, plan.Tools, response.ToolCalls, &totalUses, uses, terminalTools)
+			previousUses := totalUses
+			results, executed, lastRefusal, err = executeStepTools(ctx, w, state, cfg, plan.Tools, response.ToolCalls, &totalUses, uses, exemptTools, terminalTools)
+			if totalUses > previousUses {
+				toolRounds++
+			}
 			if err != nil {
 				return nil, fmt.Errorf("%s: step %d tools: %w", purpose, step+1, err)
 			}
@@ -526,7 +586,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 		}
 		msgs = loom.AppendAssistantTurn(plan.Messages, response, promptResults)
 
-		state = snapshotState(step, msgs, allTools, totalUses, uses, toolPhaseEnded)
+		state = snapshotState(step, msgs, allTools, totalUses, toolRounds, uses, toolPhaseEnded)
 		for _, policy := range cfg.AfterToolsPolicies {
 			if policy == nil {
 				continue
@@ -689,10 +749,10 @@ func writeFallbackNote(
 	return nil
 }
 
-func snapshotState(step uint64, messages []loom.Message, tools []*loom.ToolInfo, total uint64, uses map[string]uint64, phaseEnded bool) State {
+func snapshotState(step uint64, messages []loom.Message, tools []*loom.ToolInfo, total, rounds uint64, uses map[string]uint64, phaseEnded bool) State {
 	useCopy := make(map[string]uint64, len(uses))
 	maps.Copy(useCopy, uses)
-	return State{Step: step, Messages: append([]loom.Message(nil), messages...), ToolInfos: append([]*loom.ToolInfo(nil), tools...), ToolCallsUsed: total, ToolUses: useCopy, ToolPhaseEnded: phaseEnded}
+	return State{Step: step, Messages: append([]loom.Message(nil), messages...), ToolInfos: append([]*loom.ToolInfo(nil), tools...), ToolCallsUsed: total, ToolRoundsUsed: rounds, ToolUses: useCopy, ToolPhaseEnded: phaseEnded}
 }
 
 // terminalToolNames returns the tools marked as ending the tool phase. The marker comes from the
@@ -740,8 +800,8 @@ func mixedTerminalBatch(calls []loom.ToolCall, terminalTools map[string]bool) st
 // next reply can only be the answer.
 const defaultToolPhaseEndedPrompt = "The tool phase is over: no tool is available any more. Write the final answer now."
 
-func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[string]uint64) []*loom.ToolInfo {
-	outOfBudget := cfg.MaxToolCalls > 0 && total >= cfg.MaxToolCalls
+func availableTools(all []*loom.ToolInfo, cfg Config, total, rounds uint64, uses map[string]uint64) []*loom.ToolInfo {
+	outOfBudget := cfg.MaxToolCalls > 0 && total >= cfg.MaxToolCalls || cfg.MaxToolRounds > 0 && rounds >= cfg.MaxToolRounds
 	out := make([]*loom.ToolInfo, 0, len(all))
 	for _, info := range all {
 		if info == nil {
@@ -749,7 +809,7 @@ func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[str
 		}
 		// A terminal tool is not a research tool: it is the only way the phase can end, so no
 		// budget withholds it.
-		if info.EndsToolPhase {
+		if info.EndsToolPhase || info.BudgetExempt {
 			out = append(out, info)
 			continue
 		}
@@ -764,9 +824,12 @@ func availableTools(all []*loom.ToolInfo, cfg Config, total uint64, uses map[str
 	return out
 }
 
-func toolBudgetReason(name string, cfg Config, total uint64, uses map[string]uint64, exempt map[string]bool) string {
+func toolBudgetReason(name string, cfg Config, total, rounds uint64, uses map[string]uint64, exempt map[string]bool) string {
 	if exempt[name] {
 		return ""
+	}
+	if cfg.MaxToolRounds > 0 && rounds >= cfg.MaxToolRounds {
+		return fmt.Sprintf("tool round limit %d reached", cfg.MaxToolRounds)
 	}
 	if cfg.MaxToolCalls > 0 && total >= cfg.MaxToolCalls {
 		return fmt.Sprintf("total tool call limit %d reached", cfg.MaxToolCalls)
@@ -777,8 +840,8 @@ func toolBudgetReason(name string, cfg Config, total uint64, uses map[string]uin
 	return ""
 }
 
-func reserveTool(name string, cfg Config, total *uint64, uses map[string]uint64, exempt map[string]bool) string {
-	if reason := toolBudgetReason(name, cfg, *total, uses, exempt); reason != "" {
+func reserveTool(name string, cfg Config, total *uint64, rounds uint64, uses map[string]uint64, exempt map[string]bool) string {
+	if reason := toolBudgetReason(name, cfg, *total, rounds, uses, exempt); reason != "" {
 		return reason
 	}
 	if !exempt[name] {

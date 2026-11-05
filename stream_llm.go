@@ -65,7 +65,7 @@ func StreamLLMToStep(
 	}
 	llmCtx, llmSpan := startLLMSpan(ctx, model, req, purpose, captureContent)
 
-	stream, err := ObserveStream(llmCtx, info, func(callCtx context.Context) (Stream, error) { return model.Stream(callCtx, req) })
+	stream, err := ObserveStream(llmCtx, info, func(callCtx context.Context) (Stream, error) { return model.Stream(callCtx, req) }, WithObservedRequest(req))
 	if err != nil {
 		finalizeLLMSpan(llmSpan, nil, captureContent, err)
 		return nil, err
