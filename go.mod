@@ -4,8 +4,8 @@ go 1.27
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3
-	github.com/openai/openai-go/v3 v3.91.1
-	github.com/volcengine/volcengine-go-sdk v1.2.61
+	github.com/openai/openai-go/v3 v3.96.0
+	github.com/volcengine/volcengine-go-sdk v1.2.62
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
 	go.starlark.net v0.0.0-20261005163335-bcb1a1a55bf9
