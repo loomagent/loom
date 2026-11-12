@@ -210,7 +210,11 @@ func ObserveChat(ctx context.Context, info ModelInfo, call func(context.Context)
 	if err != nil {
 		return nil, err
 	}
+	ctx, integrity := beginTextIntegrity(ctx)
 	response, err := call(ctx)
+	if integrity != nil {
+		integrity.response(response, err != nil)
+	}
 	if !owned {
 		return response, err
 	}
@@ -226,9 +230,16 @@ func ObserveStream(ctx context.Context, info ModelInfo, call func(context.Contex
 	if err != nil {
 		return nil, err
 	}
+	ctx, integrity := beginTextIntegrity(ctx)
 	stream, err := call(ctx)
+	wrapIntegrity := func(stream Stream) Stream {
+		if integrity != nil && stream != nil {
+			return &textIntegrityStream{Stream: stream, capture: integrity}
+		}
+		return stream
+	}
 	if !owned {
-		return stream, err
+		return wrapIntegrity(stream), err
 	}
 	err = errors.Join(err, lifecycleFailure(ctx))
 	if err != nil || stream == nil {
@@ -240,7 +251,7 @@ func ObserveStream(ctx context.Context, info ModelInfo, call func(context.Contex
 		}
 		return nil, errors.Join(err, endInvocation(ctx, nil, callOutcome(err), err))
 	}
-	return &lifecycleStream{Stream: stream, ctx: ctx}, nil
+	return wrapIntegrity(&lifecycleStream{Stream: stream, ctx: ctx}), nil
 }
 
 type lifecycleStream struct {

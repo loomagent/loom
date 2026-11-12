@@ -17,6 +17,7 @@ Loom 刻意保持小:agent 的控制流仍然是普通的 Go 代码,而模型、
 - 与 provider 无关的 `ChatModel` 抽象
 - 推理过程的回传:下一轮调用会带回上一轮的推理,文本之外,若 provider 返回结构化推理块,则原样按序带回
 - OpenTelemetry 链路追踪,默认不采集内容
+- 可选的[输出文本乱码观测](docs/text-integrity.md),只检测,不修改输出
 - 内置 Ark、DeepSeek、OpenRouter、智谱 AI 的 provider
 
 ## 安装

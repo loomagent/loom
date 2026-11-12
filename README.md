@@ -20,6 +20,7 @@ interfaces.
 - A reasoning turn's reasoning is carried back on the next call, text and, where a provider
   returns structured blocks, the blocks themselves unchanged and in order
 - OpenTelemetry tracing with content capture disabled by default
+- Optional, read-only [output text integrity diagnostics](docs/text-integrity.md)
 - Built-in providers for Ark, DeepSeek, OpenRouter, and Zhipu AI
 
 ## Install
