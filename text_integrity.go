@@ -81,11 +81,14 @@ type integrityTool struct {
 	arguments strings.Builder
 }
 type textIntegrityCapture struct {
-	ctx                context.Context
-	observer           TextIntegrityObserver
-	invocation         Invocation
-	mu                 sync.Mutex
-	done               bool
+	ctx        context.Context
+	observer   TextIntegrityObserver
+	invocation Invocation
+	mu         sync.Mutex
+	done       bool
+	// finished records a frame with a finish reason: the provider declared the
+	// output complete, so a Close without reading EOF is not an interruption.
+	finished           bool
 	content, reasoning strings.Builder
 	details            []string
 	tools              map[int]*integrityTool
@@ -108,6 +111,9 @@ func (c *textIntegrityCapture) add(chunk *Chunk) {
 	}
 	if chunk.Model != "" {
 		c.reportedModel = chunk.Model
+	}
+	if chunk.FinishReason != "" {
+		c.finished = true
 	}
 	for _, delta := range chunk.ToolCallDeltas {
 		tool := c.tools[delta.Index]
@@ -146,13 +152,19 @@ func (c *textIntegrityCapture) response(response *ChatResponse, partial bool) {
 	}
 }
 
-func (c *textIntegrityCapture) finish(partial bool) {
+// finish inspects the assembled output once. A nil interrupted means Close:
+// the output counts as partial unless a finish reason has been received.
+func (c *textIntegrityCapture) finish(interrupted *bool) {
 	c.mu.Lock()
 	if c.done {
 		c.mu.Unlock()
 		return
 	}
 	c.done = true
+	partial := !c.finished
+	if interrupted != nil {
+		partial = *interrupted
+	}
 	response := ChatResponse{Content: c.content.String(), ReasoningContent: c.reasoning.String(), Model: c.reportedModel}
 	details := c.details
 	c.details = nil
@@ -182,13 +194,13 @@ func (s *textIntegrityStream) Recv() (*Chunk, error) {
 	chunk, err := s.Stream.Recv()
 	s.capture.add(chunk)
 	if err != nil {
-		s.capture.finish(!errors.Is(err, io.EOF))
+		s.capture.finish(new(!errors.Is(err, io.EOF)))
 	}
 	return chunk, err
 }
 func (s *textIntegrityStream) Close() error {
 	err := s.Stream.Close()
-	s.capture.finish(true)
+	s.capture.finish(nil)
 	return err
 }
 
@@ -275,10 +287,6 @@ func inspectIntegrityValue(value, field string, partial bool, report func(string
 }
 
 func inspectIntegrityText(text, field string, partial bool, report func(string, string, int, string)) {
-	pairs := 0
-	previousLead := false
-	firstPair := -1
-	previousOffset := 0
 	for offset := 0; offset < len(text); {
 		r, size := utf8.DecodeRuneInString(text[offset:])
 		if r == utf8.RuneError {
@@ -291,28 +299,125 @@ func inspectIntegrityText(text, field string, partial bool, report func(string, 
 				report(field, "replacement_character", offset, integritySample(text, offset))
 			}
 		}
-		if previousLead && integrityCPTail(r) {
-			pairs++
-			if firstPair < 0 {
-				firstPair = previousOffset
-			}
-			if pairs == 2 {
-				report(field, "cp1252_mojibake", firstPair, integritySample(text, firstPair))
-			}
-			previousLead = false
-		} else {
-			previousLead = r >= 0xC0 && r <= 0xFF
-			previousOffset = offset
-		}
 		offset += size
+	}
+	if offset, found := findCP1252Mojibake(text); found {
+		report(field, "cp1252_mojibake", offset, integritySample(text, offset))
 	}
 }
 
-func integrityCPTail(r rune) bool {
-	if r >= 0x80 && r <= 0xBF || r == utf8.RuneError {
-		return true
+// cp1252Specials maps the 27 characters CP1252 defines in 0x80-0x9F back to their bytes.
+var cp1252Specials = map[rune]byte{
+	'€': 0x80, '‚': 0x82, 'ƒ': 0x83, '„': 0x84, '…': 0x85, '†': 0x86, '‡': 0x87,
+	'ˆ': 0x88, '‰': 0x89, 'Š': 0x8A, '‹': 0x8B, 'Œ': 0x8C, 'Ž': 0x8E, '‘': 0x91,
+	'’': 0x92, '“': 0x93, '”': 0x94, '•': 0x95, '–': 0x96, '—': 0x97, '˜': 0x98,
+	'™': 0x99, 'š': 0x9A, '›': 0x9B, 'œ': 0x9C, 'ž': 0x9E, 'Ÿ': 0x9F,
+}
+
+// mojibakeByte is one rune mapped back to the byte a CP1252/Latin-1 decoder consumed.
+type mojibakeByte struct {
+	offset int
+	value  byte
+	// wild marks U+FFFD: the decoder replaced one of the five bytes CP1252 leaves
+	// undefined (0x81, 0x8D, 0x8F, 0x90, 0x9D), so the original byte is unknown.
+	wild bool
+	ok   bool
+}
+
+func mojibakeBytes(text string) []mojibakeByte {
+	out := make([]mojibakeByte, 0, len(text))
+	for offset, r := range text {
+		b := mojibakeByte{offset: offset}
+		switch {
+		case r <= 0xFF: // ASCII and Latin-1, including C1 controls left by Latin-1 decoding
+			b.value, b.ok = byte(r), true
+		case r == utf8.RuneError:
+			b.wild, b.ok = true, true
+		default:
+			b.value, b.ok = cp1252Specials[r]
+		}
+		out = append(out, b)
 	}
-	return strings.ContainsRune("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ", r)
+	return out
+}
+
+func mojibakeContinuation(b mojibakeByte, lo, hi byte) bool {
+	return b.ok && (b.wild || b.value >= lo && b.value <= hi)
+}
+
+// mojibakeSequence returns the length of the well-formed UTF-8 multi-byte
+// sequence starting at bytes[i], or 0.
+func mojibakeSequence(bytes []mojibakeByte, i int) int {
+	lead := bytes[i]
+	if !lead.ok || lead.wild {
+		return 0
+	}
+	var continuations int
+	lo, hi := byte(0x80), byte(0xBF) // second-byte range; excludes overlongs and surrogates
+	switch b := lead.value; {
+	case b >= 0xC2 && b <= 0xDF:
+		continuations = 1
+	case b == 0xE0:
+		continuations, lo = 2, 0xA0
+	case b == 0xED:
+		continuations, hi = 2, 0x9F
+	case b >= 0xE1 && b <= 0xEF:
+		continuations = 2
+	case b == 0xF0:
+		continuations, lo = 3, 0x90
+	case b >= 0xF1 && b <= 0xF3:
+		continuations = 3
+	case b == 0xF4:
+		continuations, hi = 3, 0x8F
+	default:
+		return 0
+	}
+	if i+continuations >= len(bytes) || !mojibakeContinuation(bytes[i+1], lo, hi) {
+		return 0
+	}
+	for k := 2; k <= continuations; k++ {
+		if !mojibakeContinuation(bytes[i+k], 0x80, 0xBF) {
+			return 0
+		}
+	}
+	return continuations + 1
+}
+
+// findCP1252Mojibake reports text that looks like UTF-8 bytes decoded as
+// CP1252/Latin-1, returning the byte offset of the first evidence.
+//
+// Runes are mapped back to the bytes such a decoder consumed and must re-form
+// well-formed UTF-8. Evidence is a sequence that restores a three/four-byte
+// character (CJK, emoji, punctuation such as ’ or →) or a Latin-1 letter (lead
+// byte C2/C3, as in Ã©). Other two-byte sequences are not evidence: Ö” or é–
+// occur in normal text. Two pieces of evidence suffice; one suffices when every
+// non-ASCII rune of the text belongs to a well-formed sequence (ðŸ‘€, äºº).
+func findCP1252Mojibake(text string) (int, bool) {
+	bytes := mojibakeBytes(text)
+	evidence, first := 0, -1
+	nonASCII, covered := 0, 0
+	for i := 0; i < len(bytes); {
+		if n := mojibakeSequence(bytes, i); n > 0 {
+			if n >= 3 || bytes[i].value == 0xC2 || bytes[i].value == 0xC3 {
+				evidence++
+				if first < 0 {
+					first = bytes[i].offset
+				}
+			}
+			nonASCII += n
+			covered += n
+			i += n
+			continue
+		}
+		if text[bytes[i].offset] >= utf8.RuneSelf {
+			nonASCII++
+		}
+		i++
+	}
+	if evidence >= 2 || evidence == 1 && covered == nonASCII {
+		return first, true
+	}
+	return 0, false
 }
 
 func integritySample(text string, offset int) string {

@@ -33,7 +33,16 @@ The detector reports:
 
 - Invalid UTF-8 bytes.
 - The Unicode replacement character U+FFFD.
-- At least two characteristic UTF-8-as-CP1252/Latin-1 pairs in one string.
+- UTF-8 decoded as CP1252/Latin-1 (`cp1252_mojibake`). Each rune is mapped back
+  to the byte such a decoder consumed (U+FFFD stands for one of the five bytes
+  CP1252 leaves undefined), and the bytes must re-form well-formed UTF-8.
+  Evidence is a sequence that restores a three- or four-byte character (CJK,
+  emoji, punctuation such as `’` or `→`) or a Latin-1 letter (`Ã©`). Other
+  two-byte sequences are not evidence, because an accented letter followed by
+  CP1252 punctuation is normal text (`“FETÖ”`, `Sévaré–Konna`). Two pieces of
+  evidence report a finding; one does when every non-ASCII rune of the string
+  belongs to a well-formed sequence, which covers a single damaged character
+  or emoji (`äºº`, `ðŸ‘€`).
 
 Valid JSON is decoded for inspection of keys and string values, including escaped
 characters such as `\ufffd`. Malformed JSON is inspected as text; it does not
@@ -46,7 +55,8 @@ Streaming text and tool argument deltas are assembled per channel and tool index
 before inspection. This requires an additional in-memory copy proportional to
 the streamed text while diagnostics are enabled. Structured reasoning portions
 are inspected individually. Findings are emitted at EOF, a receive error, or
-Close; interrupted streams have `Partial=true`. An incomplete UTF-8 suffix on an
+Close. A stream closed before EOF has `Partial=true` unless a frame with a
+finish reason was received. An incomplete UTF-8 suffix on an
 interrupted stream is ignored. UTF-8 and JSON escape sequences split across
 chunks do not generate premature findings. Consumers must close abandoned
 streams, as required by the normal Stream contract.

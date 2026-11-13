@@ -96,6 +96,19 @@ func TestTextIntegrityDetectsSupportedEncodingProblems(t *testing.T) {
 		{"CP1252", "æ�Žè€�å¸ˆä¸�æ˜¯ä½ è€�å¸ˆ", "cp1252_mojibake", false},
 		{"Latin1 controls", "æ\u009d\u008eè\u0080\u0081", "cp1252_mojibake", false},
 		{"normal unicode", "«déjà» vu café 🇺🇸 李老师不是你老师", "", false},
+		{"one CJK character", "äºº", "cp1252_mojibake", false},
+		{"lossy CJK character", "ä¸\ufffd", "cp1252_mojibake", false}, // 不 = E4 B8 8D; 0x8D became U+FFFD
+		{"one emoji", "ðŸ‘€", "cp1252_mojibake", false},
+		{"one apostrophe in English", "Itâ€™s fine and weâ€™re here", "cp1252_mojibake", false},
+		{"Latin-1 letter", "JosÃ©", "cp1252_mojibake", false},
+		// Accented names followed by CP1252 punctuation in normal output (dev agent corpus).
+		{"name in Chinese quotes", "打击“FETÖ”行动，另有法院以“FETÖ”成员罪判刑", "", false},
+		{"name and en dash", "IED on Sévaré–Konna road; Sévaré–Konna axis", "", false},
+		{"names in quotes", "Santos（绰号“Pará”）与“José”同日遇袭", "", false},
+		{"accent before quote and ellipsis", "perché”… 意大利语引用", "", false},
+		{"Nordic and German", "27 år gammel. Använd inte. Grüße aus Köln, daß", "", false},
+		{"symbols", "¿Qué pasó? ¡Olé! °C ±5 ×10³ “quoted” — dash… •", "", false},
+		{"one lone pair", "æœ solo", "", false},
 		{"empty", "", "", false},
 		{"JSON escaped", `{"value":"\ufffd"}`, "replacement_character", false},
 		{"JSON key", `{"\ufffd":"ok","items":["ok",null,1]}`, "replacement_character", false},
@@ -357,6 +370,42 @@ func TestTextIntegrityCloseWhileReceivingReportsOnce(t *testing.T) {
 	}
 	if events := log.snapshot(); len(events) != 1 || !events[0].Partial {
 		t.Fatalf("concurrent close duplicated findings: %+v", events)
+	}
+}
+
+func TestTextIntegrityCloseAfterFinishReasonIsComplete(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		chunks  []*Chunk
+		partial bool
+	}{
+		{"finish reason seen", []*Chunk{{ContentDelta: "坏�"}, {FinishReason: FinishReasonStop}}, false},
+		{"no finish reason", []*Chunk{{ContentDelta: "坏�"}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			log := &integrityLog{}
+			ctx := WithTextIntegrityObserver(t.Context(), log.observe)
+			stream, err := ObserveStream(ctx, ModelInfo{}, func(context.Context) (Stream, error) {
+				return &integrityFixtureStream{chunks: tc.chunks}, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range tc.chunks {
+				if _, err := stream.Recv(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := stream.Close(); err != nil {
+				t.Fatal(err)
+			}
+			events := log.snapshot()
+			if len(events) != 1 || events[0].Partial != tc.partial {
+				t.Fatalf("want one finding with partial=%v, got %+v", tc.partial, events)
+			}
+		})
 	}
 }
 
