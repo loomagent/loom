@@ -225,6 +225,7 @@ func (s *turnState) emitItemDelta(ctx context.Context, itemPath string, ch Delta
 
 // emitItemFinished broadcasts ItemFinishedEvent to every sink.
 func (s *turnState) emitItemFinished(ctx context.Context, item Item) {
+	observeItemIntegrity(ctx, s.conversationID, item)
 	ev := ItemFinishedEvent{
 		TurnIndex: s.turnIdx,
 		TurnPath:  s.turnPath,
