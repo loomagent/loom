@@ -109,6 +109,7 @@ func TestTextIntegrityDetectsSupportedEncodingProblems(t *testing.T) {
 		{"Nordic and German", "27 år gammel. Använd inte. Grüße aus Köln, daß", "", false},
 		{"symbols", "¿Qué pasó? ¡Olé! °C ±5 ×10³ “quoted” — dash… •", "", false},
 		{"one lone pair", "æœ solo", "", false},
+		{"surrogate is not evidence", "Así\u00a0€5", "", false}, // í NBSP € = ED A0 80
 		{"empty", "", "", false},
 		{"JSON escaped", `{"value":"\ufffd"}`, "replacement_character", false},
 		{"JSON key", `{"\ufffd":"ok","items":["ok",null,1]}`, "replacement_character", false},
