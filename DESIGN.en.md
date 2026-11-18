@@ -144,7 +144,9 @@ const (
 
 type ItemError struct {
     Code    string // an open enum the product may extend
-    Message string
+    Message string // the FailureError's Model text when one was carried, otherwise the raw error text
+    Public  *PublicFacing `json:",omitempty"` // the public text, from FailureError.Public
+    Detail  string        `json:"-"`          // the raw error text; never serialized
 }
 ```
 
@@ -182,8 +184,9 @@ const (
 
 type CloseReason struct {
     Code    CloseCode // the specific reason (a closed enumeration)
-    Message string
+    Message string    // always the raw error text
     Cause   error
+    Public  *PublicFacing `json:",omitempty"` // the public text, filled from FailureOf(Cause)
 }
 
 type CloseCode string
@@ -375,7 +378,53 @@ established, usually with an HTTP 400, so the call site has no `ChatResponse`. P
 map their own official error types onto the latter, and policies above them must not match
 a provider's private wording.
 
-### 5.5 Closure failure semantics
+### 5.5 The three texts of one failure (FailureError)
+
+In a multi-tenant product one failure often needs three texts: the raw error for
+operators (with provider names, endpoints, and other internals), a provider-free
+explanation for the model (tool results can become public, and the model echoes
+what it sees), and finished copy that may go public — loom does not care who the
+eventual reader is. loom only carries the mechanism; it knows no product copy and
+does no string sanitizing or keyword matching.
+
+```go
+type PublicFacing struct {
+    Code    string // machine-readable, for the product to route on
+    Message string // the finished, ready-to-render public text
+}
+
+type FailureError struct {
+    Model  string       // the model-facing text, free of provider internals
+    Public PublicFacing // the text that may go public
+    Cause  error        // the raw error, for operators
+}
+
+func Fail(cause error, model string, public PublicFacing) error
+func FailureOf(err error) (*FailureError, bool) // errors.As semantics, outermost wins
+```
+
+- `FailureError.Error()` returns `Cause.Error()` (Model when Cause is nil), so logs and
+  existing error reporting keep seeing the raw text; `Unwrap()` keeps the
+  `errors.Is/As` chain intact.
+- On a tool failure, `ItemError.Detail` holds the raw text; `Message` and the tool
+  message fed back to the model both go through `modelText` (unexported): the text
+  is FailureError.Model when it is non-empty and otherwise stays the raw text (as
+  before), so the stored Message is always exactly what the model saw;
+  `ItemError.Public` comes from FailureError.Public. `Detail` is tagged `json:"-"`,
+  so no serialization ever carries it out.
+- The tool message fed back to the model (`AppendAssistantTurn`) uses
+  `"tool execution error: " + modelText(err)`, matching `ItemError.Message`.
+- When the handler returns an error or a strict-mode sink fails, `CloseReason.Public`
+  is filled from `FailureOf(Cause)`; `CloseReason.Message` stays the raw text,
+  unchanged.
+- A tool-argument validation failure (`ToolArgumentError`) gets ItemError.Code
+  `invalid_arguments` (previously `tool_failed`), with the model-facing guidance text
+  as the message: the model must see that guidance verbatim, and the product is
+  responsible for never wrapping a `ToolArgumentError` in a FailureError.
+- Without a FailureError the behaviour is exactly what it was, apart from Detail being
+  filled and the argument-error code becoming invalid_arguments.
+
+### 5.6 Closure failure semantics
 
 | Closure returns | Step / Stream behaviour |
 |---|---|
@@ -740,6 +789,7 @@ github.com/loomagent/loom/
 
   # Data model and execution
   turn.go item.go values.go     Turn / Item / UserMessage / ToolCall / ToolResult
+  failure.go                    FailureError / Fail / FailureOf (the three texts of a failure)
   run.go                        Run / RunOptions / CloseReason derivation
   scope.go turn_root.go         the Writer core and the Turn root
   writer.go stream.go stream_impl.go  the Writer family and its streaming implementation
@@ -814,6 +864,7 @@ github.com/loomagent/loom/
 | 31 | an `integer` is judged by value (exact rational arithmetic); `format` is asserted in the contract while the schema keeps the specification's annotation semantics | landed |
 | 32 | the subset suite's skips are counted in three categories: unmodeled keywords (18, a policy), keyword spellings (4, a policy), unimplemented constructs (14, a gap) | landed |
 | 33 | structured output gains an attempt seam: the framework owns the count and each attempt's total deadline, the caller's callback says what the next request is, and `n>1` requires it | landed |
+| 34 | one failure, three texts: the raw error goes to `ItemError.Detail` (`json:"-"`, never serialized), the model text to `Message`, and the public text to `Public`; `CloseReason` does the same, with Message always the raw text | landed |
 
 Dropped: the Note family (reasoning plus a label already carries process information);
 CloseDetector (external termination is a cancelled ctx with a cause); `Writer.RunTool`

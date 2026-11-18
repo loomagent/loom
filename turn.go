@@ -40,6 +40,11 @@ type CloseReason struct {
 	Code    CloseCode // the specific reason
 	Message string    // a human-readable explanation
 	Cause   error     // the original error, set for failures and possibly nil
+	// Public is the text that can go public, carried through a FailureError
+	// in Cause's chain; nil when the product supplied none. Message stays
+	// the raw error text either way. loom does not care who the eventual
+	// reader is.
+	Public *PublicFacing `json:",omitempty"`
 }
 
 type CloseCode string

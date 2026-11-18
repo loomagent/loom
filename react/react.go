@@ -847,7 +847,7 @@ func rejectToolCall(ctx context.Context, w loom.Writer, call loom.ToolCall, code
 	if writeErr := w.WriteToolCall(ctx, call.Name, call); writeErr != nil {
 		return loom.ToolExecResult{}, writeErr
 	}
-	if writeErr := w.WriteToolResult(ctx, call.Name, loom.ToolResult{CallID: call.ID, ToolName: call.Name, Err: &loom.ItemError{Code: code, Message: reason}}); writeErr != nil {
+	if writeErr := w.WriteToolResult(ctx, call.Name, loom.ToolResult{CallID: call.ID, ToolName: call.Name, Err: &loom.ItemError{Code: code, Message: reason, Detail: reason}}); writeErr != nil {
 		return loom.ToolExecResult{}, writeErr
 	}
 	return loom.ToolExecResult{Call: call, Err: err}, nil

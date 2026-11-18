@@ -56,8 +56,18 @@ type ItemError struct {
 	// Code is a machine-readable error code, an open enum the product may extend.
 	// Common values: "tool_failed", "llm_error", "validation_failed", and so on.
 	Code string
-	// Message is a human-readable description.
+	// Message is a human-readable description. For a failure that carried a
+	// FailureError it is the model-facing text, free of provider internals;
+	// otherwise it is the raw error text.
 	Message string
+	// Public is the text that can go public, carried through a FailureError;
+	// nil when the product supplied none. loom does not care who the
+	// eventual reader is.
+	Public *PublicFacing `json:",omitempty"`
+	// Detail is the raw error text for operators. It is excluded from every
+	// JSON serialization, so provider internals never travel to the model or
+	// the end user through a serialized ItemError.
+	Detail string `json:"-"`
 }
 
 // Item is one node inside a Turn: the user's input, part of the agent's output

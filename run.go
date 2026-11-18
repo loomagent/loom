@@ -159,6 +159,7 @@ func deriveCloseReason(state *turnState, ctx context.Context, handlerErr error) 
 			Code:    CloseCodeAgentError,
 			Message: state.sinkErr.Error(),
 			Cause:   state.sinkErr,
+			Public:  failurePublic(state.sinkErr),
 		}
 		return
 	}
@@ -186,6 +187,7 @@ func deriveCloseReason(state *turnState, ctx context.Context, handlerErr error) 
 			Code:    FailureCloseCode(handlerErr),
 			Message: handlerErr.Error(),
 			Cause:   handlerErr,
+			Public:  failurePublic(handlerErr),
 		}
 		return
 	}
@@ -300,7 +302,7 @@ func closeCodeFromContextCancelCause(err error) CloseCode {
 // cancelCloseReason keeps the cause's text when a cancellation ends the turn as
 // failed, so the stored reason says what the host saw.
 func cancelCloseReason(code CloseCode, cause error) *CloseReason {
-	reason := &CloseReason{Code: code, Cause: cause}
+	reason := &CloseReason{Code: code, Cause: cause, Public: failurePublic(cause)}
 	if status, _ := StatusFromCloseCode(code); status == TurnStatusFailed && cause != nil {
 		reason.Message = cause.Error()
 	}
