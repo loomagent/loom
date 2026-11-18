@@ -40,6 +40,10 @@ type CloseReason struct {
 	Code    CloseCode // the specific reason
 	Message string    // a human-readable explanation
 	Cause   error     // the original error, set for failures and possibly nil
+	// User is the end-user-facing text the failure carried through a
+	// FailureError in Cause's chain; nil when the product supplied none.
+	// Message stays the raw error text either way.
+	User *UserFacing `json:",omitempty"`
 }
 
 type CloseCode string

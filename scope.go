@@ -420,7 +420,7 @@ func (w *writerScope) finalizeStreamItem(selfIdx int, finalText string, fnErr er
 			final.Error = nil
 		} else {
 			final.Status = ItemStatusFailed
-			final.Error = &ItemError{Code: "stream_failed", Message: fnErr.Error()}
+			final.Error = failureItemError("stream_failed", fnErr)
 		}
 	} else {
 		final.Status = ItemStatusCompleted
@@ -511,10 +511,7 @@ func (w *writerScope) Step(ctx context.Context, label string, fn func(context.Co
 			final.Error = nil
 		} else {
 			final.Status = ItemStatusFailed
-			final.Error = &ItemError{
-				Code:    "step_failed",
-				Message: fnErr.Error(),
-			}
+			final.Error = failureItemError("step_failed", fnErr)
 		}
 	} else {
 		final.Status = ItemStatusCompleted

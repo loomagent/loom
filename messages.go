@@ -166,7 +166,10 @@ func walkItems(items []Item, fn func(*Item)) {
 //
 // A failed tool: when r.Err is non-nil the tool message's Content becomes
 // "tool execution error: <err>", so the model sees why it failed and decides whether
-// to switch tools or to retry.
+// to switch tools or to retry. When r.Err carries a FailureError with a
+// model-facing text, that text replaces the raw error: FailureError.Error is
+// the raw cause, which may hold provider internals the model would echo back
+// to users.
 func AppendAssistantTurn(msgs []Message, resp *ChatResponse, results []ToolExecResult) []Message {
 	msgs = append(msgs, Message{
 		Role:             RoleAssistant,
@@ -181,6 +184,9 @@ func AppendAssistantTurn(msgs []Message, resp *ChatResponse, results []ToolExecR
 		content := r.Output
 		if r.Err != nil && content == "" {
 			content = "tool execution error: " + r.Err.Error()
+			if fe, ok := FailureOf(r.Err); ok && fe.Model != "" {
+				content = "tool execution error: " + fe.Model
+			}
 		}
 		msgs = append(msgs, Message{
 			Role:       RoleTool,

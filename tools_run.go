@@ -120,9 +120,11 @@ func runOneTool(
 	// 2. look the tool up
 	tool, ok := registry.Lookup(call.Name)
 	if !ok || tool == nil {
+		notFound := fmt.Sprintf("tool %q not registered", call.Name)
 		toolErr := &ItemError{
 			Code:    "tool_not_found",
-			Message: fmt.Sprintf("tool %q not registered", call.Name),
+			Message: notFound,
+			Detail:  notFound,
 		}
 		// OTel: an unregistered tool still gets a span, marked Error, so a trace UI can
 		// show this class of failure
@@ -149,10 +151,16 @@ func runOneTool(
 		Output:   output,
 	}
 	if invokeErr != nil {
-		result.Err = &ItemError{
-			Code:    "tool_failed",
-			Message: invokeErr.Error(),
+		itemErr := failureItemError("tool_failed", invokeErr)
+		// Invalid arguments are the model's mistake rather than an infrastructure
+		// failure, so they carry their own code. The message stays the raw error's
+		// text, which ToolArgumentError already shapes for the model: it says what
+		// to change, complete with expected and example arguments.
+		if _, ok := errors.AsType[*ToolArgumentError](invokeErr); ok {
+			itemErr.Code = "invalid_arguments"
+			itemErr.Message = invokeErr.Error()
 		}
+		result.Err = itemErr
 	}
 	if err := w.WriteToolResult(ctx, label, result); err != nil {
 		return output, err
