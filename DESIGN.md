@@ -152,8 +152,8 @@ const (
 type ItemError struct {
     Code    string // open enum,业务可扩
     Message string // 有 FailureError 时是其 Model 文案,否则是原始错误文本
-    User    *UserFacing `json:",omitempty"` // 终端用户文案,来自 FailureError.User
-    Detail  string      `json:"-"`          // 原始错误文本,序列化永不带出
+    Public  *PublicFacing `json:",omitempty"` // 可公开文案,来自 FailureError.Public
+    Detail  string        `json:"-"`          // 原始错误文本,序列化永不带出
 }
 ```
 
@@ -193,7 +193,7 @@ type CloseReason struct {
     Code    CloseCode // 细分原因(封闭枚举)
     Message string    // 恒为原始错误文本
     Cause   error
-    User    *UserFacing `json:",omitempty"` // 终端用户文案,按 FailureOf(Cause) 填
+    Public  *PublicFacing `json:",omitempty"` // 可公开文案,按 FailureOf(Cause) 填
 }
 
 type CloseCode string
@@ -385,37 +385,39 @@ var (
 ### 5.5 失败文案的三份内容(FailureError)
 
 多租户产品里,一次失败往往需要三份不同文案:运维看原文(含供应商、端点等内情);
-模型看不带供应商信息的说明——工具结果对终端用户可见,且模型会复述所见;终端用户
-看产品写好的文案。loom 只提供承载机制,不认识任何产品文案,也不做字符串脱敏与
-关键词识别。
+模型看不带供应商信息的说明——工具结果可能被公开,且模型会复述所见;可公开部分是
+产品写好的文案,loom 不关心最终读者是谁。loom 只提供承载机制,不认识任何产品
+文案,也不做字符串脱敏与关键词识别。
 
 ```go
-type UserFacing struct {
+type PublicFacing struct {
     Code    string // 机器可读,产品侧路由用
-    Message string // 已写好的终端用户文案
+    Message string // 已写好的可公开文案
 }
 
 type FailureError struct {
-    Model string     // 给模型的文案,不含供应商信息
-    User  UserFacing // 给终端用户的文案
-    Cause error      // 原始错误,运维看原文
+    Model  string        // 给模型的文案,不含供应商信息
+    Public PublicFacing  // 可公开的文案
+    Cause  error         // 原始错误,运维看原文
 }
 
-func Fail(cause error, model string, user UserFacing) error
+func Fail(cause error, model string, public PublicFacing) error
 func FailureOf(err error) (*FailureError, bool) // errors.As 语义,取最外层
 ```
 
 - `FailureError.Error()` 返回 `Cause.Error()`(Cause 为 nil 时返回 Model),日志与
   既有错误报告看到的一直是原文;`Unwrap()` 保留 `errors.Is/As` 链。
-- 工具失败时 `ItemError.Detail` 存原文;`Message` 在 FailureError.Model 非空时取
-  Model,否则保持原文(与引入前一致);`ItemError.User` 取自 FailureError.User。
-  `Detail` 标 `json:"-"`,任何序列化都不得带出。
-- 回填给模型的 tool 消息(`AppendAssistantTurn`)在 FailureOf 命中且 Model 非空时
-  用 `"tool execution error: " + Model`,否则保持原文。
-- handler 返回错误、strict 模式 sink 失败时,`CloseReason.User` 按 `FailureOf(Cause)`
+- 工具失败时 `ItemError.Detail` 存原文;`Message` 与回填给模型的 tool 消息同走
+  `modelText`(未导出):FailureError.Model 非空时取 Model,否则保持原文(与引入前
+  一致),因此存下的 Message 与模型实际看到的内容恒为同一份文本;`ItemError.Public`
+  取自 FailureError.Public。`Detail` 标 `json:"-"`,任何序列化都不得带出。
+- 回填给模型的 tool 消息(`AppendAssistantTurn`)用 `"tool execution error: " +
+  modelText(err)`,与 `ItemError.Message` 一致。
+- handler 返回错误、strict 模式 sink 失败时,`CloseReason.Public` 按 `FailureOf(Cause)`
   填写;`CloseReason.Message` 仍是原文,不变。
 - 工具参数校验失败(`ToolArgumentError`)的 ItemError.Code 为 `invalid_arguments`
-  (原为 `tool_failed`),Message 仍是面向模型的引导原文。
+  (原为 `tool_failed`),Message 仍是面向模型的引导原文:参数错误要让模型看到
+  原文,由产品保证不对 `ToolArgumentError` 包 FailureError。
 - 没有 FailureError 时,除 Detail 被填写、参数错误 code 变为 invalid_arguments 外,
   行为与引入前完全一致。
 
@@ -751,7 +753,7 @@ github.com/loomagent/loom/
 | 31 | `integer` 按值判定(精确有理数运算);`format` 的断言在契约层,schema 层保持规范的注解语义 | 已落实 |
 | 32 | 子集套件的跳过分三类并各自断言:未建模关键字(策略 18)/ 关键字写法(策略 4)/ 未实现构造(缺口 14) | 已落实 |
 | 33 | 结构化输出提供尝试接缝:次数与每次尝试总时限归框架,"下一次发什么"由调用方回调给;`n>1` 必须给回调 | 已落实 |
-| 34 | 失败文案三份分载:原文进 `ItemError.Detail`(`json:"-"`,序列化永不带出),模型文案进 `Message`,`User` 携带终端用户文案;`CloseReason` 同理且 Message 恒为原文 | 已落实 |
+| 34 | 失败文案三份分载:原文进 `ItemError.Detail`(`json:"-"`,序列化永不带出),模型文案进 `Message`,`Public` 携带可公开文案;`CloseReason` 同理且 Message 恒为原文 | 已落实 |
 
 已放弃:Note 系列(reasoning 与 label 足以表达过程信息)、CloseDetector(外部终结
 由调用方取消带 cause 的 ctx 表达)、`Writer.RunTool`(由 `RunToolByName` 与

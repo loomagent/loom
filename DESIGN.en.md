@@ -145,8 +145,8 @@ const (
 type ItemError struct {
     Code    string // an open enum the product may extend
     Message string // the FailureError's Model text when one was carried, otherwise the raw error text
-    User    *UserFacing `json:",omitempty"` // the end-user text, from FailureError.User
-    Detail  string      `json:"-"`          // the raw error text; never serialized
+    Public  *PublicFacing `json:",omitempty"` // the public text, from FailureError.Public
+    Detail  string        `json:"-"`          // the raw error text; never serialized
 }
 ```
 
@@ -186,7 +186,7 @@ type CloseReason struct {
     Code    CloseCode // the specific reason (a closed enumeration)
     Message string    // always the raw error text
     Cause   error
-    User    *UserFacing `json:",omitempty"` // the end-user text, filled from FailureOf(Cause)
+    Public  *PublicFacing `json:",omitempty"` // the public text, filled from FailureOf(Cause)
 }
 
 type CloseCode string
@@ -382,41 +382,45 @@ a provider's private wording.
 
 In a multi-tenant product one failure often needs three texts: the raw error for
 operators (with provider names, endpoints, and other internals), a provider-free
-explanation for the model (tool results are visible to end users, and the model echoes
-what it sees), and finished copy for the end user. loom only carries the mechanism; it
-knows no product copy and does no string sanitizing or keyword matching.
+explanation for the model (tool results can become public, and the model echoes
+what it sees), and finished copy that may go public — loom does not care who the
+eventual reader is. loom only carries the mechanism; it knows no product copy and
+does no string sanitizing or keyword matching.
 
 ```go
-type UserFacing struct {
+type PublicFacing struct {
     Code    string // machine-readable, for the product to route on
-    Message string // the finished, user-ready text
+    Message string // the finished, ready-to-render public text
 }
 
 type FailureError struct {
-    Model string     // the model-facing text, free of provider internals
-    User  UserFacing // the end-user text
-    Cause error      // the raw error, for operators
+    Model  string       // the model-facing text, free of provider internals
+    Public PublicFacing // the text that may go public
+    Cause  error        // the raw error, for operators
 }
 
-func Fail(cause error, model string, user UserFacing) error
+func Fail(cause error, model string, public PublicFacing) error
 func FailureOf(err error) (*FailureError, bool) // errors.As semantics, outermost wins
 ```
 
 - `FailureError.Error()` returns `Cause.Error()` (Model when Cause is nil), so logs and
   existing error reporting keep seeing the raw text; `Unwrap()` keeps the
   `errors.Is/As` chain intact.
-- On a tool failure, `ItemError.Detail` holds the raw text; `Message` takes
-  FailureError.Model when it is non-empty and otherwise stays the raw text (as before);
-  `ItemError.User` comes from FailureError.User. `Detail` is tagged `json:"-"`, so no
-  serialization ever carries it out.
+- On a tool failure, `ItemError.Detail` holds the raw text; `Message` and the tool
+  message fed back to the model both go through `modelText` (unexported): the text
+  is FailureError.Model when it is non-empty and otherwise stays the raw text (as
+  before), so the stored Message is always exactly what the model saw;
+  `ItemError.Public` comes from FailureError.Public. `Detail` is tagged `json:"-"`,
+  so no serialization ever carries it out.
 - The tool message fed back to the model (`AppendAssistantTurn`) uses
-  `"tool execution error: " + Model` when FailureOf hits with a non-empty Model, and
-  otherwise keeps the raw text.
-- When the handler returns an error or a strict-mode sink fails, `CloseReason.User` is
-  filled from `FailureOf(Cause)`; `CloseReason.Message` stays the raw text, unchanged.
+  `"tool execution error: " + modelText(err)`, matching `ItemError.Message`.
+- When the handler returns an error or a strict-mode sink fails, `CloseReason.Public`
+  is filled from `FailureOf(Cause)`; `CloseReason.Message` stays the raw text,
+  unchanged.
 - A tool-argument validation failure (`ToolArgumentError`) gets ItemError.Code
   `invalid_arguments` (previously `tool_failed`), with the model-facing guidance text
-  as the message.
+  as the message: the model must see that guidance verbatim, and the product is
+  responsible for never wrapping a `ToolArgumentError` in a FailureError.
 - Without a FailureError the behaviour is exactly what it was, apart from Detail being
   filled and the argument-error code becoming invalid_arguments.
 
@@ -860,7 +864,7 @@ github.com/loomagent/loom/
 | 31 | an `integer` is judged by value (exact rational arithmetic); `format` is asserted in the contract while the schema keeps the specification's annotation semantics | landed |
 | 32 | the subset suite's skips are counted in three categories: unmodeled keywords (18, a policy), keyword spellings (4, a policy), unimplemented constructs (14, a gap) | landed |
 | 33 | structured output gains an attempt seam: the framework owns the count and each attempt's total deadline, the caller's callback says what the next request is, and `n>1` requires it | landed |
-| 34 | one failure, three texts: the raw error goes to `ItemError.Detail` (`json:"-"`, never serialized), the model text to `Message`, and the user text to `User`; `CloseReason` does the same, with Message always the raw text | landed |
+| 34 | one failure, three texts: the raw error goes to `ItemError.Detail` (`json:"-"`, never serialized), the model text to `Message`, and the public text to `Public`; `CloseReason` does the same, with Message always the raw text | landed |
 
 Dropped: the Note family (reasoning plus a label already carries process information);
 CloseDetector (external termination is a cancelled ctx with a cause); `Writer.RunTool`

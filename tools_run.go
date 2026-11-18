@@ -153,12 +153,13 @@ func runOneTool(
 	if invokeErr != nil {
 		itemErr := failureItemError("tool_failed", invokeErr)
 		// Invalid arguments are the model's mistake rather than an infrastructure
-		// failure, so they carry their own code. The message stays the raw error's
-		// text, which ToolArgumentError already shapes for the model: it says what
-		// to change, complete with expected and example arguments.
+		// failure, so they carry their own code. The message is left exactly as
+		// failureItemError built it: the model must see the argument guidance
+		// verbatim — ToolArgumentError's text already says what to change, with
+		// expected and example arguments — so the product must not wrap a
+		// ToolArgumentError in a FailureError that would replace it.
 		if _, ok := errors.AsType[*ToolArgumentError](invokeErr); ok {
 			itemErr.Code = "invalid_arguments"
-			itemErr.Message = invokeErr.Error()
 		}
 		result.Err = itemErr
 	}

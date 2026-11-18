@@ -17,7 +17,7 @@ func newVendorFailureTool() Tool {
 			return "", Fail(
 				errVendorQuota,
 				"the search tool is temporarily unavailable",
-				UserFacing{Code: "search_down", Message: "搜索服务暂时不可用，请稍后再试"},
+				PublicFacing{Code: "search_down", Message: "搜索服务暂时不可用，请稍后再试"},
 			)
 		},
 	)
@@ -32,8 +32,8 @@ var errVendorQuota = errors.New("vendor X upstream: 500 quota exceeded")
 func TestFailureOf_FindsOutermostFailureError(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("vendor X upstream: 500")
-	inner := Fail(cause, "inner text", UserFacing{Code: "inner", Message: "内层"})
-	outer := Fail(inner, "outer text", UserFacing{Code: "outer", Message: "外层"})
+	inner := Fail(cause, "inner text", PublicFacing{Code: "inner", Message: "内层"})
+	outer := Fail(inner, "outer text", PublicFacing{Code: "outer", Message: "外层"})
 
 	wrapped := fmt.Errorf("step: %w", fmt.Errorf("tools: %w", outer))
 
@@ -46,7 +46,7 @@ func TestFailureOf_FindsOutermostFailureError(t *testing.T) {
 	if fe != outer {
 		t.Fatalf("FailureOf returned %p, want the outer FailureError %p", fe, outer)
 	}
-	if fe.Model != "outer text" || fe.User.Code != "outer" {
+	if fe.Model != "outer text" || fe.Public.Code != "outer" {
 		t.Fatalf("outermost fields: %+v", fe)
 	}
 	if !errors.Is(wrapped, cause) || !errors.Is(wrapped, inner) {
@@ -67,23 +67,23 @@ func TestFailureOf_FindsOutermostFailureError(t *testing.T) {
 func TestFailureError_ErrorText(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("vendor X upstream: 500")
-	if got := Fail(cause, "model text", UserFacing{Code: "c", Message: "m"}).Error(); got != "vendor X upstream: 500" {
+	if got := Fail(cause, "model text", PublicFacing{Code: "c", Message: "m"}).Error(); got != "vendor X upstream: 500" {
 		t.Errorf("Error with cause = %q, want the cause text", got)
 	}
-	if got := Fail(nil, "model text", UserFacing{Code: "c", Message: "m"}).Error(); got != "model text" {
+	if got := Fail(nil, "model text", PublicFacing{Code: "c", Message: "m"}).Error(); got != "model text" {
 		t.Errorf("Error without cause = %q, want the model text", got)
 	}
 }
 
 func TestFailureItemError_EmptyTextsKeepRawError(t *testing.T) {
 	t.Parallel()
-	err := Fail(errors.New("raw detail"), "", UserFacing{})
+	err := Fail(errors.New("raw detail"), "", PublicFacing{})
 	itemErr := failureItemError("tool_failed", err)
 	if itemErr.Message != "raw detail" || itemErr.Detail != "raw detail" {
 		t.Errorf("message/detail: %+v", itemErr)
 	}
-	if itemErr.User != nil {
-		t.Errorf("zero UserFacing must not become a pointer field: %+v", itemErr.User)
+	if itemErr.Public != nil {
+		t.Errorf("zero PublicFacing must not become a pointer field: %+v", itemErr.Public)
 	}
 }
 
@@ -121,8 +121,8 @@ func TestExecuteToolCalls_FailureErrorTexts(t *testing.T) {
 	if itemErr.Detail != "vendor X upstream: 500 quota exceeded" {
 		t.Errorf("detail = %q, want the raw cause text", itemErr.Detail)
 	}
-	if itemErr.User == nil || itemErr.User.Code != "search_down" || itemErr.User.Message != "搜索服务暂时不可用，请稍后再试" {
-		t.Errorf("user: %+v", itemErr.User)
+	if itemErr.Public == nil || itemErr.Public.Code != "search_down" || itemErr.Public.Message != "搜索服务暂时不可用，请稍后再试" {
+		t.Errorf("public: %+v", itemErr.Public)
 	}
 }
 
@@ -145,8 +145,8 @@ func TestExecuteToolCalls_PlainErrorUnchanged(t *testing.T) {
 	if itemErr.Code != "tool_failed" || itemErr.Message != "boom" || itemErr.Detail != "boom" {
 		t.Errorf("item error: %+v", itemErr)
 	}
-	if itemErr.User != nil {
-		t.Errorf("plain error must not grow a user block: %+v", itemErr.User)
+	if itemErr.Public != nil {
+		t.Errorf("plain error must not grow a public block: %+v", itemErr.Public)
 	}
 }
 
@@ -159,9 +159,11 @@ func TestExecuteToolCalls_InvalidArgumentsCode(t *testing.T) {
 		},
 	))
 
+	var results []ToolExecResult
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
 		// the model omitted the required "value" argument
-		results, err := ExecuteToolCalls(ctx, w, reg, []ToolCall{{ID: "c1", Name: "echo", Arguments: `{}`}})
+		var err error
+		results, err = ExecuteToolCalls(ctx, w, reg, []ToolCall{{ID: "c1", Name: "echo", Arguments: `{}`}})
 		if err != nil {
 			return err
 		}
@@ -184,19 +186,121 @@ func TestExecuteToolCalls_InvalidArgumentsCode(t *testing.T) {
 	if itemErr.Detail != itemErr.Message {
 		t.Errorf("detail = %q, want the same raw text as message", itemErr.Detail)
 	}
-	if itemErr.User != nil {
-		t.Errorf("argument rejection must not grow a user block: %+v", itemErr.User)
+	if itemErr.Public != nil {
+		t.Errorf("argument rejection must not grow a public block: %+v", itemErr.Public)
+	}
+	// An unwrapped argument error keeps its verbatim guidance both in the stored
+	// ItemError and in what the model is fed.
+	raw := results[0].Err.Error()
+	if itemErr.Message != raw {
+		t.Errorf("message = %q, want the verbatim argument error %q", itemErr.Message, raw)
+	}
+	msgs := AppendAssistantTurn(nil, &ChatResponse{}, results)
+	if len(msgs) != 2 {
+		t.Fatalf("msgs: %+v", msgs)
+	}
+	if want := "tool execution error: " + raw; msgs[1].Content != want {
+		t.Errorf("fed content = %q, want %q", msgs[1].Content, want)
+	}
+}
+
+// TestExecuteToolCalls_WrappedArgumentErrorKeepsModelText covers a product tool
+// that wraps its ToolArgumentError in a FailureError: the code still classifies
+// as invalid_arguments, and the stored ItemError.Message is exactly the text the
+// model is fed — one modelText, no special case.
+func TestExecuteToolCalls_WrappedArgumentErrorKeepsModelText(t *testing.T) {
+	argErr := &ToolArgumentError{
+		Tool:   "echo",
+		Kind:   ToolArgumentErrorSchema,
+		Issues: []ToolArgumentIssue{{Field: "value", Rule: "required", Message: "value is required"}},
+	}
+	reg := NewToolRegistry()
+	_ = reg.Register(NewArgsTool(MustArgsContract("echo"), "echo back",
+		func(context.Context, Args) (string, error) {
+			return "", Fail(argErr, "fix the arguments and call again",
+				PublicFacing{Code: "bad_arguments", Message: "参数有误，请调整后重试"})
+		},
+	))
+
+	var results []ToolExecResult
+	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
+		var err error
+		results, err = ExecuteToolCalls(ctx, w, reg, []ToolCall{{ID: "c1", Name: "echo", Arguments: `{}`}})
+		if err != nil {
+			return err
+		}
+		return w.FinalAnswer(ctx, "ok")
+	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+
+	if turn == nil {
+		t.Fatalf("Run returned nil turn")
+	}
+	itemErr := turn.Items[1].Error
+	if itemErr == nil {
+		t.Fatalf("tool_result has no error")
+	}
+	if itemErr.Code != "invalid_arguments" {
+		t.Errorf("code = %q, want invalid_arguments", itemErr.Code)
+	}
+	if itemErr.Message != "fix the arguments and call again" {
+		t.Errorf("message = %q, want the model-facing text", itemErr.Message)
+	}
+	if itemErr.Detail != argErr.Error() {
+		t.Errorf("detail = %q, want the raw argument error text", itemErr.Detail)
+	}
+	if itemErr.Public == nil || itemErr.Public.Code != "bad_arguments" {
+		t.Errorf("public: %+v", itemErr.Public)
+	}
+	msgs := AppendAssistantTurn(nil, &ChatResponse{}, results)
+	if len(msgs) != 2 {
+		t.Fatalf("msgs: %+v", msgs)
+	}
+	if want := "tool execution error: " + itemErr.Message; msgs[1].Content != want {
+		t.Errorf("fed content = %q, want the stored message %q", msgs[1].Content, want)
+	}
+	if strings.Contains(msgs[1].Content, "invalid arguments for tool") {
+		t.Errorf("fed content = %q must not fall back to the raw argument error", msgs[1].Content)
 	}
 }
 
 // ===== Model-facing tool message =====
+
+// TestModelTextMatchesFedBackToolMessage is the invariant behind ItemError.Message
+// and AppendAssistantTurn: whatever the error shape, the text the model is fed is
+// "tool execution error: " plus exactly the stored message. Both go through
+// modelText, so they cannot drift apart.
+func TestModelTextMatchesFedBackToolMessage(t *testing.T) {
+	t.Parallel()
+	cases := map[string]error{
+		"plain error":              errors.New("boom"),
+		"failure error":            Fail(errVendorQuota, "the search tool is temporarily unavailable", PublicFacing{Code: "search_down"}),
+		"failure with empty model": Fail(errVendorQuota, "", PublicFacing{Code: "search_down"}),
+		"argument error": &ToolArgumentError{
+			Tool:   "echo",
+			Issues: []ToolArgumentIssue{{Field: "value", Rule: "required", Message: "value is required"}},
+		},
+	}
+	for name, err := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			itemErr := failureItemError("tool_failed", err)
+			msgs := AppendAssistantTurn(nil, &ChatResponse{}, []ToolExecResult{{Call: ToolCall{ID: "c1"}, Err: err}})
+			if len(msgs) != 2 || msgs[1].Role != RoleTool {
+				t.Fatalf("msgs: %+v", msgs)
+			}
+			if want := "tool execution error: " + itemErr.Message; msgs[1].Content != want {
+				t.Errorf("fed content = %q, want the stored message %q", msgs[1].Content, want)
+			}
+		})
+	}
+}
 
 func TestAppendAssistantTurn_FailureErrorModelText(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("vendor X upstream: 500 quota exceeded")
 	results := []ToolExecResult{{
 		Call: ToolCall{ID: "c1", Name: "search"},
-		Err:  Fail(cause, "the search tool is temporarily unavailable", UserFacing{Code: "search_down", Message: "搜索暂时不可用"}),
+		Err:  Fail(cause, "the search tool is temporarily unavailable", PublicFacing{Code: "search_down", Message: "搜索暂时不可用"}),
 	}}
 	msgs := AppendAssistantTurn(nil, &ChatResponse{}, results)
 	if len(msgs) != 2 || msgs[1].Role != RoleTool || msgs[1].ToolCallID != "c1" {
@@ -221,10 +325,10 @@ func TestAppendAssistantTurn_PlainErrorUnchanged(t *testing.T) {
 
 // ===== Handler failure → CloseReason =====
 
-func TestRun_HandlerFailureErrorFillsCloseReasonUser(t *testing.T) {
+func TestRun_HandlerFailureErrorFillsCloseReasonPublic(t *testing.T) {
 	cause := errors.New("worker panic: nil deref at vendor.go:42")
 	handlerErr := Fail(fmt.Errorf("plan phase: %w", cause), "the task could not be finished",
-		UserFacing{Code: "task_failed", Message: "任务暂时无法完成，请稍后重试"})
+		PublicFacing{Code: "task_failed", Message: "任务暂时无法完成，请稍后重试"})
 
 	turn, err := Run(context.Background(), func(context.Context, TurnWriter, []Turn, UserMessage) error {
 		return handlerErr
@@ -241,20 +345,20 @@ func TestRun_HandlerFailureErrorFillsCloseReasonUser(t *testing.T) {
 	if cr.Message != handlerErr.Error() || !strings.Contains(cr.Message, "worker panic") {
 		t.Errorf("message = %q, want the raw error text", cr.Message)
 	}
-	if cr.User == nil || cr.User.Code != "task_failed" || cr.User.Message != "任务暂时无法完成，请稍后重试" {
-		t.Errorf("user: %+v", cr.User)
+	if cr.Public == nil || cr.Public.Code != "task_failed" || cr.Public.Message != "任务暂时无法完成，请稍后重试" {
+		t.Errorf("public: %+v", cr.Public)
 	}
 	if !errors.Is(cr.Cause, cause) || !errors.Is(err, cause) {
 		t.Error("the close reason and Run's error no longer reach the cause")
 	}
 }
 
-func TestRun_PlainHandlerErrorHasNoUser(t *testing.T) {
+func TestRun_PlainHandlerErrorHasNoPublic(t *testing.T) {
 	turn, _ := Run(context.Background(), func(context.Context, TurnWriter, []Turn, UserMessage) error {
 		return errors.New("boom")
 	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
 
-	if cr := turn.CloseReason; cr == nil || cr.Message != "boom" || cr.User != nil {
+	if cr := turn.CloseReason; cr == nil || cr.Message != "boom" || cr.Public != nil {
 		t.Errorf("close reason: %+v", cr)
 	}
 }
@@ -263,7 +367,7 @@ func TestRun_PlainHandlerErrorHasNoUser(t *testing.T) {
 
 func TestStep_FailureErrorTexts(t *testing.T) {
 	cause := errors.New("vendor X upstream: refused")
-	stepErr := Fail(cause, "the lookup step failed", UserFacing{Code: "lookup_failed", Message: "查询失败"})
+	stepErr := Fail(cause, "the lookup step failed", PublicFacing{Code: "lookup_failed", Message: "查询失败"})
 
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
 		_ = w.Step(ctx, "lookup", func(context.Context, Step) error { return stepErr })
@@ -283,14 +387,14 @@ func TestStep_FailureErrorTexts(t *testing.T) {
 	if step.Error.Detail != "vendor X upstream: refused" {
 		t.Errorf("detail = %q, want the raw cause text", step.Error.Detail)
 	}
-	if step.Error.User == nil || step.Error.User.Code != "lookup_failed" {
-		t.Errorf("user: %+v", step.Error.User)
+	if step.Error.Public == nil || step.Error.Public.Code != "lookup_failed" {
+		t.Errorf("public: %+v", step.Error.Public)
 	}
 }
 
 func TestStreamReasoning_FailureErrorTexts(t *testing.T) {
 	cause := errors.New("vendor X stream: connection reset")
-	streamErr := Fail(cause, "the response stream was interrupted", UserFacing{Code: "stream_down", Message: "回复中断"})
+	streamErr := Fail(cause, "the response stream was interrupted", PublicFacing{Code: "stream_down", Message: "回复中断"})
 
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
 		_ = w.StreamReasoning(ctx, "think", func(ReasoningStream) error { return streamErr })
@@ -310,8 +414,8 @@ func TestStreamReasoning_FailureErrorTexts(t *testing.T) {
 	if reasoning.Error.Detail != "vendor X stream: connection reset" {
 		t.Errorf("detail = %q, want the raw cause text", reasoning.Error.Detail)
 	}
-	if reasoning.Error.User == nil || reasoning.Error.User.Code != "stream_down" {
-		t.Errorf("user: %+v", reasoning.Error.User)
+	if reasoning.Error.Public == nil || reasoning.Error.Public.Code != "stream_down" {
+		t.Errorf("public: %+v", reasoning.Error.Public)
 	}
 }
 
@@ -323,7 +427,7 @@ func TestItemError_JSONExcludesDetail(t *testing.T) {
 		Code:    "tool_failed",
 		Message: "the search tool is temporarily unavailable",
 		Detail:  "vendor X upstream: 500 quota exceeded",
-		User:    &UserFacing{Code: "search_down", Message: "搜索服务暂时不可用"},
+		Public:  &PublicFacing{Code: "search_down", Message: "搜索服务暂时不可用"},
 	}
 
 	for name, marshal := range map[string]func(any) ([]byte, error){
@@ -346,24 +450,24 @@ func TestItemError_JSONExcludesDetail(t *testing.T) {
 			if err := stdjson.Unmarshal(data, &fields); err != nil {
 				t.Fatalf("unmarshal back: %v", err)
 			}
-			for _, key := range []string{"Code", "Message", "User"} {
+			for _, key := range []string{"Code", "Message", "Public"} {
 				if _, ok := fields[key]; !ok {
 					t.Errorf("payload %s lost key %q", data, key)
 				}
 			}
-			user, _ := fields["User"].(map[string]any)
-			if user == nil || user["Code"] != "search_down" {
-				t.Errorf("payload %s lost the user block", data)
+			public, _ := fields["Public"].(map[string]any)
+			if public == nil || public["Code"] != "search_down" {
+				t.Errorf("payload %s lost the public block", data)
 			}
 		})
 	}
 
-	// A nil User omits the field entirely rather than serializing null.
+	// A nil Public omits the field entirely rather than serializing null.
 	plain, err := stdjson.Marshal(&ItemError{Code: "tool_failed", Message: "boom", Detail: "boom"})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if bytes.Contains(plain, []byte("User")) || bytes.Contains(plain, []byte("Detail")) {
-		t.Errorf("payload %s must omit User and Detail", plain)
+	if bytes.Contains(plain, []byte("Public")) || bytes.Contains(plain, []byte("Detail")) {
+		t.Errorf("payload %s must omit Public and Detail", plain)
 	}
 }

@@ -60,9 +60,10 @@ type ItemError struct {
 	// FailureError it is the model-facing text, free of provider internals;
 	// otherwise it is the raw error text.
 	Message string
-	// User is the end-user-facing text the failure carried through a
-	// FailureError; nil when the product supplied none.
-	User *UserFacing `json:",omitempty"`
+	// Public is the text that can go public, carried through a FailureError;
+	// nil when the product supplied none. loom does not care who the
+	// eventual reader is.
+	Public *PublicFacing `json:",omitempty"`
 	// Detail is the raw error text for operators. It is excluded from every
 	// JSON serialization, so provider internals never travel to the model or
 	// the end user through a serialized ItemError.
