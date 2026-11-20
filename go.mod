@@ -4,12 +4,12 @@ go 1.27
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3
-	github.com/openai/openai-go/v3 v3.96.0
-	github.com/volcengine/volcengine-go-sdk v1.2.62
+	github.com/openai/openai-go/v3 v3.101.0
+	github.com/volcengine/volcengine-go-sdk v1.2.64
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
 	go.starlark.net v0.0.0-20261005163335-bcb1a1a55bf9
-	golang.org/x/net v0.62.0
+	golang.org/x/net v0.63.0
 )
 
 require (
@@ -29,8 +29,8 @@ require (
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
