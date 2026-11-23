@@ -25,7 +25,7 @@ func TestMessageProvenanceSeparatesTaskAndFrameworkUserRoles(t *testing.T) {
 }
 
 func TestUntaggedUserMessageIsNotTrustedAsExternal(t *testing.T) {
-	legacy := Message{Role: RoleUser, Content: "legacy question"}
+	legacy := Message{Role: RoleUser, Parts: []ContentPart{TextPart("legacy question")}}
 	if legacy.IsExternalUserMessage() || legacy.Source() != MessageSourceUnknown {
 		t.Fatalf("untagged user message must not be trusted as external: %#v", legacy)
 	}

@@ -29,7 +29,7 @@ func TestStructuredAttemptsStayUnwrappedByDefault(t *testing.T) {
 	model := &fakeStructuredModel{
 		responses: []string{`{"overall_done":"no","notes":"bad type"}`},
 	}
-	_, _, err := ChatStructuredArgs(t.Context(), "test.one", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract)
+	_, _, err := ChatStructuredArgs(t.Context(), "test.one", model, ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("test task")}}}}, contract)
 	if _, ok := errors.AsType[*StructuredOutputError](err); !ok {
 		t.Fatalf("err = %v, want a StructuredOutputError", err)
 	}
@@ -47,7 +47,7 @@ func TestStructuredAttemptsRequireANextRequest(t *testing.T) {
 	t.Parallel()
 	contract, _, _ := reviewContract()
 	model := &fakeStructuredModel{responses: []string{`{"overall_done":true,"notes":"ok"}`}}
-	_, _, err := ChatStructuredArgs(t.Context(), "test.need-callback", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract,
+	_, _, err := ChatStructuredArgs(t.Context(), "test.need-callback", model, ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("test task")}}}}, contract,
 		WithStructuredAttempts(2))
 	if err == nil || !strings.Contains(err.Error(), "WithStructuredNextRequest is required") {
 		t.Fatalf("err = %v", err)
@@ -67,7 +67,7 @@ func TestStructuredNextRequestDrivesTheNextAttempt(t *testing.T) {
 	}}
 	var attempts int
 	args, _, err := ChatStructuredArgs(t.Context(), "test.next", model, ChatRequest{
-		Messages: []Message{{Role: RoleUser, Content: "review"}},
+		Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("review")}}},
 	}, contract,
 		WithStructuredAttempts(2),
 		WithStructuredNextRequest(func(_ context.Context, attempt StructuredAttempt) (*ChatRequest, error) {
@@ -89,11 +89,11 @@ func TestStructuredNextRequestDrivesTheNextAttempt(t *testing.T) {
 				t.Fatalf("attempt request = %+v", attempt.Request)
 			}
 			// The request is a copy: mutating it must not reach the request that was sent.
-			attempt.Request.Messages[0].Content = "mutated"
+			attempt.Request.Messages[0].Parts = []ContentPart{TextPart("mutated")}
 			next := attempt.Request
 			next.Messages = append(next.Messages,
-				Message{Role: RoleAssistant, Content: outputErr.Content},
-				Message{Role: RoleUser, Content: "return one JSON value matching the contract"})
+				Message{Role: RoleAssistant, Parts: []ContentPart{TextPart(outputErr.Content)}},
+				Message{Role: RoleUser, Parts: []ContentPart{TextPart("return one JSON value matching the contract")}})
 			return &next, nil
 		}))
 	if err != nil {
@@ -105,7 +105,7 @@ func TestStructuredNextRequestDrivesTheNextAttempt(t *testing.T) {
 	if len(model.requests) != 2 {
 		t.Fatalf("requests = %d, want 2", len(model.requests))
 	}
-	if got := model.requests[0].Messages[0].Content; got != "review" {
+	if got := TextOf(model.requests[0].Messages[0].Parts); got != "review" {
 		t.Fatalf("the callback mutated the request that was sent: %q", got)
 	}
 	second := model.requests[1].Messages
@@ -122,7 +122,7 @@ func TestStructuredNextRequestStopsTheCall(t *testing.T) {
 		`{"overall_done":"no","notes":"bad type"}`,
 		`{"overall_done":true,"notes":"ok"}`,
 	}}
-	_, _, err := ChatStructuredArgs(t.Context(), "test.stop", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract,
+	_, _, err := ChatStructuredArgs(t.Context(), "test.stop", model, ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("test task")}}}}, contract,
 		WithStructuredAttempts(3),
 		WithStructuredNextRequest(func(context.Context, StructuredAttempt) (*ChatRequest, error) {
 			return nil, nil
@@ -145,7 +145,7 @@ func TestStructuredNextRequestFailureIsReportedSeparately(t *testing.T) {
 	contract, _, _ := reviewContract()
 	model := &fakeStructuredModel{responses: []string{`{"overall_done":"no","notes":"bad type"}`}}
 	callbackErr := errors.New("the caller's own bug")
-	_, _, err := ChatStructuredArgs(t.Context(), "test.callback-error", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract,
+	_, _, err := ChatStructuredArgs(t.Context(), "test.callback-error", model, ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("test task")}}}}, contract,
 		WithStructuredAttempts(2),
 		WithStructuredNextRequest(func(context.Context, StructuredAttempt) (*ChatRequest, error) {
 			return nil, callbackErr
@@ -169,7 +169,7 @@ func TestStructuredAttemptTimeoutIsItsOwnError(t *testing.T) {
 		var seen error
 		done := make(chan error, 1)
 		go func() {
-			_, _, err := ChatStructuredArgs(context.Background(), "test.timeout", &blockingModel{}, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract,
+			_, _, err := ChatStructuredArgs(context.Background(), "test.timeout", &blockingModel{}, ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("test task")}}}}, contract,
 				WithStructuredAttempts(2),
 				WithStructuredAttemptTimeout(time.Minute),
 				WithStructuredNextRequest(func(_ context.Context, attempt StructuredAttempt) (*ChatRequest, error) {
@@ -198,7 +198,7 @@ func TestStructuredAttemptsStopOnParentCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	called := false
-	_, _, err := ChatStructuredArgs(ctx, "test.parent-cancel", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "test task"}}}, contract,
+	_, _, err := ChatStructuredArgs(ctx, "test.parent-cancel", model, ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("test task")}}}}, contract,
 		WithStructuredAttempts(2),
 		WithStructuredNextRequest(func(context.Context, StructuredAttempt) (*ChatRequest, error) {
 			called = true

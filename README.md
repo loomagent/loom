@@ -17,6 +17,7 @@ interfaces.
 - Streaming model and writer APIs
 - Fan-out to multiple pluggable `Sink` implementations
 - Provider-neutral `ChatModel` abstraction
+- Image input beside text on a user message, through every built-in provider
 - A reasoning turn's reasoning is carried back on the next call, text and, where a provider
   returns structured blocks, the blocks themselves unchanged and in order
 - OpenTelemetry tracing with content capture disabled by default
@@ -66,10 +67,10 @@ func main() {
 		if err := w.WriteReasoning(ctx, "Plan", "Answer directly"); err != nil {
 			return err
 		}
-		return w.FinalAnswer(ctx, "Hello, "+input.Text)
+		return w.FinalAnswer(ctx, "Hello, "+loom.TextOf(input.Parts))
 	}, loom.RunOptions{
 		ConversationID: "example",
-		Input:          loom.UserMessage{Text: "Loom"},
+		Input:          loom.TextUserMessage("Loom"),
 		Sinks:          []loom.Sink{sink},
 	})
 	if err != nil {
@@ -229,8 +230,8 @@ task description joins them without anything being rewritten —
 
 ```go
 messages := []loom.Message{
-    {Role: loom.RoleSystem, Content: contract.JSONObjectPrompt()},
-    {Role: loom.RoleUser, Content: "Judge the overall sentiment of this delivery review."},
+    {Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart(contract.JSONObjectPrompt())}},
+    {Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("Judge the overall sentiment of this delivery review.")}},
 }
 ```
 
@@ -290,8 +291,8 @@ args, _, err := loom.ChatStructuredArgs(ctx, "summary", model, request, contract
     loom.WithStructuredNextRequest(func(_ context.Context, attempt loom.StructuredAttempt) (*loom.ChatRequest, error) {
         next := attempt.Request                                  // the request that just failed
         next.Messages = append(next.Messages,
-            loom.Message{Role: loom.RoleAssistant, Content: attempt.Response.Content},
-            loom.Message{Role: loom.RoleUser, Content: "Return one JSON value matching:\n" + schemaJSON})
+            loom.Message{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart(attempt.Response.Content)}},
+            loom.Message{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("Return one JSON value matching:\n" + schemaJSON)}})
         return &next, nil                                        // nil stops and reports the failure
     }))
 ```
@@ -328,10 +329,10 @@ for attempt := 1; ; attempt++ {
         return err // a request-level failure, which the provider already retried
     }
     messages = append(messages,
-        loom.Message{Role: loom.RoleAssistant, Content: invalid.Content},
-        loom.Message{Role: loom.RoleUser, Content: fmt.Sprintf(
+        loom.Message{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart(invalid.Content)}},
+        loom.Message{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart(fmt.Sprintf(
             "Your previous output was rejected: %v\nReturn one JSON value matching:\n%s",
-            err, schemaJSON)})
+            err, schemaJSON))}})
 }
 ```
 
@@ -467,6 +468,45 @@ providers need no such entry; Loom applies no private account policy by default.
 Keep application boundary checks to prevent bypassing this shared construction
 path. Extra headers cannot detect a requirement the application never declared,
 or control separate SDK clients/APIs outside Loom's Chat/Stream interface.
+
+### Image input
+
+A message carries its content as parts, text and images in order. An image
+goes on the user message, next to the text that talks about it:
+
+```go
+model, err := modelfactory.Build(modelfactory.Config{
+    Provider:     modelfactory.ProviderOpenRouter,
+    APIKey:       os.Getenv("OPENROUTER_API_KEY"),
+    Model:        os.Getenv("MODEL_NAME"),
+    Capabilities: &loom.ModelCapabilities{Vision: true},
+})
+response, err := model.Chat(ctx, loom.ChatRequest{
+    Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{
+        loom.TextPart("What is in this image?"),
+        loom.ImagePart("https://example.com/cat.png", "low"),
+    }}},
+})
+```
+
+`ImagePart`'s second argument is the endpoint's `detail` setting, sent as
+given: Loom keeps no list of accepted values, because each provider defines its
+own. An empty string sends no `detail`, and the provider applies its default.
+`loom.TextOf(parts)` is a message's text alone, for a handler or a check that
+does not read the images; `loom.TextUserMessage(text)` builds the input a
+text-only turn needs.
+
+`Vision` is the one capability that fails closed. A model built without
+`Vision: true` refuses an image in a `RequestValidationError` before anything is
+sent. So does an image on a system, assistant, or tool message: those travel as
+text, and the model would answer without ever seeing the image. All four
+built-in providers send an image the same way, as a content-parts array on the
+user message.
+
+An image belongs to the turn it is given in. A user message in the history is
+text (`Item.Text`), so a later turn that replays it does not send the image
+again. With content capture on, an inline image is written to the span with the
+rest of the prompt.
 
 ## Model capability snapshots
 
@@ -899,7 +939,7 @@ if err != nil {
     return err
 }
 response, err := model.Chat(ctx, loom.ChatRequest{
-    Messages: []loom.Message{{Role: loom.RoleUser, Content: "Explain your answer briefly."}},
+    Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("Explain your answer briefly.")}}},
     Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortLow},
 })
 // Handle err and consume response.

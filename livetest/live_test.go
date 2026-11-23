@@ -113,7 +113,7 @@ func exerciseModel(t *testing.T, block liveBlock, model string) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	base := []loom.Message{{Role: loom.RoleUser, Content: livePrompt}}
+	base := []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart(livePrompt)}}}
 	request := loom.ChatRequest{
 		Messages:   base,
 		Tools:      tools,
@@ -204,12 +204,12 @@ func exerciseStructuredOutput(t *testing.T, ctx context.Context, block liveBlock
 		t.Fatalf("build %s/%s for json_object: %v", block.Provider, model, err)
 	}
 
-	messages := []loom.Message{{Role: loom.RoleUser, Content: "What is 17*23?"}}
+	messages := []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("What is 17*23?")}}}
 	attempts := jsonObjectPromptAttempts
 	if block.StructuredOutput == loom.StructuredOutputJSONObject {
 		// The provider refuses a json_object request whose prompt never asks for JSON, so the
 		// contract's own instruction leads.
-		messages = append([]loom.Message{{Role: loom.RoleSystem, Content: contract.JSONObjectPrompt()}}, messages...)
+		messages = append([]loom.Message{{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart(contract.JSONObjectPrompt())}}}, messages...)
 	} else {
 		// The endpoint enforces the schema, so the first attempt is the assertion.
 		attempts = 1
@@ -234,9 +234,9 @@ func exerciseStructuredOutput(t *testing.T, ctx context.Context, block liveBlock
 			break
 		}
 		messages = append(messages,
-			loom.Message{Role: loom.RoleAssistant, Content: invalid.Content},
-			loom.Message{Role: loom.RoleUser, Content: fmt.Sprintf(
-				"Your previous output was rejected: %v\nReturn one JSON value matching:\n%s", callErr, schemaJSON)})
+			loom.Message{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart(invalid.Content)}},
+			loom.Message{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart(fmt.Sprintf(
+				"Your previous output was rejected: %v\nReturn one JSON value matching:\n%s", callErr, schemaJSON))}})
 	}
 	t.Errorf("%s: the contract was still unsatisfied after %d attempts", block.StructuredOutput, attempts)
 }

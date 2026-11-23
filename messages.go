@@ -9,13 +9,13 @@ import (
 // of LLM Messages that can be handed straight to a ChatModel.
 //
 // Rules, walking the Turn.Items tree depth first:
-//   - user_message  → Message{Role: RoleUser, Content: Text}
+//   - user_message  → Message{Role: RoleUser, Parts: [TextPart(Text)]}
 //   - reasoning     → accumulated, and folded into the ReasoningContent of the first
 //     assistant message that follows it
 //   - tool_call     → accumulated, and merged into one assistant message when the
 //     next tool_result or final_answer appears
-//   - tool_result   → Message{Role: RoleTool, ToolCallID, Content: Output}
-//   - final_answer  → Message{Role: RoleAssistant, Content: Text}, carrying the
+//   - tool_result   → Message{Role: RoleTool, ToolCallID, Parts: [TextPart(Output)]}
+//   - final_answer  → Message{Role: RoleAssistant, Parts: [TextPart(Text)]}, carrying the
 //     accumulated ReasoningContent
 //   - note / step   → absent from the conversation fed to the model, since process
 //     information is not something the model needs
@@ -24,7 +24,9 @@ import (
 // "reasoning plus that round's output" in the same shape it produced. Several
 // reasoning blocks before one assistant message are joined with "\n\n".
 //
-// This round's input is appended last as a user message.
+// This round's input is appended last as a user message, carrying the parts it was
+// given, images included. A user_message item holds text only, so an image from an
+// earlier turn is not part of the history the model sees.
 func HistoryToMessages(history []Turn, input UserMessage) ([]Message, error) {
 	var out []Message
 	for i := range history {
@@ -33,7 +35,7 @@ func HistoryToMessages(history []Turn, input UserMessage) ([]Message, error) {
 		}
 		out = append(out, turnToMessages(&history[i])...)
 	}
-	out = append(out, NewTaskUserMessage(input.Source, input.Text))
+	out = append(out, newUserMessage(input.Source, MessagePurposeTask, input.Parts))
 	return out, nil
 }
 
@@ -64,8 +66,8 @@ func turnToMessages(turn *Turn) []Message {
 	// clearing it.
 	appendAssistantMsg := func(content string, calls []ToolCall) {
 		msg := Message{
-			Role:    RoleAssistant,
-			Content: content,
+			Role:  RoleAssistant,
+			Parts: []ContentPart{TextPart(content)},
 		}
 		if len(calls) > 0 {
 			msg.ToolCalls = calls
@@ -114,7 +116,7 @@ func turnToMessages(turn *Turn) []Message {
 			out = append(out, Message{
 				Role:       RoleTool,
 				ToolCallID: it.ToolCallID,
-				Content:    it.Output,
+				Parts:      []ContentPart{TextPart(it.Output)},
 			})
 
 		case ItemKindFinalAnswer:
@@ -157,14 +159,14 @@ func walkItems(items []Item, fn func(*Item)) {
 // end of messages, following the LLM protocol.
 //
 // The shape it builds, ready for the next call:
-//   - one assistant message carrying Content, ReasoningContent, and ToolCalls
-//   - one tool message per tool call, with Content set to the output or to the error
+//   - one assistant message carrying its text, ReasoningContent, and ToolCalls
+//   - one tool message per tool call, whose text is the output or the error
 //     description
 //
 // Product code calls it inside a ReAct-style loop instead of hand-writing that
 // boilerplate.
 //
-// A failed tool: when r.Err is non-nil the tool message's Content becomes
+// A failed tool: when r.Err is non-nil the tool message's text becomes
 // "tool execution error: <err>", so the model sees why it failed and decides whether
 // to switch tools or to retry. The text goes through modelText, the same helper
 // ItemError.Message uses, so the model is fed exactly the stored message: a
@@ -173,7 +175,7 @@ func walkItems(items []Item, fn func(*Item)) {
 func AppendAssistantTurn(msgs []Message, resp *ChatResponse, results []ToolExecResult) []Message {
 	msgs = append(msgs, Message{
 		Role:             RoleAssistant,
-		Content:          resp.Content,
+		Parts:            []ContentPart{TextPart(resp.Content)},
 		ReasoningContent: resp.ReasoningContent,
 		// A provider's structured reasoning continues the chain it came from, so it goes
 		// back on the message that continues it.
@@ -188,7 +190,7 @@ func AppendAssistantTurn(msgs []Message, resp *ChatResponse, results []ToolExecR
 		msgs = append(msgs, Message{
 			Role:       RoleTool,
 			ToolCallID: r.Call.ID,
-			Content:    content,
+			Parts:      []ContentPart{TextPart(content)},
 		})
 	}
 	return msgs

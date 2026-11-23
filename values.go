@@ -2,13 +2,19 @@ package loom
 
 // UserMessage is the user's input, the starting point of this turn.
 //
-// Only plain text is supported today. Multimodal support will add fields
-// (Images / Files / ...) without changing what Text means, so existing callers
-// keep working.
+// Parts holds what the user sent, text and images in order; TextUserMessage builds the
+// text-only form. Only this turn's input carries images: a user message restored from the
+// history holds the text that was stored with it, so an image is not sent again in a later
+// turn.
 type UserMessage struct {
-	Text    string
+	Parts   []ContentPart
 	Source  MessageSource
 	Purpose MessagePurpose
+}
+
+// TextUserMessage builds a user message that says text and carries nothing else.
+func TextUserMessage(text string) UserMessage {
+	return UserMessage{Parts: []ContentPart{TextPart(text)}}
 }
 
 // ToolResult is the outcome of running a tool, written through

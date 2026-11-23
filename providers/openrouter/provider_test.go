@@ -30,7 +30,7 @@ func TestBuildRequestReasoningModeRequired(t *testing.T) {
 	}
 
 	_, err = m.buildRequest(loom.ChatRequest{
-		Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 		// Reasoning is deliberately omitted
 	})
 	if err == nil {
@@ -48,7 +48,7 @@ func TestBuildRequestRejectsUnknownMessageRole(t *testing.T) {
 	}
 
 	_, err = m.buildRequest(loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "task"}, {Role: loom.Role("invalid"), Content: "hi"}},
+		Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("task")}}, {Role: loom.Role("invalid"), Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 	})
 	if err == nil || !strings.Contains(err.Error(), `unknown role "invalid"`) {
@@ -76,7 +76,7 @@ func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		req, err := m.buildRequest(loom.ChatRequest{
-			Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+			Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 			Reasoning: loom.Reasoning{Mode: tt.mode, Effort: tt.effort},
 		})
 		if err != nil {

@@ -50,7 +50,7 @@ func TestDeclaredNativeEffortsReachProviderUnchanged(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "Exact-Level"}}
+			req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "Exact-Level"}}
 			if _, err = model.Chat(context.Background(), req); err != nil {
 				t.Fatal(err)
 			}

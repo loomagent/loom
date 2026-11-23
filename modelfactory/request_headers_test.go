@@ -58,7 +58,7 @@ func constructHeaderModel(cfg modelfactory.Config, entry string) (loom.ChatModel
 
 func headerAnswer(t *testing.T, model loom.ChatModel, streaming bool) string {
 	t.Helper()
-	req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hello"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
+	req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hello")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
 	if !streaming {
 		response, err := model.Chat(t.Context(), req)
 		if err != nil {

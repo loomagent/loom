@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // Role is a message role.
@@ -17,9 +18,58 @@ const (
 	RoleTool      Role = "tool"
 )
 
-// Message is one context message, in plain text. Multimodal input is not
-// supported; a later extension will add fields without changing what Content
-// means.
+// ContentType is the kind of one ContentPart.
+type ContentType string
+
+const (
+	ContentText  ContentType = "text"
+	ContentImage ContentType = "image"
+)
+
+// ContentPart is one part of a message's content.
+//
+// A message is read part by part, in order, which is how a prompt puts each image next to
+// the text that talks about it. Only the fields the Type names are used; the rest stay at
+// their zero value. Build one with TextPart or ImagePart.
+type ContentPart struct {
+	Type ContentType
+	// Text is the part's text, for ContentText.
+	Text string
+	// ImageURL locates the image, for ContentImage: an https:// URL, or a data:image/...
+	// URL that carries the image inline.
+	ImageURL string
+	// ImageDetail is the provider's own detail setting, for ContentImage. It is sent as
+	// given and is not checked against a list, because the accepted values are each
+	// provider's to define and they differ. Empty, it is not sent, and the provider applies
+	// its own default.
+	ImageDetail string
+}
+
+// TextPart builds a text part.
+func TextPart(text string) ContentPart {
+	return ContentPart{Type: ContentText, Text: text}
+}
+
+// ImagePart builds an image part. detail goes to the provider as given and is left out when
+// it is empty; see ContentPart.ImageDetail.
+func ImagePart(url, detail string) ContentPart {
+	return ContentPart{Type: ContentImage, ImageURL: url, ImageDetail: detail}
+}
+
+// TextOf returns the text of parts: every text part's Text, in order, with nothing added
+// between them. A part of any other kind is left out, so the result is a message's
+// plain-text view and never carries an image.
+func TextOf(parts []ContentPart) string {
+	var text strings.Builder
+	for _, part := range parts {
+		if part.Type == ContentText {
+			text.WriteString(part.Text)
+		}
+	}
+	return text.String()
+}
+
+// Message is one context message. Parts is its content, text and images in order.
 type Message struct {
 	Role Role
 
@@ -29,10 +79,13 @@ type Message struct {
 	source  MessageSource
 	purpose MessagePurpose
 
-	// Content is the main body. For an assistant message from a reasoning model it
-	// is the final answer with the reasoning removed. It may be empty for an
-	// assistant message that only requested tool calls and produced no text.
-	Content string
+	// Parts is the main body. For an assistant message from a reasoning model it is
+	// the final answer with the reasoning removed. It may hold no text, or be nil, for
+	// an assistant message that only requested tool calls and produced no text.
+	//
+	// An image part is accepted on a user message only, and only by a model that declared
+	// Vision; CheckRequestAgainstCapabilities refuses the rest.
+	Parts []ContentPart
 
 	// ReasoningContent is the reasoning behind the answer. Only an assistant
 	// message may carry it; user, system, and tool messages should leave it empty. A
@@ -183,7 +236,8 @@ func (s ReasoningSupport) Canonical() ReasoningSupport {
 // The caller or modelfactory fills it from the model's real configuration; no
 // provider package hardcodes a default. Building a model without Capabilities
 // leaves every field at its zero value, meaning nothing was declared, and each
-// capability check then passes the request through unchecked.
+// capability check then passes the request through unchecked, except for Vision: an
+// undeclared model refuses image input.
 type ModelCapabilities struct {
 	reasoningProbe   bool // only ReasoningProbeCapabilities enables diagnostic bypass
 	StructuredOutput StructuredOutputMode
@@ -208,6 +262,15 @@ type ModelCapabilities struct {
 	// MaxContextTokens is the context window limit; 0 means unknown. It is for
 	// budgeting and trimming while a request is assembled, not for rejecting one.
 	MaxContextTokens uint64
+
+	// Vision declares that the model reads images. false, the zero value, means vision
+	// was not declared.
+	//
+	// It is the one capability whose zero value does not let a request through:
+	// CheckRequestAgainstCapabilities refuses a request that carries an image part while
+	// Vision is false, so a model has to declare it before anyone sends it an image. A
+	// request without images is never affected.
+	Vision bool
 }
 
 // Clone returns an independent capability declaration. It preserves effort order,
@@ -242,9 +305,10 @@ type ResolvedReasoning struct {
 // is never sent. A contradiction between declaration and use has to surface, not
 // be silently downgraded or swallowed.
 //
-// It covers structured output and output length; reasoning is checked separately by
-// ResolveReasoning. An undeclared capability, a zero field, skips its check and
-// passes the request through.
+// It covers structured output, output length, and image input; reasoning is checked
+// separately by ResolveReasoning. An undeclared capability, a zero field, skips its check and
+// passes the request through, with one exception: Vision is false when it is undeclared, and
+// an image part is then refused.
 //
 // Input length against max_context_tokens is deliberately not checked here; do not
 // add it. As measured in 2026-06, all three providers (deepseek, ark, openrouter)
@@ -313,6 +377,26 @@ func CheckRequestAgainstCapabilities(caps ModelCapabilities, req ChatRequest) er
 	if req.MaxTokens != nil && *req.MaxTokens > 0 &&
 		caps.MaxOutputTokens > 0 && uint64(*req.MaxTokens) > caps.MaxOutputTokens {
 		return fmt.Errorf("loom: MaxTokens=%d exceeds the output limit of %d the model declared", *req.MaxTokens, caps.MaxOutputTokens)
+	}
+
+	// Image input is refused here, before anything is sent: a model that cannot read the
+	// image, or a message that cannot carry it, would otherwise fail at the provider or lose
+	// the image on the way.
+	for i, m := range req.Messages {
+		for _, part := range m.Parts {
+			if part.Type != ContentImage {
+				continue
+			}
+			if !caps.Vision {
+				return fmt.Errorf("loom: message %d carries an image part, but the model does not declare vision support", i)
+			}
+			// Only a user message carries an image. DeepSeek and OpenRouter both refuse one on
+			// an assistant message, and on a system or tool message the translation would have
+			// to leave it out, so the model would answer without ever seeing it.
+			if m.Role != RoleUser {
+				return fmt.Errorf("loom: message %d has role %q and carries an image part; only a user message can carry one", i, m.Role)
+			}
+		}
 	}
 	return nil
 }

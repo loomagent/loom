@@ -23,12 +23,12 @@ func TestAppendAssistantTurnPairsResultsWithMessages(t *testing.T) {
 		{Call: ToolCall{ID: "c1", Name: "search"}, Output: `{"found":true}`},
 		{Call: ToolCall{ID: "c2", Name: "lookup"}, Err: errors.New("no such tool")},
 	}
-	msgs := AppendAssistantTurn([]Message{{Role: RoleUser, Content: "hi"}}, response, results)
+	msgs := AppendAssistantTurn([]Message{{Role: RoleUser, Parts: []ContentPart{TextPart("hi")}}}, response, results)
 	if len(msgs) != 4 {
 		t.Fatalf("messages = %d", len(msgs))
 	}
 	assistant := msgs[1]
-	if assistant.Role != RoleAssistant || assistant.Content != "calling" ||
+	if assistant.Role != RoleAssistant || TextOf(assistant.Parts) != "calling" ||
 		assistant.ReasoningContent != "why" || len(assistant.ToolCalls) != 1 {
 		t.Fatalf("assistant = %+v", assistant)
 	}
@@ -44,12 +44,12 @@ func TestAppendAssistantTurnPairsResultsWithMessages(t *testing.T) {
 		{"c2", "tool execution error: no such tool"},
 	} {
 		tool := msgs[index+2]
-		if tool.Role != RoleTool || tool.ToolCallID != want.id || tool.Content != want.content {
+		if tool.Role != RoleTool || tool.ToolCallID != want.id || TextOf(tool.Parts) != want.content {
 			t.Errorf("tool message = %+v", tool)
 		}
 	}
 	// The caller's slice is not written through.
-	if msgs[0].Content != "hi" {
+	if TextOf(msgs[0].Parts) != "hi" {
 		t.Fatalf("first message = %+v", msgs[0])
 	}
 }
@@ -420,7 +420,7 @@ func TestRunCapturesContentWhenAsked(t *testing.T) {
 	}}
 	_, err := Run(context.Background(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
 		response, err := StreamLLMToStep(ctx, w, "capture", model, ChatRequest{
-			Messages: []Message{{Role: RoleUser, Content: "a question worth capturing"}},
+			Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("a question worth capturing")}}},
 		})
 		if err != nil {
 			return err

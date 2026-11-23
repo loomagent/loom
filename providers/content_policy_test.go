@@ -234,7 +234,7 @@ func Test_user_sees_content_filter_terminal_after_output_moderation(t *testing.T
 								return loom.ErrContentFilter
 							}
 							return w.FinalAnswer(ctx, response.Content)
-						}, loom.RunOptions{ConversationID: "fixture-conversation", Input: loom.UserMessage{Text: "fixture task"}})
+						}, loom.RunOptions{ConversationID: "fixture-conversation", Input: loom.TextUserMessage("fixture task")})
 						// Then the visible terminal is failed/content_filter, with no committed final answer.
 						if err == nil || turn.Status != loom.TurnStatusFailed || turn.CloseReason.Code != loom.CloseCodeContentFilter {
 							t.Fatalf("wrong moderation terminal: turn=%+v err=%v", turn, err)
@@ -262,7 +262,7 @@ func assertPolicyError(t *testing.T, err error, risk bool) {
 }
 
 func policyRequest() loom.ChatRequest {
-	return loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "fixture task"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
+	return loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("fixture task")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
 }
 
 func consumePolicyModel(t *testing.T, model loom.ChatModel, streaming bool) (string, error) {
@@ -383,7 +383,7 @@ func Test_user_sees_captured_Ark_moderation_as_failed_delivery(t *testing.T) {
 						return loom.ErrContentFilter
 					}
 					return w.FinalAnswer(ctx, response.Content)
-				}, loom.RunOptions{ConversationID: "fixture-conversation", Input: loom.UserMessage{Text: "fixture task"}})
+				}, loom.RunOptions{ConversationID: "fixture-conversation", Input: loom.TextUserMessage("fixture task")})
 				// Then a natural-language refusal cannot be committed as a successful final answer.
 				if !errors.Is(err, loom.ErrContentFilter) || turn.Status != loom.TurnStatusFailed || turn.CloseReason.Code != loom.CloseCodeContentFilter {
 					t.Fatalf("captured moderation was lost: turn=%+v err=%v", turn, err)

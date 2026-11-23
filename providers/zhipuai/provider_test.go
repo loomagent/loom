@@ -26,7 +26,7 @@ func testModel(t *testing.T, handler http.HandlerFunc) *Model {
 	return m
 }
 func request() loom.ChatRequest {
-	return loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hello"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortLow}}
+	return loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hello")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortLow}}
 }
 func readRequest(t *testing.T, r *http.Request) map[string]any {
 	t.Helper()
@@ -61,7 +61,7 @@ func TestChatAndToolHistory(t *testing.T) {
 	})
 	req := request()
 	req.Stop = []string{"END"}
-	req.Messages = append(req.Messages, loom.Message{Role: loom.RoleAssistant, ReasoningContent: "plan", ToolCalls: []loom.ToolCall{{ID: "call-1", Name: "lookup", Arguments: "{}"}}}, loom.Message{Role: loom.RoleTool, ToolCallID: "call-1", Content: "found"})
+	req.Messages = append(req.Messages, loom.Message{Role: loom.RoleAssistant, ReasoningContent: "plan", ToolCalls: []loom.ToolCall{{ID: "call-1", Name: "lookup", Arguments: "{}"}}}, loom.Message{Role: loom.RoleTool, ToolCallID: "call-1", Parts: []loom.ContentPart{loom.TextPart("found")}})
 	out, err := m.Chat(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)

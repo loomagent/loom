@@ -9,7 +9,7 @@ func TestUserSeesPolicyFailureWithoutSuccessfulTurn(t *testing.T) {
 	// Given a host policy rejection, a visible reply must still be a failed turn.
 	turn, err := Run(t.Context(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
 		return w.Fail(ctx, "Cannot complete this request.", CloseCode("host_policy_rejected"))
-	}, RunOptions{ConversationID: "failure", Input: UserMessage{Text: "request"}})
+	}, RunOptions{ConversationID: "failure", Input: TextUserMessage("request")})
 	if err != nil {
 		t.Fatal(err)
 	}

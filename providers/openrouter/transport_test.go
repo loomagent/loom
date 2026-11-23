@@ -62,7 +62,7 @@ func TestChatMapsResponse(t *testing.T) {
 		}`)
 	})
 
-	out, err := m.Chat(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
+	out, err := m.Chat(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestChatRejectsEmptyChoices(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"model":"m","choices":[]}`)
 	})
-	if _, err := m.Chat(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}); err == nil {
+	if _, err := m.Chat(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}); err == nil {
 		t.Fatal("a response with no choices accepted")
 	}
 }
@@ -99,7 +99,7 @@ func TestStreamMapsDeltas(t *testing.T) {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	})
 
-	stream, err := m.Stream(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
+	stream, err := m.Stream(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestStreamSurfacesUpstreamError(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprint(w, `{"error":{"message":"temporarily unavailable"}}`)
 	})
-	stream, err := m.Stream(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
+	stream, err := m.Stream(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
 	if err == nil {
 		if _, recvErr := stream.Recv(); recvErr == nil {
 			t.Fatal("upstream error accepted")
@@ -177,7 +177,7 @@ func TestChatPrefersReasoningContent(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"model":"m","choices":[{"message":{"content":"a","reasoning":"generic","reasoning_content":"structured"},"finish_reason":"stop"}]}`)
 	})
-	out, err := m.Chat(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
+	out, err := m.Chat(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestChatIgnoresNonStringReasoning(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"model":"m","choices":[{"message":{"content":"a","reasoning":{"nested":1}},"finish_reason":"stop"}]}`)
 	})
-	out, err := m.Chat(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
+	out, err := m.Chat(t.Context(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}})
 	if err != nil {
 		t.Fatal(err)
 	}

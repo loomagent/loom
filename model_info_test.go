@@ -57,7 +57,7 @@ func TestCallModelCapturesEachFailoverTarget(t *testing.T) {
 			// Metadata is captured before invocation, even with a mutable custom model.
 			primary.before = func() { primary.info.Ref.SnapshotID = "reloaded" }
 			_, err := Run(t.Context(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
-				_, err := CallModel(ctx, "auxiliary.review", primary, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "question"}}}, WithModelFailover(FailoverConfig{
+				_, err := CallModel(ctx, "auxiliary.review", primary, ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("question")}}}}, WithModelFailover(FailoverConfig{
 					GetFailoverModel: func(_ context.Context, attempt FailoverAttempt) (ChatModel, error) {
 						if attempt.ModelInfo != primaryInfo || !errors.Is(attempt.Error, failure) {
 							t.Fatalf("failed attempt lost identity: %+v", attempt)
@@ -69,7 +69,7 @@ func TestCallModelCapturesEachFailoverTarget(t *testing.T) {
 					return err
 				}
 				return w.FinalAnswer(ctx, "done")
-			}, RunOptions{ConversationID: "identity", Sinks: []Sink{sink}, Input: UserMessage{Text: "question"}})
+			}, RunOptions{ConversationID: "identity", Sinks: []Sink{sink}, Input: TextUserMessage("question")})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -113,7 +113,7 @@ func TestStreamingEventsCaptureConfiguredTarget(t *testing.T) {
 				model := &infoTestModel{ChatModel: &finalStreamModel{frames: []*Chunk{{ContentDelta: "answer"}, {Model: reported, Usage: &Usage{PromptTokens: 11}, FinishReason: FinishReasonStop}}}, info: info}
 				model.before = func() { model.info.Ref.SnapshotID = "updated" }
 				_, err := Run(t.Context(), func(ctx context.Context, w TurnWriter, _ []Turn, _ UserMessage) error {
-					req := ChatRequest{Messages: []Message{{Role: RoleUser, Content: "question"}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}}
+					req := ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("question")}}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}}
 					if final {
 						_, err := StreamLLMToFinalAnswer(ctx, w, "react.final", model, req)
 						return err
@@ -123,7 +123,7 @@ func TestStreamingEventsCaptureConfiguredTarget(t *testing.T) {
 						return err
 					}
 					return w.FinalAnswer(ctx, resp.Content)
-				}, RunOptions{ConversationID: "stream-identity", Sinks: []Sink{sink}, Input: UserMessage{Text: "question"}})
+				}, RunOptions{ConversationID: "stream-identity", Sinks: []Sink{sink}, Input: TextUserMessage("question")})
 				if err != nil {
 					t.Fatal(err)
 				}

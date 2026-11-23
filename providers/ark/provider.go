@@ -9,7 +9,7 @@
 //	if err != nil { ... }
 //
 //	resp, err := model.Chat(ctx, loom.ChatRequest{
-//	    Messages: []loom.Message{{Role: loom.RoleUser, Content: "hello"}},
+//	    Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hello")}}},
 //	})
 //
 // Retries are built in: 429 backoff and a per-call timeout, adjusted or disabled through
@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/volcengine/volcengine-go-sdk/service/arkruntime"
@@ -357,9 +358,8 @@ func translateMessages(msgs []loom.Message) []*arkmodel.ChatCompletionMessage {
 	for _, m := range msgs {
 		gm := &arkmodel.ChatCompletionMessage{Role: translateRole(m.Role)}
 		// content may be empty when an assistant message carries tool calls
-		if m.Role != loom.RoleAssistant || m.Content != "" || len(m.ToolCalls) <= 0 {
-			content := m.Content
-			gm.Content = &arkmodel.ChatCompletionMessageContent{StringValue: &content}
+		if text := loom.TextOf(m.Parts); m.Role != loom.RoleAssistant || text != "" || len(m.ToolCalls) <= 0 {
+			gm.Content = translateContent(m)
 		}
 		if m.ReasoningContent != "" {
 			rc := m.ReasoningContent
@@ -388,6 +388,44 @@ func translateMessages(msgs []loom.Message) []*arkmodel.ChatCompletionMessage {
 		out = append(out, gm)
 	}
 	return out
+}
+
+// translateContent translates one message's content.
+//
+// A user message that carries an image becomes the part list, text and images in the order
+// the caller gave them. Every other message, and a user message of text only, stays the plain
+// string the endpoint has always received. An image's detail is sent only when the caller set
+// one, so the endpoint keeps its own default.
+//
+// A part of a kind the endpoint cannot take never arrives here: ValidateChatRequest has
+// already refused it.
+func translateContent(m loom.Message) *arkmodel.ChatCompletionMessageContent {
+	text := loom.TextOf(m.Parts)
+	if m.Role != loom.RoleUser || !slices.ContainsFunc(m.Parts, func(part loom.ContentPart) bool {
+		return part.Type == loom.ContentImage
+	}) {
+		return &arkmodel.ChatCompletionMessageContent{StringValue: &text}
+	}
+	list := make([]*arkmodel.ChatCompletionMessageContentPart, 0, len(m.Parts))
+	for _, part := range m.Parts {
+		switch part.Type {
+		case loom.ContentText:
+			list = append(list, &arkmodel.ChatCompletionMessageContentPart{
+				Type: arkmodel.ChatCompletionMessageContentPartTypeText,
+				Text: part.Text,
+			})
+		case loom.ContentImage:
+			image := &arkmodel.ChatMessageImageURL{URL: part.ImageURL}
+			if part.ImageDetail != "" {
+				image.Detail = arkmodel.ImageURLDetail(part.ImageDetail)
+			}
+			list = append(list, &arkmodel.ChatCompletionMessageContentPart{
+				Type:     arkmodel.ChatCompletionMessageContentPartTypeImageURL,
+				ImageURL: image,
+			})
+		}
+	}
+	return &arkmodel.ChatCompletionMessageContent{ListValue: list}
 }
 
 func translateRole(r loom.Role) string {
@@ -536,8 +574,8 @@ func translateUsage(u *arkmodel.Usage, reasoningKnown bool) loom.Usage {
 }
 
 // contentString turns Ark's ChatCompletionMessageContent, a string or a part list, into
-// the plain string loom uses. A part list joins its text parts and ignores the rest, such
-// as image, audio, or video parts, since loom's first version is text only.
+// the plain string loom reads a model's output as. A part list joins its text parts and
+// ignores the rest, such as image, audio, or video parts.
 func contentString(c *arkmodel.ChatCompletionMessageContent) string {
 	if c == nil {
 		return ""

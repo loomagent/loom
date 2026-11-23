@@ -1,6 +1,9 @@
 package loom
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // ErrMissingUserMessage means a chat context contains no user message.
 // Callers must provide the task explicitly; Loom never invents a user message
@@ -10,11 +13,25 @@ var ErrMissingUserMessage = errors.New("loom: chat request requires at least one
 // ValidateChatRequest checks provider-independent chat input before any request.
 // A user message anywhere in the context is sufficient: assistant continuations
 // and tool-result histories do not have to end with a user message.
+//
+// It also refuses a part of a kind no provider can send. Leaving such a part out
+// would hand the model a message that quietly lacks something the caller wrote.
 func ValidateChatRequest(req ChatRequest) error {
-	for _, message := range req.Messages {
+	hasUser := false
+	for i, message := range req.Messages {
+		for _, part := range message.Parts {
+			switch part.Type {
+			case ContentText, ContentImage:
+			default:
+				return fmt.Errorf("loom: message %d uses unknown content part type %q", i, part.Type)
+			}
+		}
 		if message.Role == RoleUser {
-			return nil
+			hasUser = true
 		}
 	}
-	return ErrMissingUserMessage
+	if !hasUser {
+		return ErrMissingUserMessage
+	}
+	return nil
 }

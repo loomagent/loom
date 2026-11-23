@@ -308,7 +308,7 @@ type Handler func(
 ) error
 
 type UserMessage struct {
-    Text    string
+    Parts   []ContentPart // text and images, in order; TextUserMessage builds the text-only form
     Source  MessageSource
     Purpose MessagePurpose
 }
@@ -865,6 +865,7 @@ github.com/loomagent/loom/
 | 32 | the subset suite's skips are counted in three categories: unmodeled keywords (18, a policy), keyword spellings (4, a policy), unimplemented constructs (14, a gap) | landed |
 | 33 | structured output gains an attempt seam: the framework owns the count and each attempt's total deadline, the caller's callback says what the next request is, and `n>1` requires it | landed |
 | 34 | one failure, three texts: the raw error goes to `ItemError.Detail` (`json:"-"`, never serialized), the model text to `Message`, and the public text to `Public`; `CloseReason` does the same, with Message always the raw text | landed |
+| 35 | a message's content is parts, text and images in order; an image goes on a user message only, and only to a model that declared `Vision`, the one capability whose zero value refuses a request instead of passing it through | landed |
 
 Dropped: the Note family (reasoning plus a label already carries process information);
 CloseDetector (external termination is a cancelled ctx with a cause); `Writer.RunTool`
@@ -883,6 +884,6 @@ the deltas).
 
 ### 10.2 Open questions
 
-- **A multimodal UserMessage**: today it is Text plus Source and Purpose.
+- **Images in the history**: a `UserMessage` carries text and image parts, but a stored `user_message` item holds text only, so an image reaches the model in the turn it was given and is not replayed by a later one; audio and file parts are not modelled.
 - **Cross-Turn references**: a sub-agent referencing a tool result across the main turn would need a redesign; today product code wraps it as a Tool.
 - **The visibility of rule-based constraints**: whole-call and field-level checks such as `NotBlank` do not appear in the expected-arguments summary, so a model learns about them only by failing. Making them visible would mean the builder carries prose aimed at the model.

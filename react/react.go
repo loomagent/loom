@@ -404,7 +404,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			finalPrompt = prompt
 		}
 		if finalWriter == nil && finalPrompt != "" {
-			plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Content: finalPrompt})
+			plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart(finalPrompt)}})
 		}
 		finalPlanned := plan.IsFinalStep
 		for _, policy := range cfg.StepPolicies {
@@ -436,7 +436,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 						finalPrompt = defaultToolPhaseEndedPrompt
 					}
 				}
-				plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Content: finalPrompt})
+				plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart(finalPrompt)}})
 			}
 		}
 		if len(plan.Tools) == 0 && plan.ToolChoice == nil {
@@ -517,7 +517,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 				if decision.Continue {
 					msgs = appendResponse(plan.Messages, response)
 					if instruction := strings.TrimSpace(decision.Instruction); instruction != "" {
-						msgs = append(msgs, loom.Message{Role: loom.RoleSystem, Content: instruction})
+						msgs = append(msgs, loom.Message{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart(instruction)}})
 					}
 					continued = true
 					break
@@ -534,7 +534,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 					return nil, loom.ErrEmptyFinalAnswer
 				}
 				msgs = appendResponse(plan.Messages, response)
-				msgs = append(msgs, loom.Message{Role: loom.RoleSystem, Content: "The preceding answer is an undelivered draft. The next response is the final answer for the user."})
+				msgs = append(msgs, loom.Message{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("The preceding answer is an undelivered draft. The next response is the final answer for the user.")}})
 				finalizationReason = "natural_finish"
 				continue
 			}
@@ -593,7 +593,7 @@ func run(ctx context.Context, w loom.Writer, finalWriter loom.TurnWriter, cfg Co
 			if decision.Stop {
 				if finalWriter != nil {
 					if decision.FinalContent != "" {
-						msgs = append(msgs, loom.Message{Role: loom.RoleAssistant, Content: decision.FinalContent})
+						msgs = append(msgs, loom.Message{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart(decision.FinalContent)}})
 					}
 					if finalizationReason == "" {
 						finalizationReason = "policy"
@@ -860,7 +860,7 @@ func appendResponse(messages []loom.Message, response *loom.ChatResponse) []loom
 	}
 	return append(out, loom.Message{
 		Role:             loom.RoleAssistant,
-		Content:          response.Content,
+		Parts:            []loom.ContentPart{loom.TextPart(response.Content)},
 		ReasoningContent: response.ReasoningContent,
 		// A provider that returns structured reasoning wants the same blocks back on the turn
 		// they belong to, which is why they travel with the message.

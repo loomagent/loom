@@ -20,7 +20,7 @@
 //	if err != nil { ... }
 //
 //	resp, err := model.Chat(ctx, loom.ChatRequest{
-//	    Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hello"}},
+//	    Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hello")}}},
 //	    Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortHigh},
 //	})
 package deepseek

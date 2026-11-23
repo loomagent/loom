@@ -143,10 +143,10 @@ func TestBuildRequestBranches(t *testing.T) {
 
 	t.Run("roles and tool history", func(t *testing.T) {
 		body := build(t, loom.ChatRequest{Messages: []loom.Message{
-			{Role: loom.RoleSystem, Content: "rules"},
-			{Role: loom.RoleAssistant, Content: "calling", ReasoningContent: "why", ToolCalls: []loom.ToolCall{{ID: "c1", Name: "search", Arguments: `{}`}}},
-			{Role: loom.RoleTool, Content: "result", ToolCallID: "c1"},
-			{Role: loom.RoleUser, Content: "hi"},
+			{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("rules")}},
+			{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart("calling")}, ReasoningContent: "why", ToolCalls: []loom.ToolCall{{ID: "c1", Name: "search", Arguments: `{}`}}},
+			{Role: loom.RoleTool, Parts: []loom.ContentPart{loom.TextPart("result")}, ToolCallID: "c1"},
+			{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}},
 		}, Reasoning: reasoning})
 		messages := body["messages"].([]any)
 		for index, want := range []string{"system", "assistant", "tool", "user"} {
@@ -167,7 +167,7 @@ func TestBuildRequestBranches(t *testing.T) {
 
 	t.Run("unknown role is refused", func(t *testing.T) {
 		_, err := model.buildRequest(loom.ChatRequest{
-			Messages:  []loom.Message{{Role: loom.RoleUser, Content: "task"}, {Role: loom.Role("assistent"), Content: "typo"}},
+			Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("task")}}, {Role: loom.Role("assistent"), Parts: []loom.ContentPart{loom.TextPart("typo")}}},
 			Reasoning: reasoning,
 		})
 		if err == nil || !strings.Contains(err.Error(), `unknown role "assistent"`) {
@@ -176,13 +176,13 @@ func TestBuildRequestBranches(t *testing.T) {
 	})
 
 	t.Run("stop sequence limit", func(t *testing.T) {
-		atLimit := build(t, loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "x"}},
+		atLimit := build(t, loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}},
 			Stop: []string{"A", "B", "C", "D"}, Reasoning: reasoning})
 		if stops, ok := atLimit["stop"].([]any); !ok || len(stops) != 4 {
 			t.Errorf("four stop sequences sent %#v", atLimit["stop"])
 		}
 		// The endpoint takes at most four, so the fifth is refused rather than dropped.
-		_, err := model.buildRequest(loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "x"}},
+		_, err := model.buildRequest(loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}},
 			Stop: []string{"A", "B", "C", "D", "E"}, Reasoning: reasoning})
 		if !errors.Is(err, loom.ErrUnsupportedCapability) {
 			t.Fatalf("error = %v, want ErrUnsupportedCapability", err)
@@ -191,7 +191,7 @@ func TestBuildRequestBranches(t *testing.T) {
 
 	t.Run("structured output", func(t *testing.T) {
 		body := build(t, loom.ChatRequest{
-			Messages: []loom.Message{{Role: loom.RoleUser, Content: "x"}},
+			Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}},
 			StructuredOutput: &loom.StructuredOutput{
 				Mode: loom.StructuredOutputJSONSchema, Name: "Result Name",
 				Schema: &loom.Schema{Type: "object"},
@@ -213,7 +213,7 @@ func TestBuildRequestBranches(t *testing.T) {
 			t.Fatal(err)
 		}
 		request, err := model.buildRequest(loom.ChatRequest{
-			Messages:  []loom.Message{{Role: loom.RoleUser, Content: "x"}},
+			Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}},
 			Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "max"},
 		})
 		if err != nil {

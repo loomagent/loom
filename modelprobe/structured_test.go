@@ -38,8 +38,8 @@ func TestStructuredProbeSchemaOnlyRandomConstraints(t *testing.T) {
 				t.Fatalf("weak nonce=%q", nonce)
 			}
 			for _, message := range req.Messages {
-				if strings.Contains(message.Content, nonce) || strings.Contains(message.Content, `"ok"`) {
-					t.Fatalf("constraint leaked to prompt: %q", message.Content)
+				if strings.Contains(loom.TextOf(message.Parts), nonce) || strings.Contains(loom.TextOf(message.Parts), `"ok"`) {
+					t.Fatalf("constraint leaked to prompt: %q", loom.TextOf(message.Parts))
 				}
 			}
 			nonces = append(nonces, nonce)

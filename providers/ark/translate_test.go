@@ -2,6 +2,8 @@ package ark
 
 import (
 	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -241,17 +243,17 @@ func TestTranslateMessages(t *testing.T) {
 		return *p
 	}
 	msgs := translateMessages([]loom.Message{
-		{Role: loom.RoleSystem, Content: "rules"},
-		{Role: loom.RoleUser, Content: "hi"},
+		{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("rules")}},
+		{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}},
 		{
 			Role:             loom.RoleAssistant,
-			Content:          "calling",
+			Parts:            []loom.ContentPart{loom.TextPart("calling")},
 			ReasoningContent: "why",
 			Name:             "assistant",
 			ToolCalls:        []loom.ToolCall{{ID: "c1", Name: "search", Arguments: `{"q":"x"}`}},
 		},
 		{Role: loom.RoleAssistant, ToolCalls: []loom.ToolCall{{ID: "c2", Name: "lookup"}}},
-		{Role: loom.RoleTool, Content: "result", ToolCallID: "c1"},
+		{Role: loom.RoleTool, Parts: []loom.ContentPart{loom.TextPart("result")}, ToolCallID: "c1"},
 	})
 	if len(msgs) != 5 {
 		t.Fatalf("messages = %d", len(msgs))
@@ -278,6 +280,80 @@ func TestTranslateMessages(t *testing.T) {
 	if tool := msgs[4]; tool.Role != arkmodel.ChatMessageRoleTool ||
 		tool.ToolCallID != "c1" || text(tool.Content.StringValue) != "result" {
 		t.Fatalf("tool message = %+v", tool)
+	}
+}
+
+// A user message that carries an image goes out as the part list, in the order the caller gave
+// the parts. Every other message, and a user message of text only, stays the plain string. An
+// image's detail is sent only when the caller set one, so the endpoint keeps its default.
+func TestTranslateMessagesMultimodal(t *testing.T) {
+	const cat = "https://example.com/cat.png"
+	msgs := translateMessages([]loom.Message{
+		{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("rules")}},
+		{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("What is in this image?"), loom.ImagePart(cat, "")}},
+		{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.ImagePart(cat, "high")}},
+		{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("plain")}},
+	})
+	if len(msgs) != 4 {
+		t.Fatalf("messages = %d", len(msgs))
+	}
+	// Text only, on any role, is the string form.
+	for _, i := range []int{0, 3} {
+		if c := msgs[i].Content; c == nil || c.StringValue == nil || c.ListValue != nil {
+			t.Fatalf("message %d = %+v, want the plain string form", i, c)
+		}
+	}
+	if got := *msgs[0].Content.StringValue; got != "rules" {
+		t.Fatalf("system content = %q", got)
+	}
+	if got := *msgs[3].Content.StringValue; got != "plain" {
+		t.Fatalf("text-only user content = %q", got)
+	}
+
+	withText := msgs[1].Content
+	if withText == nil || withText.StringValue != nil || len(withText.ListValue) != 2 {
+		t.Fatalf("text and image = %+v, want a list of two parts", withText)
+	}
+	if p := withText.ListValue[0]; p.Type != arkmodel.ChatCompletionMessageContentPartTypeText || p.Text != "What is in this image?" || p.ImageURL != nil {
+		t.Fatalf("first part = %+v, want the text", p)
+	}
+	if p := withText.ListValue[1]; p.Type != arkmodel.ChatCompletionMessageContentPartTypeImageURL || p.Text != "" || p.ImageURL == nil ||
+		p.ImageURL.URL != cat || p.ImageURL.Detail != "" {
+		t.Fatalf("second part = %+v, want the image with no detail", p)
+	}
+
+	imageOnly := msgs[2].Content
+	if imageOnly == nil || imageOnly.StringValue != nil || len(imageOnly.ListValue) != 1 {
+		t.Fatalf("image only = %+v, want a list of one part", imageOnly)
+	}
+	if p := imageOnly.ListValue[0]; p.Type != arkmodel.ChatCompletionMessageContentPartTypeImageURL || p.ImageURL == nil ||
+		p.ImageURL.URL != cat || p.ImageURL.Detail != arkmodel.ImageURLDetailHigh {
+		t.Fatalf("image part = %+v, want the image with its detail", p)
+	}
+
+	// The wire carries the same thing: no detail key where none was set. Role and content are
+	// what the translation decides; the SDK adds its own null fields around them.
+	data, err := jsonv2.Marshal(msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `[{"role":"system","content":"rules"},` +
+		`{"role":"user","content":[{"type":"text","text":"What is in this image?"},{"type":"image_url","image_url":{"url":"https://example.com/cat.png"}}]},` +
+		`{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/cat.png","detail":"high"}}]},` +
+		`{"role":"user","content":"plain"}]`
+	type wireMessage struct {
+		Role    string         `json:"role"`
+		Content jsontext.Value `json:"content"`
+	}
+	var gotWire, wantWire []wireMessage
+	if err := jsonv2.Unmarshal(data, &gotWire); err != nil {
+		t.Fatal(err)
+	}
+	if err := jsonv2.Unmarshal([]byte(want), &wantWire); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotWire, wantWire) {
+		t.Fatalf("wire = %s, want %s", data, want)
 	}
 }
 

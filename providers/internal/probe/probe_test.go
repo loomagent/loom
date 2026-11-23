@@ -17,7 +17,7 @@ type probeBody struct {
 // reported, so a probe report stays about the parameter under test.
 func TestRequestParametersKeepsOnlyReasoningFields(t *testing.T) {
 	build := func(req loom.ChatRequest) (probeBody, error) {
-		if len(req.Messages) != 1 || req.Messages[0].Role != loom.RoleUser || req.Messages[0].Content != "probe" {
+		if len(req.Messages) != 1 || req.Messages[0].Role != loom.RoleUser || loom.TextOf(req.Messages[0].Parts) != "probe" {
 			t.Fatalf("builder received %+v", req.Messages)
 		}
 		return probeBody{Thinking: "enabled", Model: "m"}, nil

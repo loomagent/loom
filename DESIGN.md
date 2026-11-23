@@ -314,7 +314,7 @@ type Handler func(
 ) error
 
 type UserMessage struct {
-    Text    string
+    Parts   []ContentPart // 文本与图片,按序;TextUserMessage 构造纯文本形态
     Source  MessageSource
     Purpose MessagePurpose
 }
@@ -754,6 +754,7 @@ github.com/loomagent/loom/
 | 32 | 子集套件的跳过分三类并各自断言:未建模关键字(策略 18)/ 关键字写法(策略 4)/ 未实现构造(缺口 14) | 已落实 |
 | 33 | 结构化输出提供尝试接缝:次数与每次尝试总时限归框架,"下一次发什么"由调用方回调给;`n>1` 必须给回调 | 已落实 |
 | 34 | 失败文案三份分载:原文进 `ItemError.Detail`(`json:"-"`,序列化永不带出),模型文案进 `Message`,`Public` 携带可公开文案;`CloseReason` 同理且 Message 恒为原文 | 已落实 |
+| 35 | 消息内容是一组 part(文本与图片按序);图片只能放在 user 消息上,且只能发给声明了 `Vision` 的模型——`Vision` 是唯一零值拒绝请求而非放行的能力 | 已落实 |
 
 已放弃:Note 系列(reasoning 与 label 足以表达过程信息)、CloseDetector(外部终结
 由调用方取消带 cause 的 ctx 表达)、`Writer.RunTool`(由 `RunToolByName` 与
@@ -775,7 +776,8 @@ github.com/loomagent/loom/
 
 ### 10.2 未决问题
 
-- **多模态 UserMessage**:当前只有 Text + Source/Purpose。
+- **历史中的图片**:`UserMessage` 已可携带文本与图片 part,但落库的 `user_message` item
+  只有文本,图片只在传入它的那一轮到达模型,后续轮次不会重放;音频、文件 part 尚未建模。
 - **跨 Turn 引用**:若真有 sub agent 跨主 turn 引用工具结果的需求,需重新设计;当前
   由业务方走 Tool 包装。
 - **规则型约束的可见性**:`NotBlank` 之类整调用/字段级校验不出现在

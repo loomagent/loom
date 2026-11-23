@@ -26,7 +26,7 @@ func Test_user_sees_specific_failure_reason_through_wrapped_errors(t *testing.T)
 				// When the user's turn fails without a committed final answer.
 				turn, err := Run(t.Context(), func(context.Context, TurnWriter, []Turn, UserMessage) error {
 					return cause
-				}, RunOptions{ConversationID: "fixture", Input: UserMessage{Text: "user task"}})
+				}, RunOptions{ConversationID: "fixture", Input: TextUserMessage("user task")})
 				// Then the specific close code and original cause survive to the caller.
 				if turn == nil || turn.Status != TurnStatusFailed || turn.CloseReason == nil || turn.CloseReason.Code != scenario.code {
 					t.Fatalf("turn=%+v want failed/%s", turn, scenario.code)

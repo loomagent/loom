@@ -130,7 +130,7 @@ func TestAfterToolsStopsOnSufficiencyAndContinuesWithTheConfiguredInstruction(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err := policy.AfterTools(context.Background(), &recordingWriter{}, react.State{Messages: []loom.Message{{Role: loom.RoleUser, Content: "q"}}}, nil)
+	decision, err := policy.AfterTools(context.Background(), &recordingWriter{}, react.State{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("q")}}}}, nil)
 	if err != nil || !decision.Stop || decision.FinalContent != "enough" {
 		t.Fatalf("decision = %+v err = %v", decision, err)
 	}
@@ -144,11 +144,11 @@ func TestAfterToolsStopsOnSufficiencyAndContinuesWithTheConfiguredInstruction(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err = policy.AfterTools(context.Background(), &recordingWriter{}, react.State{Messages: []loom.Message{{Role: loom.RoleUser, Content: "q"}}}, nil)
+	decision, err = policy.AfterTools(context.Background(), &recordingWriter{}, react.State{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("q")}}}}, nil)
 	if err != nil || decision.Stop || len(decision.Messages) != 2 {
 		t.Fatalf("decision = %+v err = %v", decision, err)
 	}
-	if decision.Messages[1].Content != "made by the configuration" {
+	if loom.TextOf(decision.Messages[1].Parts) != "made by the configuration" {
 		t.Fatalf("instruction = %+v", decision.Messages)
 	}
 

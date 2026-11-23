@@ -18,7 +18,7 @@ func TestLifecycleSelectedRequestEvidenceNeverSerializesContent(t *testing.T) {
 	for _, name := range []string{"chat", "research stream", "final stream", "direct observe"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			request := ChatRequest{Messages: []Message{{Role: RoleUser, Content: "private-request-marker"}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}, MaxTokens: new(123)}
+			request := ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("private-request-marker")}}}, Reasoning: Reasoning{Mode: ReasoningModeDisabled}, MaxTokens: new(123)}
 			starts := 0
 			ctx := WithLifecycleObserver(t.Context(), LifecycleObserverFunc(func(_ context.Context, event LifecycleEvent) error {
 				if event.Kind == "call_started" {
@@ -201,7 +201,7 @@ func TestLifecyclePersistenceFailureDoesNotFailOver(t *testing.T) {
 	log := &lifecycleLog{failKind: "call_started", failure: errors.New("storage down")}
 	model := &fakeCallModel{name: "fake", responses: []*ChatResponse{{Content: "ok"}}}
 	failovers := 0
-	_, err := CallModel(WithLifecycleObserver(t.Context(), log), "test", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "question"}}}, WithModelFailover(FailoverConfig{GetFailoverModel: func(context.Context, FailoverAttempt) (ChatModel, error) { failovers++; return model, nil }}))
+	_, err := CallModel(WithLifecycleObserver(t.Context(), log), "test", model, ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("question")}}}}, WithModelFailover(FailoverConfig{GetFailoverModel: func(context.Context, FailoverAttempt) (ChatModel, error) { failovers++; return model, nil }}))
 	var failure *ObservationError
 	if !errors.As(err, &failure) || failovers != 0 || len(model.requests) != 0 {
 		t.Fatalf("audit outage failed over or sent request: err=%v fallback=%d requests=%d", err, failovers, len(model.requests))
@@ -229,7 +229,7 @@ func TestLifecycleFailureIsNotStructuredRepairInput(t *testing.T) {
 	model := &fakeStructuredModel{responses: []string{`{"overall_done":true,"notes":"ok"}`}}
 	contract, _, _ := reviewContract()
 	callbacks := 0
-	_, _, err := ChatStructuredArgs(WithLifecycleObserver(t.Context(), log), "structured", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "question"}}}, contract, WithStructuredAttempts(3), WithStructuredNextRequest(func(_ context.Context, a StructuredAttempt) (*ChatRequest, error) {
+	_, _, err := ChatStructuredArgs(WithLifecycleObserver(t.Context(), log), "structured", model, ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("question")}}}}, contract, WithStructuredAttempts(3), WithStructuredNextRequest(func(_ context.Context, a StructuredAttempt) (*ChatRequest, error) {
 		callbacks++
 		return new(a.Request), nil
 	}))

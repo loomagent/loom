@@ -13,7 +13,7 @@ func TestChain(t *testing.T) {
 	appendMessage := func(content string) Policy {
 		return Func(func(_ context.Context, input Input) (Result, error) {
 			return Result{
-				Messages:  append(input.Messages, loom.Message{Role: loom.RoleSystem, Content: content}),
+				Messages:  append(input.Messages, loom.Message{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart(content)}}),
 				Decisions: []Decision{{Policy: content, Action: "append"}},
 			}, nil
 		})
@@ -22,20 +22,20 @@ func TestChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Messages) != 2 || result.Messages[1].Content != "two" || len(result.Decisions) != 2 {
+	if len(result.Messages) != 2 || loom.TextOf(result.Messages[1].Parts) != "two" || len(result.Decisions) != 2 {
 		t.Fatalf("result = %+v", result)
 	}
 }
 
 func TestHistoryAppendsUserMessage(t *testing.T) {
-	result, err := History(t.Context(), Input{User: loom.UserMessage{Text: "hello"}})
+	result, err := History(t.Context(), Input{User: loom.TextUserMessage("hello")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Messages) != 1 {
 		t.Fatalf("messages = %+v", result.Messages)
 	}
-	if got := result.Messages[0]; got.Role != loom.RoleUser || got.Content != "hello" {
+	if got := result.Messages[0]; got.Role != loom.RoleUser || loom.TextOf(got.Parts) != "hello" {
 		t.Fatalf("message = %+v", got)
 	}
 }
@@ -50,11 +50,11 @@ func TestHistoryRejectsUnfinishedTurn(t *testing.T) {
 
 func TestReactStepPolicy(t *testing.T) {
 	// A nil policy leaves the plan alone.
-	plan := &react.StepPlan{Messages: []loom.Message{{Role: loom.RoleUser, Content: "keep"}}}
+	plan := &react.StepPlan{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("keep")}}}}
 	if err := (ReactStepPolicy{}).PrepareStep(t.Context(), react.State{}, plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Messages) != 1 || plan.Messages[0].Content != "keep" {
+	if len(plan.Messages) != 1 || loom.TextOf(plan.Messages[0].Parts) != "keep" {
 		t.Fatalf("plan changed by an absent policy: %+v", plan.Messages)
 	}
 
@@ -65,7 +65,7 @@ func TestReactStepPolicy(t *testing.T) {
 			// The policy receives a copy, so this write must not reach the caller.
 			input.Metadata["k"] = "mutated"
 			return Result{
-				Messages:  append(input.Messages, loom.Message{Role: loom.RoleSystem, Content: "added"}),
+				Messages:  append(input.Messages, loom.Message{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("added")}}),
 				Decisions: []Decision{{Policy: "p", Action: "add"}},
 			}, nil
 		}),
@@ -74,11 +74,11 @@ func TestReactStepPolicy(t *testing.T) {
 		OnDecisions:   func(reported []Decision) { decisions = append(decisions, reported...) },
 	}
 
-	plan = &react.StepPlan{Messages: []loom.Message{{Role: loom.RoleUser, Content: "start"}}}
+	plan = &react.StepPlan{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("start")}}}}
 	if err := policy.PrepareStep(t.Context(), react.State{Step: 0}, plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Messages) != 2 || plan.Messages[1].Content != "added" {
+	if len(plan.Messages) != 2 || loom.TextOf(plan.Messages[1].Parts) != "added" {
 		t.Fatalf("plan messages = %+v", plan.Messages)
 	}
 	if len(decisions) != 1 || decisions[0].Action != "add" {
@@ -89,11 +89,11 @@ func TestReactStepPolicy(t *testing.T) {
 	}
 
 	// FirstStepOnly: later steps are skipped entirely.
-	plan = &react.StepPlan{Messages: []loom.Message{{Role: loom.RoleUser, Content: "later"}}}
+	plan = &react.StepPlan{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("later")}}}}
 	if err := policy.PrepareStep(t.Context(), react.State{Step: 2}, plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Messages) != 1 || plan.Messages[0].Content != "later" {
+	if len(plan.Messages) != 1 || loom.TextOf(plan.Messages[0].Parts) != "later" {
 		t.Fatalf("policy ran after the first step: %+v", plan.Messages)
 	}
 }

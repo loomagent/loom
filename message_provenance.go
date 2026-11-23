@@ -28,21 +28,22 @@ func NewTerminalUserMessage(content string) Message {
 // NewTaskUserMessage constructs a persisted business task input. The source
 // must come from durable provenance rather than being inferred from role=user.
 func NewTaskUserMessage(source MessageSource, content string) Message {
-	return Message{
-		Role:    RoleUser,
-		Content: content,
-		source:  source,
-		purpose: MessagePurposeTask,
-	}
+	return newUserMessage(source, MessagePurposeTask, []ContentPart{TextPart(content)})
 }
 
 // NewFrameworkUserMessage constructs a framework-generated message that must
 // use role=user at the provider boundary. Source and purpose remain local-only.
 func NewFrameworkUserMessage(purpose MessagePurpose, content string) Message {
+	return newUserMessage(MessageSourceFramework, purpose, []ContentPart{TextPart(content)})
+}
+
+// newUserMessage tags a user message with its provenance, which every user message
+// shares whatever parts it carries.
+func newUserMessage(source MessageSource, purpose MessagePurpose, parts []ContentPart) Message {
 	return Message{
 		Role:    RoleUser,
-		Content: content,
-		source:  MessageSourceFramework,
+		Parts:   parts,
+		source:  source,
 		purpose: purpose,
 	}
 }

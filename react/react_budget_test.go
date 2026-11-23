@@ -37,7 +37,7 @@ func TestInternalToolsPreserveResearchBudgets(t *testing.T) {
 				loom.NewArgsTool(loom.MustArgsContract("archive_read"), "read", func(context.Context, loom.Args) (string, error) { reads++; return "saved evidence", nil }),
 				loom.NewArgsTool(loom.MustArgsContract("finish"), "finish", func(context.Context, loom.Args) (string, error) { return "ok", nil }, loom.WithEndsToolPhase()),
 			)
-			cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "research"}}, Model: model, Tools: tools, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxSteps: 10, ToolCallLimits: map[string]uint64{}}
+			cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("research")}}}, Model: model, Tools: tools, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxSteps: 10, ToolCallLimits: map[string]uint64{}}
 			wantResearch := 2
 			switch budget {
 			case "rounds":
@@ -82,7 +82,7 @@ func TestInternalToolsPreserveResearchBudgets(t *testing.T) {
 			}
 			found := false
 			for _, msg := range last.Messages {
-				if msg.Role == loom.RoleTool && msg.ToolCallID == "lookup-6" && msg.Content != "evidence" {
+				if msg.Role == loom.RoleTool && msg.ToolCallID == "lookup-6" && loom.TextOf(msg.Parts) != "evidence" {
 					found = true
 				}
 			}
@@ -105,7 +105,7 @@ func TestInternalToolsRemainBoundedByMaxSteps(t *testing.T) {
 	var result *Result
 	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		var e error
-		result, e = RunToFinalAnswer(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "research"}}, Model: model, Tools: loom.NewToolRegistry(tool), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxSteps: 2, MaxToolRounds: 1})
+		result, e = RunToFinalAnswer(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("research")}}}, Model: model, Tools: loom.NewToolRegistry(tool), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxSteps: 2, MaxToolRounds: 1})
 		return e
 	}, loom.RunOptions{ConversationID: "bounded"})
 	if err != nil {
@@ -129,7 +129,7 @@ func TestToolRoundLimitCannotBeReopenedByPolicy(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "two", Name: "lookup", Arguments: `{}`}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "answer", FinishReason: loom.FinishReasonStop},
 	}}
-	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "research"}}, Model: model, Tools: loom.NewToolRegistry(tool, read), MaxSteps: 4, MaxToolRounds: 1, StepPolicies: []StepPolicy{StepPolicyFunc(func(_ context.Context, s State, p *StepPlan) error { p.Tools = s.ToolInfos; return nil })}}
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("research")}}}, Model: model, Tools: loom.NewToolRegistry(tool, read), MaxSteps: 4, MaxToolRounds: 1, StepPolicies: []StepPolicy{StepPolicyFunc(func(_ context.Context, s State, p *StepPlan) error { p.Tools = s.ToolInfos; return nil })}}
 	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		result, e := Run(ctx, w, cfg)
 		if e != nil {
@@ -148,7 +148,7 @@ func TestToolRoundLimitCannotBeReopenedByPolicy(t *testing.T) {
 func TestFreeToolLimitIsRejected(t *testing.T) {
 	t.Parallel()
 	tool := loom.NewArgsTool(loom.MustArgsContract("archive_read"), "read", func(context.Context, loom.Args) (string, error) { return "saved", nil })
-	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "research"}}, Model: &scriptedModel{}, Tools: loom.NewToolRegistry(tool), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, ToolCallLimits: map[string]uint64{"archive_read": 1}}
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("research")}}}, Model: &scriptedModel{}, Tools: loom.NewToolRegistry(tool), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, ToolCallLimits: map[string]uint64{"archive_read": 1}}
 	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		_, e := Run(ctx, w, cfg)
 		return e
@@ -161,7 +161,7 @@ func TestFreeToolLimitIsRejected(t *testing.T) {
 func TestPhaseEndingToolLimitIsRejected(t *testing.T) {
 	t.Parallel()
 	tool := loom.NewArgsTool(loom.MustArgsContract("finish"), "finish", func(context.Context, loom.Args) (string, error) { return "ok", nil }, loom.WithEndsToolPhase())
-	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "research"}}, Model: &scriptedModel{}, Tools: loom.NewToolRegistry(tool), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, ToolCallLimits: map[string]uint64{"finish": 1}}
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("research")}}}, Model: &scriptedModel{}, Tools: loom.NewToolRegistry(tool), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, ToolCallLimits: map[string]uint64{"finish": 1}}
 	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		_, e := Run(ctx, w, cfg)
 		return e

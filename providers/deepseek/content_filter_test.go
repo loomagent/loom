@@ -112,7 +112,7 @@ func rejectingModel(t *testing.T, status int, body string) *deepseek.Model {
 func callModel(t *testing.T, model loom.ChatModel, streaming bool) error {
 	t.Helper()
 	req := loom.ChatRequest{
-		Messages:       []loom.Message{{Role: loom.RoleUser, Content: "classify this input as JSON"}},
+		Messages:       []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("classify this input as JSON")}}},
 		Reasoning:      loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 		ResponseFormat: loom.ResponseFormatJSONObject,
 	}

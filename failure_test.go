@@ -103,7 +103,7 @@ func TestExecuteToolCalls_FailureErrorTexts(t *testing.T) {
 			t.Error("the returned error no longer reaches the cause")
 		}
 		return w.FinalAnswer(ctx, "ok")
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	if turn == nil {
 		t.Fatalf("Run returned nil turn")
@@ -136,7 +136,7 @@ func TestExecuteToolCalls_PlainErrorUnchanged(t *testing.T) {
 			return err
 		}
 		return w.FinalAnswer(ctx, "ok")
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	itemErr := turn.Items[1].Error
 	if itemErr == nil {
@@ -171,7 +171,7 @@ func TestExecuteToolCalls_InvalidArgumentsCode(t *testing.T) {
 			t.Errorf("invoke error = %v, want *ToolArgumentError for tool echo", results[0].Err)
 		}
 		return w.FinalAnswer(ctx, "ok")
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	itemErr := turn.Items[1].Error
 	if itemErr == nil {
@@ -199,8 +199,8 @@ func TestExecuteToolCalls_InvalidArgumentsCode(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Fatalf("msgs: %+v", msgs)
 	}
-	if want := "tool execution error: " + raw; msgs[1].Content != want {
-		t.Errorf("fed content = %q, want %q", msgs[1].Content, want)
+	if want := "tool execution error: " + raw; TextOf(msgs[1].Parts) != want {
+		t.Errorf("fed content = %q, want %q", TextOf(msgs[1].Parts), want)
 	}
 }
 
@@ -230,7 +230,7 @@ func TestExecuteToolCalls_WrappedArgumentErrorKeepsModelText(t *testing.T) {
 			return err
 		}
 		return w.FinalAnswer(ctx, "ok")
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	if turn == nil {
 		t.Fatalf("Run returned nil turn")
@@ -255,11 +255,11 @@ func TestExecuteToolCalls_WrappedArgumentErrorKeepsModelText(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Fatalf("msgs: %+v", msgs)
 	}
-	if want := "tool execution error: " + itemErr.Message; msgs[1].Content != want {
-		t.Errorf("fed content = %q, want the stored message %q", msgs[1].Content, want)
+	if want := "tool execution error: " + itemErr.Message; TextOf(msgs[1].Parts) != want {
+		t.Errorf("fed content = %q, want the stored message %q", TextOf(msgs[1].Parts), want)
 	}
-	if strings.Contains(msgs[1].Content, "invalid arguments for tool") {
-		t.Errorf("fed content = %q must not fall back to the raw argument error", msgs[1].Content)
+	if strings.Contains(TextOf(msgs[1].Parts), "invalid arguments for tool") {
+		t.Errorf("fed content = %q must not fall back to the raw argument error", TextOf(msgs[1].Parts))
 	}
 }
 
@@ -288,8 +288,8 @@ func TestModelTextMatchesFedBackToolMessage(t *testing.T) {
 			if len(msgs) != 2 || msgs[1].Role != RoleTool {
 				t.Fatalf("msgs: %+v", msgs)
 			}
-			if want := "tool execution error: " + itemErr.Message; msgs[1].Content != want {
-				t.Errorf("fed content = %q, want the stored message %q", msgs[1].Content, want)
+			if want := "tool execution error: " + itemErr.Message; TextOf(msgs[1].Parts) != want {
+				t.Errorf("fed content = %q, want the stored message %q", TextOf(msgs[1].Parts), want)
 			}
 		})
 	}
@@ -306,11 +306,11 @@ func TestAppendAssistantTurn_FailureErrorModelText(t *testing.T) {
 	if len(msgs) != 2 || msgs[1].Role != RoleTool || msgs[1].ToolCallID != "c1" {
 		t.Fatalf("msgs: %+v", msgs)
 	}
-	if !strings.Contains(msgs[1].Content, "the search tool is temporarily unavailable") {
-		t.Errorf("content = %q, want it to carry the model-facing text", msgs[1].Content)
+	if !strings.Contains(TextOf(msgs[1].Parts), "the search tool is temporarily unavailable") {
+		t.Errorf("content = %q, want it to carry the model-facing text", TextOf(msgs[1].Parts))
 	}
-	if strings.Contains(msgs[1].Content, "vendor X") {
-		t.Errorf("content = %q, must not carry the raw cause text", msgs[1].Content)
+	if strings.Contains(TextOf(msgs[1].Parts), "vendor X") {
+		t.Errorf("content = %q, must not carry the raw cause text", TextOf(msgs[1].Parts))
 	}
 }
 
@@ -318,8 +318,8 @@ func TestAppendAssistantTurn_PlainErrorUnchanged(t *testing.T) {
 	t.Parallel()
 	results := []ToolExecResult{{Call: ToolCall{ID: "c1"}, Err: errors.New("boom")}}
 	msgs := AppendAssistantTurn(nil, &ChatResponse{}, results)
-	if msgs[1].Content != "tool execution error: boom" {
-		t.Errorf("content = %q, want the raw error text as before", msgs[1].Content)
+	if TextOf(msgs[1].Parts) != "tool execution error: boom" {
+		t.Errorf("content = %q, want the raw error text as before", TextOf(msgs[1].Parts))
 	}
 }
 
@@ -332,7 +332,7 @@ func TestRun_HandlerFailureErrorFillsCloseReasonPublic(t *testing.T) {
 
 	turn, err := Run(context.Background(), func(context.Context, TurnWriter, []Turn, UserMessage) error {
 		return handlerErr
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	if turn == nil || turn.Status != TurnStatusFailed || turn.CloseReason == nil {
 		t.Fatalf("turn: %+v", turn)
@@ -356,7 +356,7 @@ func TestRun_HandlerFailureErrorFillsCloseReasonPublic(t *testing.T) {
 func TestRun_PlainHandlerErrorHasNoPublic(t *testing.T) {
 	turn, _ := Run(context.Background(), func(context.Context, TurnWriter, []Turn, UserMessage) error {
 		return errors.New("boom")
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	if cr := turn.CloseReason; cr == nil || cr.Message != "boom" || cr.Public != nil {
 		t.Errorf("close reason: %+v", cr)
@@ -372,7 +372,7 @@ func TestStep_FailureErrorTexts(t *testing.T) {
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
 		_ = w.Step(ctx, "lookup", func(context.Context, Step) error { return stepErr })
 		return w.FinalAnswer(ctx, "ok")
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	step := turn.Items[0]
 	if step.Kind != ItemKindStep || step.Status != ItemStatusFailed || step.Error == nil {
@@ -399,7 +399,7 @@ func TestStreamReasoning_FailureErrorTexts(t *testing.T) {
 	turn, _ := Run(context.Background(), func(ctx context.Context, w TurnWriter, h []Turn, in UserMessage) error {
 		_ = w.StreamReasoning(ctx, "think", func(ReasoningStream) error { return streamErr })
 		return w.FinalAnswer(ctx, "ok")
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	reasoning := turn.Items[0]
 	if reasoning.Kind != ItemKindReasoning || reasoning.Status != ItemStatusFailed || reasoning.Error == nil {

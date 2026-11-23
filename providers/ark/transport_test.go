@@ -57,7 +57,7 @@ func TestChatMapsResponse(t *testing.T) {
 	})
 
 	resp, err := m.Chat(t.Context(), loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 	})
 	if err != nil {
@@ -99,7 +99,7 @@ func TestChatSendsDeclaredToolsAndStructuredOutput(t *testing.T) {
 	})
 
 	_, err := m.Chat(t.Context(), loom.ChatRequest{
-		Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 		Tools: []*loom.ToolInfo{{
 			Name:        "search",
 			Description: "Search the web.",
@@ -169,7 +169,7 @@ func TestStreamMapsDeltas(t *testing.T) {
 	})
 
 	stream, err := m.Stream(t.Context(), loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 	})
 	if err != nil {

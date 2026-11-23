@@ -65,8 +65,8 @@ type ToolInfo struct {
 //  3. find the Tool with ToolRegistry.Lookup(call.Name) and run
 //     Tool.Invoke(call.Arguments)
 //  4. wrap the returned JSON string in
-//     Message{Role: RoleTool, ToolCallID: call.ID, Content: result} and append it to
-//     the history for the next round
+//     Message{Role: RoleTool, ToolCallID: call.ID, Parts: []ContentPart{TextPart(result)}}
+//     and append it to the history for the next round
 //
 // Loom deliberately ships no high-level node that runs this loop. The agent writes
 // the loop; the framework supplies the atomic pieces.
