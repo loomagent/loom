@@ -347,17 +347,24 @@ func (s *Stream) Close() error {
 // started. The text form is the one the endpoints spell differently; the structured form is a
 // provider's own sequence of blocks, which goes back exactly as it arrived.
 //
-// An unknown role is an error rather than a user message: quietly changing who said something
-// rewrites the conversation, and nothing downstream would notice.
+// A user message that carries an image goes out as the content-parts array, text and images
+// in the order the caller gave them. Every other message, and a user message of text only,
+// goes out as the plain string the endpoints have always received. An image on a message of
+// another role is therefore left out here, and never sent that way: loom's capability check
+// refuses the request after this translation and before anything goes out.
+//
+// An unknown role, or a part of a kind no endpoint takes, is an error rather than a message
+// with something left out: quietly changing what was said rewrites the conversation, and
+// nothing downstream would notice.
 func (p Provider) Messages(msgs []loom.Message) ([]openai.ChatCompletionMessageParamUnion, error) {
 	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(msgs))
 	for _, m := range msgs {
 		var gm openai.ChatCompletionMessageParamUnion
 		switch m.Role {
 		case loom.RoleSystem:
-			gm = openai.SystemMessage(m.Content)
+			gm = openai.SystemMessage(loom.TextOf(m.Parts))
 		case loom.RoleAssistant:
-			gm = openai.AssistantMessage(m.Content)
+			gm = openai.AssistantMessage(loom.TextOf(m.Parts))
 			extra := map[string]any{}
 			if m.ReasoningContent != "" && p.ReasoningField != "" {
 				extra[p.ReasoningField] = m.ReasoningContent
@@ -379,15 +386,51 @@ func (p Provider) Messages(msgs []loom.Message) ([]openai.ChatCompletionMessageP
 				})
 			}
 		case loom.RoleTool:
-			gm = openai.ToolMessage(m.Content, m.ToolCallID)
+			gm = openai.ToolMessage(loom.TextOf(m.Parts), m.ToolCallID)
 		case loom.RoleUser:
-			gm = openai.UserMessage(m.Content)
+			var err error
+			if gm, err = userMessage(m.Parts); err != nil {
+				return nil, fmt.Errorf("message %d %w", len(out), err)
+			}
 		default:
 			return nil, fmt.Errorf("message %d uses unknown role %q", len(out), m.Role)
 		}
 		out = append(out, gm)
 	}
 	return out, nil
+}
+
+// userMessage translates one user message. It stays the plain string form while the
+// message is text only; as soon as it holds anything else, such as an image, it becomes the
+// content-parts array, so nothing the caller wrote is left out.
+func userMessage(parts []loom.ContentPart) (openai.ChatCompletionMessageParamUnion, error) {
+	for _, part := range parts {
+		if part.Type != loom.ContentText {
+			return userMessageOfParts(parts)
+		}
+	}
+	return openai.UserMessage(loom.TextOf(parts)), nil
+}
+
+// userMessageOfParts translates one user message as a content-parts array, in order.
+func userMessageOfParts(parts []loom.ContentPart) (openai.ChatCompletionMessageParamUnion, error) {
+	content := make([]openai.ChatCompletionContentPartUnionParam, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case loom.ContentText:
+			content = append(content, openai.TextContentPart(part.Text))
+		case loom.ContentImage:
+			image := openai.ChatCompletionContentPartImageImageURLParam{URL: part.ImageURL}
+			// A detail the caller did not set is not sent, so the provider keeps its default.
+			if part.ImageDetail != "" {
+				image.Detail = part.ImageDetail
+			}
+			content = append(content, openai.ImageContentPart(image))
+		default:
+			return openai.ChatCompletionMessageParamUnion{}, fmt.Errorf("uses unknown content part type %q", part.Type)
+		}
+	}
+	return openai.UserMessage(content), nil
 }
 
 // Client builds an SDK client for one provider. Retries belong to Loom, so the SDK must not

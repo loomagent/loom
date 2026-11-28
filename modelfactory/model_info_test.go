@@ -65,7 +65,7 @@ func TestModelInfoSurvivesFactoryAndPhysicalRetries(t *testing.T) {
 				if loom.DescribeModel(model) != want {
 					t.Fatal("construction metadata was mutable")
 				}
-				req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hello"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
+				req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hello")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
 				if streaming {
 					stream, err := model.Stream(t.Context(), req)
 					if err != nil {
@@ -145,7 +145,7 @@ func TestModelInfoDisabledRetriesAdmitOnlyOnePhysicalRequest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "question"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
+			req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("question")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
 			if streaming {
 				_, err = model.Stream(t.Context(), req)
 			} else {

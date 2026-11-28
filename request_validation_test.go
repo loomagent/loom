@@ -14,12 +14,12 @@ func Test_user_final_stream_requires_user_history_with_custom_model(t *testing.T
 		valid    bool
 	}{
 		{name: "empty"},
-		{name: "system only", messages: []Message{{Role: RoleSystem, Content: "rules"}}},
-		{name: "assistant only", messages: []Message{{Role: RoleAssistant, Content: "answer"}}},
-		{name: "tool only", messages: []Message{{Role: RoleTool, ToolCallID: "call-1", Content: "result"}}},
-		{name: "user task", messages: []Message{{Role: RoleUser, Content: "task"}}, valid: true},
-		{name: "assistant continuation", messages: []Message{{Role: RoleUser, Content: "task"}, {Role: RoleAssistant, Content: "draft"}}, valid: true},
-		{name: "tool continuation", messages: []Message{{Role: RoleUser, Content: "task"}, {Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call-1", Name: "lookup", Arguments: "{}"}}}, {Role: RoleTool, ToolCallID: "call-1", Content: "result"}}, valid: true},
+		{name: "system only", messages: []Message{{Role: RoleSystem, Parts: []ContentPart{TextPart("rules")}}}},
+		{name: "assistant only", messages: []Message{{Role: RoleAssistant, Parts: []ContentPart{TextPart("answer")}}}},
+		{name: "tool only", messages: []Message{{Role: RoleTool, ToolCallID: "call-1", Parts: []ContentPart{TextPart("result")}}}},
+		{name: "user task", messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("task")}}}, valid: true},
+		{name: "assistant continuation", messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("task")}}, {Role: RoleAssistant, Parts: []ContentPart{TextPart("draft")}}}, valid: true},
+		{name: "tool continuation", messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("task")}}, {Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call-1", Name: "lookup", Arguments: "{}"}}}, {Role: RoleTool, ToolCallID: "call-1", Parts: []ContentPart{TextPart("result")}}}, valid: true},
 	} {
 		t.Run("user "+tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -58,7 +58,7 @@ func TestUserReceivesLocalValidationWithCustomModel(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				// Given a custom model that would otherwise accept an empty context,
 				model := &fakeCallModel{responses: []*ChatResponse{{Content: "accepted"}}}
-				req := ChatRequest{Messages: []Message{{Role: RoleSystem, Content: "rules"}}}
+				req := ChatRequest{Messages: []Message{{Role: RoleSystem, Parts: []ContentPart{TextPart("rules")}}}}
 				var response *ChatResponse
 				var err error
 				// When a caller submits or rebuilds a request with no user message,
@@ -66,7 +66,7 @@ func TestUserReceivesLocalValidationWithCustomModel(t *testing.T) {
 				case "chat":
 					response, err = CallModel(t.Context(), "test", model, req)
 				case "rebuilt request":
-					response, err = CallModel(t.Context(), "test", model, ChatRequest{Messages: []Message{{Role: RoleUser, Content: "task"}}}, WithCallModelRequestForModel(func(ChatModel) (ChatRequest, error) { return req, nil }))
+					response, err = CallModel(t.Context(), "test", model, ChatRequest{Messages: []Message{{Role: RoleUser, Parts: []ContentPart{TextPart("task")}}}}, WithCallModelRequestForModel(func(ChatModel) (ChatRequest, error) { return req, nil }))
 				case "stream":
 					response, err = StreamLLMToStep(t.Context(), nil, "test", model, req)
 				default:
@@ -89,11 +89,11 @@ func Test_user_structured_retry_cannot_replace_a_missing_user_task(t *testing.T)
 		model := &fakeStructuredModel{responses: []string{`{"overall_done":true,"notes":"ok"}`}}
 		var retried bool
 		// When a structured call begins with only system instructions.
-		_, response, err := ChatStructuredArgs(t.Context(), "test", model, ChatRequest{Messages: []Message{{Role: RoleSystem, Content: "rules"}}}, contract,
+		_, response, err := ChatStructuredArgs(t.Context(), "test", model, ChatRequest{Messages: []Message{{Role: RoleSystem, Parts: []ContentPart{TextPart("rules")}}}}, contract,
 			WithStructuredAttempts(2), WithStructuredNextRequest(func(_ context.Context, attempt StructuredAttempt) (*ChatRequest, error) {
 				retried = true
 				req := attempt.Request
-				req.Messages = append(req.Messages, Message{Role: RoleUser, Content: "repair"})
+				req.Messages = append(req.Messages, Message{Role: RoleUser, Parts: []ContentPart{TextPart("repair")}})
 				return &req, nil
 			}))
 		// Then input validation is terminal, before corrective feedback or model output.

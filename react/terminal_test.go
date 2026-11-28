@@ -30,7 +30,7 @@ func runTerminalCase(t *testing.T, cfg Config, conversationID string) (*Result, 
 func toolResultContent(messages []loom.Message, callID string) string {
 	for _, message := range messages {
 		if message.Role == loom.RoleTool && message.ToolCallID == callID {
-			return message.Content
+			return loom.TextOf(message.Parts)
 		}
 	}
 	return ""
@@ -53,7 +53,7 @@ func TestTerminalToolEndsTheToolPhase(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "c1", Name: "finalize_answer"}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "the answer", FinishReason: loom.FinishReasonStop},
 	}}
-	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(terminalTool(&terminalCalls))}
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}}, Model: model, Tools: loom.NewToolRegistry(terminalTool(&terminalCalls))}
 	result, err := runTerminalCase(t, cfg, "terminal-phase")
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -83,7 +83,7 @@ func TestTerminalToolEndsTheToolPhase(t *testing.T) {
 		t.Fatal("the final request must tell the model what changed")
 	}
 	last := model.requests[1].Messages[len(model.requests[1].Messages)-1]
-	if last.Role != loom.RoleSystem || !strings.Contains(last.Content, "tool phase is over") {
+	if last.Role != loom.RoleSystem || !strings.Contains(loom.TextOf(last.Parts), "tool phase is over") {
 		t.Fatalf("the final request must announce the phase change, got %+v", last)
 	}
 }
@@ -100,7 +100,7 @@ func TestMixedTerminalBatchIsRejectedWhole(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "c3", Name: "finalize_answer"}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "the answer", FinishReason: loom.FinishReasonStop},
 	}}
-	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls))}
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls))}
 	result, err := runTerminalCase(t, cfg, "mixed-batch")
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -137,7 +137,7 @@ func TestDuplicateTerminalCallsAreRejected(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "c3", Name: "finalize_answer"}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "the answer", FinishReason: loom.FinishReasonStop},
 	}}
-	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(terminalTool(&terminalCalls))}
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}}, Model: model, Tools: loom.NewToolRegistry(terminalTool(&terminalCalls))}
 	if _, err := runTerminalCase(t, cfg, "duplicate-terminal"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestToolCallInFinalPhaseIsNotExecuted(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "c1", Name: "finalize_answer"}}, FinishReason: loom.FinishReasonToolCalls},
 		{ToolCalls: []loom.ToolCall{{ID: "c9", Name: "lookup"}}, FinishReason: loom.FinishReasonToolCalls},
 	}}
-	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls))}
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls))}
 	result, err := runTerminalCase(t, cfg, "final-phase-tool-call")
 	if !errors.Is(err, ErrToolCallInFinalPhase) {
 		t.Fatalf("err = %v, want ErrToolCallInFinalPhase", err)
@@ -186,7 +186,7 @@ func TestTerminalToolSurvivesToolBudgets(t *testing.T) {
 		{ToolCalls: []loom.ToolCall{{ID: "c2", Name: "finalize_answer"}}, FinishReason: loom.FinishReasonToolCalls},
 		{Content: "the answer", FinishReason: loom.FinishReasonStop},
 	}}
-	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls)), MaxToolCalls: 1}
+	cfg := Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls)), MaxToolCalls: 1}
 	result, err := runTerminalCase(t, cfg, "terminal-budget")
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -221,7 +221,7 @@ func TestExhaustedBudgetStillOffersPhaseEndInStreamingFinal(t *testing.T) {
 	var result *Result
 	_, err := loom.Run(t.Context(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		var runErr error
-		result, runErr = RunToFinalAnswer(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls)), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxToolCalls: 1})
+		result, runErr = RunToFinalAnswer(ctx, w, Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}}, Model: model, Tools: loom.NewToolRegistry(lookup, terminalTool(&terminalCalls)), Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, MaxToolCalls: 1})
 		return runErr
 	}, loom.RunOptions{ConversationID: "terminal-stream-budget"})
 	if err != nil {

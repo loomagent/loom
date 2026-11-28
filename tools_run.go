@@ -24,7 +24,7 @@ import (
 //	results, err := loom.ExecuteToolCalls(ctx, w, registry, resp.ToolCalls)
 //	if err != nil { return err }
 //	for _, r := range results {
-//	    msgs = append(msgs, loom.Message{Role: loom.RoleTool, ToolCallID: r.Call.ID, Content: r.Output})
+//	    msgs = append(msgs, loom.Message{Role: loom.RoleTool, ToolCallID: r.Call.ID, Parts: []loom.ContentPart{loom.TextPart(r.Output)}})
 //	}
 func ExecuteToolCalls(
 	ctx context.Context,

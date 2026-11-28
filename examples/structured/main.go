@@ -53,8 +53,8 @@ func main() {
 	// The caller owns the prompt, so the caller writes the task; the contract's instruction is the
 	// part that has to agree with what will be enforced.
 	messages := []loom.Message{
-		{Role: loom.RoleSystem, Content: contract.JSONObjectPrompt()},
-		{Role: loom.RoleUser, Content: "Judge the sentiment of: 'The delivery was fast but the box was damaged.'"},
+		{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart(contract.JSONObjectPrompt())}},
+		{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("Judge the sentiment of: 'The delivery was fast but the box was damaged.'")}},
 	}
 	schemaJSON, err := jsonv2.Marshal(contract.Schema())
 	if err != nil {
@@ -93,9 +93,9 @@ func main() {
 		// schema that will be enforced. Loom adds none of it, which is why the second request below
 		// is visibly the caller's work.
 		messages = append(messages,
-			loom.Message{Role: loom.RoleAssistant, Content: invalid.Content},
-			loom.Message{Role: loom.RoleUser, Content: fmt.Sprintf(
-				"Your previous output was rejected: %v\nReturn one JSON value matching:\n%s", err, schemaJSON)})
+			loom.Message{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart(invalid.Content)}},
+			loom.Message{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart(fmt.Sprintf(
+				"Your previous output was rejected: %v\nReturn one JSON value matching:\n%s", err, schemaJSON))}})
 	}
 
 	// What the model was actually asked.
@@ -107,7 +107,7 @@ func main() {
 	if len(model.requests) == 0 {
 		fail(errors.New("the scripted model was never called"))
 	}
-	if model.requests[0].Messages[0].Content != contract.JSONObjectPrompt() {
+	if loom.TextOf(model.requests[0].Messages[0].Parts) != contract.JSONObjectPrompt() {
 		fail(errors.New("Loom rewrote the prompt; it must not"))
 	}
 	fmt.Println("  the first request carried the caller's own messages, unchanged.")

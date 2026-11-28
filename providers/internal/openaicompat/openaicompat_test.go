@@ -3,6 +3,7 @@ package openaicompat
 import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -191,16 +192,16 @@ func TestUsage(t *testing.T) {
 func TestMessages(t *testing.T) {
 	provider := Provider{FinishReason: finishReason, ReasoningField: ReasoningContentField}
 	messages, err := provider.Messages([]loom.Message{
-		{Role: loom.RoleSystem, Content: "rules"},
-		{Role: loom.RoleUser, Content: "hi"},
+		{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("rules")}},
+		{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}},
 		{
 			Role:             loom.RoleAssistant,
-			Content:          "calling",
+			Parts:            []loom.ContentPart{loom.TextPart("calling")},
 			ReasoningContent: "why",
 			Name:             "assistant",
 			ToolCalls:        []loom.ToolCall{{ID: "c1", Name: "search", Arguments: `{"q":"x"}`}},
 		},
-		{Role: loom.RoleTool, Content: "result", ToolCallID: "c1"},
+		{Role: loom.RoleTool, Parts: []loom.ContentPart{loom.TextPart("result")}, ToolCallID: "c1"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +238,7 @@ func TestMessages(t *testing.T) {
 // whose messages carry none.
 func TestMessagesWithoutAReasoningField(t *testing.T) {
 	provider := Provider{FinishReason: finishReason}
-	messages, err := provider.Messages([]loom.Message{{Role: loom.RoleAssistant, Content: "answer", ReasoningContent: "why"}})
+	messages, err := provider.Messages([]loom.Message{{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart("answer")}, ReasoningContent: "why"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,9 +253,151 @@ func TestMessagesWithoutAReasoningField(t *testing.T) {
 
 func TestMessagesRejectsAnUnknownRole(t *testing.T) {
 	provider := Provider{FinishReason: finishReason, ReasoningField: ReasoningContentField}
-	_, err := provider.Messages([]loom.Message{{Role: loom.Role("assistent"), Content: "typo"}})
+	_, err := provider.Messages([]loom.Message{{Role: loom.Role("assistent"), Parts: []loom.ContentPart{loom.TextPart("typo")}}})
 	if err == nil || !strings.Contains(err.Error(), `unknown role "assistent"`) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// A part of a kind no endpoint takes is an error, not a message that quietly lacks it.
+func TestMessagesRejectsAnUnknownContentPartType(t *testing.T) {
+	provider := Provider{FinishReason: finishReason}
+	_, err := provider.Messages([]loom.Message{
+		{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("task")}},
+		{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.ImagePart("https://example.com/cat.png", ""), {Type: loom.ContentType("file")}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `message 1 uses unknown content part type "file"`) {
+		t.Fatalf("error = %v, want the message and the part type named", err)
+	}
+}
+
+// A user message that carries an image goes out as the content-parts array, in the order the
+// caller gave the parts, and a user message of text only stays the plain string. The detail
+// is the provider's to default: one the caller did not set is left off the wire entirely.
+func TestOpenaiCompatMessagesMultimodal(t *testing.T) {
+	provider := Provider{FinishReason: finishReason}
+	const cat = "https://example.com/cat.png"
+	tests := []struct {
+		name     string
+		parts    []loom.ContentPart
+		want     string // the JSON the user message's content takes on the wire
+		textOnly bool   // the message goes out as the plain string form
+	}{
+		{
+			name:  "text then image, no detail",
+			parts: []loom.ContentPart{loom.TextPart("What is in this image?"), loom.ImagePart(cat, "")},
+			want:  `[{"type":"text","text":"What is in this image?"},{"type":"image_url","image_url":{"url":"https://example.com/cat.png"}}]`,
+		},
+		{
+			name:  "an image alone",
+			parts: []loom.ContentPart{loom.ImagePart(cat, "")},
+			want:  `[{"type":"image_url","image_url":{"url":"https://example.com/cat.png"}}]`,
+		},
+		{
+			name:  "a detail the caller set is sent as given",
+			parts: []loom.ContentPart{loom.ImagePart(cat, "original")},
+			want:  `[{"type":"image_url","image_url":{"url":"https://example.com/cat.png","detail":"original"}}]`,
+		},
+		{
+			name: "parts keep their order",
+			parts: []loom.ContentPart{
+				loom.ImagePart("https://example.com/a.png", ""),
+				loom.TextPart("Which is larger?"),
+				loom.ImagePart("data:image/png;base64,AAAA", "high"),
+			},
+			want: `[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}},{"type":"text","text":"Which is larger?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA","detail":"high"}}]`,
+		},
+		{name: "text only stays the plain string", parts: []loom.ContentPart{loom.TextPart("hi"), loom.TextPart(" there")}, want: `"hi there"`, textOnly: true},
+		{name: "no parts", parts: nil, want: `""`, textOnly: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			messages, err := provider.Messages([]loom.Message{{Role: loom.RoleUser, Parts: tt.parts}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := jsonv2.Marshal(messages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire []struct {
+				Role    string         `json:"role"`
+				Content jsontext.Value `json:"content"`
+			}
+			if err := jsonv2.Unmarshal(encoded, &wire); err != nil {
+				t.Fatal(err)
+			}
+			if len(wire) != 1 || wire[0].Role != "user" {
+				t.Fatalf("messages = %s", encoded)
+			}
+			var got, want any
+			if err := jsonv2.Unmarshal(wire[0].Content, &got); err != nil {
+				t.Fatal(err)
+			}
+			if err := jsonv2.Unmarshal([]byte(tt.want), &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("content = %s, want %s", wire[0].Content, tt.want)
+			}
+
+			// In memory too, each part carries what the caller set and nothing more: a Detail only
+			// when one was chosen.
+			content := messages[0].OfUser.Content
+			if tt.textOnly {
+				if !content.OfString.Valid() || content.OfString.Value != loom.TextOf(tt.parts) || content.OfArrayOfContentParts != nil {
+					t.Fatalf("a text-only message = %+v, want the plain string", content)
+				}
+				return
+			}
+			if content.OfString.Valid() || len(content.OfArrayOfContentParts) != len(tt.parts) {
+				t.Fatalf("content = %+v, want one wire part per message part", content)
+			}
+			for i, part := range tt.parts {
+				wirePart := content.OfArrayOfContentParts[i]
+				switch part.Type {
+				case loom.ContentText:
+					if wirePart.OfText == nil || wirePart.OfText.Text != part.Text {
+						t.Fatalf("part %d = %+v, want the text %q", i, wirePart, part.Text)
+					}
+				case loom.ContentImage:
+					if wirePart.OfImageURL == nil || wirePart.OfImageURL.ImageURL.URL != part.ImageURL {
+						t.Fatalf("part %d = %+v, want the image %q", i, wirePart, part.ImageURL)
+					}
+					if got := wirePart.OfImageURL.ImageURL.Detail; got != part.ImageDetail {
+						t.Fatalf("part %d detail = %q, want %q", i, got, part.ImageDetail)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A system, tool, or assistant message is sent as the text of its parts joined, which is what
+// it was before messages had parts.
+func TestMessagesTakeTheTextOfPartsOnOtherRoles(t *testing.T) {
+	provider := Provider{FinishReason: finishReason, ReasoningField: ReasoningContentField}
+	messages, err := provider.Messages([]loom.Message{
+		{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("rules, "), loom.TextPart("in two parts")}},
+		{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("task")}},
+		{Role: loom.RoleAssistant, ToolCalls: []loom.ToolCall{{ID: "c1", Name: "lookup", Arguments: `{}`}}},
+		{Role: loom.RoleTool, ToolCallID: "c1", Parts: []loom.ContentPart{loom.TextPart("result")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := jsonv2.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire []map[string]any
+	if err := jsonv2.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	for index, want := range []string{"rules, in two parts", "task", "", "result"} {
+		if wire[index]["content"] != want {
+			t.Errorf("message %d content = %#v, want %q", index, wire[index]["content"], want)
+		}
 	}
 }
 
@@ -263,7 +406,7 @@ func TestMessagesRejectsAnUnknownRole(t *testing.T) {
 // field at all.
 func TestMessagesCarryStructuredReasoningVerbatim(t *testing.T) {
 	details := jsontext.Value(`[{"type":"reasoning.encrypted","data":"AAAA","id":"r1","format":"anthropic-claude-v1","index":0}]`)
-	message := loom.Message{Role: loom.RoleAssistant, Content: "answer", ReasoningContent: "summary", ReasoningDetails: details}
+	message := loom.Message{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart("answer")}, ReasoningContent: "summary", ReasoningDetails: details}
 
 	provider := Provider{
 		FinishReason:          finishReason,

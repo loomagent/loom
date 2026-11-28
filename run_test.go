@@ -9,11 +9,11 @@ import (
 func TestRun_Completed(t *testing.T) {
 	sink := NewMemorySink()
 	turn, err := Run(context.Background(), func(ctx context.Context, w TurnWriter, history []Turn, input UserMessage) error {
-		return w.FinalAnswer(ctx, "answer: "+input.Text)
+		return w.FinalAnswer(ctx, "answer: "+TextOf(input.Parts))
 	}, RunOptions{
 		ConversationID: "conv_test",
 		Sinks:          []Sink{sink},
-		Input:          UserMessage{Text: "hello"},
+		Input:          TextUserMessage("hello"),
 	})
 
 	if err != nil {
@@ -55,7 +55,7 @@ func TestRun_AgentError(t *testing.T) {
 	}, RunOptions{
 		ConversationID: "conv_test",
 		Sinks:          []Sink{sink},
-		Input:          UserMessage{Text: "x"},
+		Input:          TextUserMessage("x"),
 	})
 
 	if !errors.Is(err, sentinel) {
@@ -79,7 +79,7 @@ func TestRun_NoFinalAnswer(t *testing.T) {
 	}, RunOptions{
 		ConversationID: "conv_test",
 		Sinks:          []Sink{sink},
-		Input:          UserMessage{Text: "x"},
+		Input:          TextUserMessage("x"),
 	})
 
 	if err != nil {
@@ -103,7 +103,7 @@ func TestRun_Cancelled(t *testing.T) {
 	}, RunOptions{
 		ConversationID: "conv_test",
 		Sinks:          []Sink{sink},
-		Input:          UserMessage{Text: "x"},
+		Input:          TextUserMessage("x"),
 	})
 
 	if err != nil {
@@ -129,7 +129,7 @@ func TestRun_CancelledStepItem(t *testing.T) {
 	}, RunOptions{
 		ConversationID: "conv_test",
 		Sinks:          []Sink{sink},
-		Input:          UserMessage{Text: "x"},
+		Input:          TextUserMessage("x"),
 	})
 
 	if err != nil {
@@ -156,7 +156,7 @@ func TestRun_ContextCancelCauseHostShutdown(t *testing.T) {
 		return ctx.Err()
 	}, RunOptions{
 		ConversationID: "conv_test",
-		Input:          UserMessage{Text: "x"},
+		Input:          TextUserMessage("x"),
 	})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -173,7 +173,7 @@ func TestRun_ContextCancelCauseExternalCancel(t *testing.T) {
 		return ctx.Err()
 	}, RunOptions{
 		ConversationID: "conv_test",
-		Input:          UserMessage{Text: "x"},
+		Input:          TextUserMessage("x"),
 	})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -198,7 +198,7 @@ func TestRun_StepNesting(t *testing.T) {
 	}, RunOptions{
 		ConversationID: "conv_test",
 		Sinks:          []Sink{sink},
-		Input:          UserMessage{Text: "x"},
+		Input:          TextUserMessage("x"),
 	})
 
 	if err != nil {

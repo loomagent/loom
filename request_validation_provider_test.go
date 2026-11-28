@@ -43,13 +43,13 @@ func TestUserCannotSendChatWithoutUserMessage(t *testing.T) {
 		valid    bool
 	}{
 		{"empty context", nil, false},
-		{"system only", []loom.Message{{Role: loom.RoleSystem, Content: "classify"}}, false},
-		{"two system messages", []loom.Message{{Role: loom.RoleSystem, Content: "classify"}, {Role: loom.RoleSystem, Content: "JSON schema"}}, false},
-		{"assistant only", []loom.Message{{Role: loom.RoleAssistant, Content: "answer"}}, false},
-		{"tool only", []loom.Message{{Role: loom.RoleTool, ToolCallID: "call-1", Content: "result"}}, false},
-		{"user task", []loom.Message{{Role: loom.RoleSystem, Content: "rules"}, {Role: loom.RoleUser, Content: "task"}}, true},
-		{"assistant continuation", []loom.Message{{Role: loom.RoleUser, Content: "task"}, {Role: loom.RoleAssistant, Content: "answer"}}, true},
-		{"tool continuation", []loom.Message{{Role: loom.RoleUser, Content: "task"}, {Role: loom.RoleAssistant, ToolCalls: []loom.ToolCall{{ID: "call-1", Name: "lookup", Arguments: "{}"}}}, {Role: loom.RoleTool, ToolCallID: "call-1", Content: "result"}}, true},
+		{"system only", []loom.Message{{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("classify")}}}, false},
+		{"two system messages", []loom.Message{{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("classify")}}, {Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("JSON schema")}}}, false},
+		{"assistant only", []loom.Message{{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart("answer")}}}, false},
+		{"tool only", []loom.Message{{Role: loom.RoleTool, ToolCallID: "call-1", Parts: []loom.ContentPart{loom.TextPart("result")}}}, false},
+		{"user task", []loom.Message{{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("rules")}}, {Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("task")}}}, true},
+		{"assistant continuation", []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("task")}}, {Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart("answer")}}}, true},
+		{"tool continuation", []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("task")}}, {Role: loom.RoleAssistant, ToolCalls: []loom.ToolCall{{ID: "call-1", Name: "lookup", Arguments: "{}"}}}, {Role: loom.RoleTool, ToolCallID: "call-1", Parts: []loom.ContentPart{loom.TextPart("result")}}}, true},
 	}
 	for _, provider := range constructors {
 		for _, tc := range cases {

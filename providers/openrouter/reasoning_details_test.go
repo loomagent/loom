@@ -43,7 +43,7 @@ func TestStructuredReasoningRoundTrips(t *testing.T) {
 		return loom.ChatRequest{Messages: messages, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
 	}
 
-	response, err := model.Chat(t.Context(), request([]loom.Message{{Role: loom.RoleUser, Content: "hi"}}))
+	response, err := model.Chat(t.Context(), request([]loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestStructuredReasoningRoundTrips(t *testing.T) {
 
 	// A loop carries the assistant turn forward, which is what must preserve the blocks.
 	messages := loom.AppendAssistantTurn(
-		[]loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		[]loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 		response,
 		[]loom.ToolExecResult{{Call: response.ToolCalls[0], Output: `{"found":true}`}},
 	)
@@ -93,7 +93,7 @@ func TestStructuredReasoningAccumulatesAcrossStreamFrames(t *testing.T) {
 	_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		var streamErr error
 		response, streamErr = loom.StreamLLMToStep(ctx, w, "details", model, loom.ChatRequest{
-			Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+			Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 			Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 		})
 		return streamErr

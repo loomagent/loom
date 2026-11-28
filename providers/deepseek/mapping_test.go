@@ -194,10 +194,10 @@ func TestBuildRequestBranches(t *testing.T) {
 
 	t.Run("roles", func(t *testing.T) {
 		body := build(t, loom.ChatRequest{Messages: []loom.Message{
-			{Role: loom.RoleSystem, Content: "rules"},
-			{Role: loom.RoleUser, Content: "hi"},
-			{Role: loom.RoleAssistant, Content: "calling", Name: "assistant", ToolCalls: []loom.ToolCall{{ID: "c1", Name: "search", Arguments: `{}`}}},
-			{Role: loom.RoleTool, Content: "result", ToolCallID: "c1"},
+			{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("rules")}},
+			{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}},
+			{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart("calling")}, Name: "assistant", ToolCalls: []loom.ToolCall{{ID: "c1", Name: "search", Arguments: `{}`}}},
+			{Role: loom.RoleTool, Parts: []loom.ContentPart{loom.TextPart("result")}, ToolCallID: "c1"},
 		}, Reasoning: reasoning})
 		messages := body["messages"].([]any)
 		if len(messages) != 4 {
@@ -218,14 +218,14 @@ func TestBuildRequestBranches(t *testing.T) {
 	})
 
 	t.Run("stop sequences", func(t *testing.T) {
-		if body := build(t, loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "x"}}, Reasoning: reasoning}); body["stop"] != nil {
+		if body := build(t, loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}}, Reasoning: reasoning}); body["stop"] != nil {
 			t.Errorf("no stop sequences sent %v", body["stop"])
 		}
-		one := build(t, loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "x"}}, Stop: []string{"END"}, Reasoning: reasoning})
+		one := build(t, loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}}, Stop: []string{"END"}, Reasoning: reasoning})
 		if one["stop"] != "END" {
 			t.Errorf("one stop sequence sent %#v", one["stop"])
 		}
-		many := build(t, loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "x"}}, Stop: []string{"A", "B"}, Reasoning: reasoning})
+		many := build(t, loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}}, Stop: []string{"A", "B"}, Reasoning: reasoning})
 		if stops, ok := many["stop"].([]any); !ok || len(stops) != 2 {
 			t.Errorf("two stop sequences sent %#v", many["stop"])
 		}
@@ -233,7 +233,7 @@ func TestBuildRequestBranches(t *testing.T) {
 
 	t.Run("tool choice", func(t *testing.T) {
 		req := func(choice *loom.ToolChoice) loom.ChatRequest {
-			return loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "x"}}, ToolChoice: choice, Reasoning: reasoning}
+			return loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}}, ToolChoice: choice, Reasoning: reasoning}
 		}
 		if body := build(t, req(nil)); body["tool_choice"] != nil {
 			t.Errorf("no tool choice sent %v", body["tool_choice"])
@@ -257,7 +257,7 @@ func TestBuildRequestBranches(t *testing.T) {
 
 	t.Run("response format", func(t *testing.T) {
 		base := func() loom.ChatRequest {
-			return loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "x"}}, Reasoning: reasoning}
+			return loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}}, Reasoning: reasoning}
 		}
 		jsonObject := base()
 		jsonObject.ResponseFormat = loom.ResponseFormatJSONObject
@@ -292,19 +292,19 @@ func TestBuildRequestBranches(t *testing.T) {
 	})
 
 	t.Run("rejected modes", func(t *testing.T) {
-		none := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "x"}}, Reasoning: reasoning,
+		none := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}}, Reasoning: reasoning,
 			StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputNone}}
 		if _, err := model.buildRequest(none); err == nil || !strings.Contains(err.Error(), "may not be") {
 			t.Errorf("error = %v", err)
 		}
-		unknown := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "x"}}, Reasoning: reasoning,
+		unknown := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}}, Reasoning: reasoning,
 			StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputMode("other")}}
 		// The capability check rejects an unknown mode before the provider sees it, so the
 		// provider's own branch stays defensive.
 		if _, err := model.buildRequest(unknown); err == nil || !strings.Contains(err.Error(), `unknown StructuredOutput.Mode "other"`) {
 			t.Errorf("error = %v", err)
 		}
-		missingSchema := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "x"}}, Reasoning: reasoning,
+		missingSchema := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}}, Reasoning: reasoning,
 			StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema, Name: "s"}}
 		if _, err := model.buildRequest(missingSchema); err == nil || !strings.Contains(err.Error(), "has no schema") {
 			t.Errorf("error = %v", err)
@@ -313,7 +313,7 @@ func TestBuildRequestBranches(t *testing.T) {
 
 	t.Run("unknown role is refused", func(t *testing.T) {
 		_, err := model.buildRequest(loom.ChatRequest{
-			Messages:  []loom.Message{{Role: loom.RoleUser, Content: "task"}, {Role: loom.Role("assistent"), Content: "typo"}},
+			Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("task")}}, {Role: loom.Role("assistent"), Parts: []loom.ContentPart{loom.TextPart("typo")}}},
 			Reasoning: reasoning,
 		})
 		if err == nil || !strings.Contains(err.Error(), `unknown role "assistent"`) {
@@ -323,7 +323,7 @@ func TestBuildRequestBranches(t *testing.T) {
 
 	t.Run("optional fields", func(t *testing.T) {
 		body := build(t, loom.ChatRequest{
-			Messages:    []loom.Message{{Role: loom.RoleUser, Content: "x"}},
+			Messages:    []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("x")}}},
 			Temperature: func() *float64 { v := 0.5; return &v }(),
 			TopP:        func() *float64 { v := 0.9; return &v }(),
 			MaxTokens:   func() *int { v := 128; return &v }(),
@@ -390,7 +390,7 @@ func TestChatReadsReasoningContentOnlyFromAString(t *testing.T) {
 				_, _ = w.Write([]byte(`{"model":"deepseek-chat","choices":[{"message":{"content":"answer"` + reasoning + `},"finish_reason":"stop"}]}`))
 			})
 			response, err := model.Chat(t.Context(), loom.ChatRequest{
-				Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+				Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 				Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 			})
 			if err != nil {
@@ -413,14 +413,14 @@ func TestBuildRequestCarriesReasoningBack(t *testing.T) {
 	}
 	request, err := model.buildRequest(loom.ChatRequest{
 		Messages: []loom.Message{
-			{Role: loom.RoleUser, Content: "hi"},
+			{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}},
 			{
 				Role:             loom.RoleAssistant,
-				Content:          "calling",
+				Parts:            []loom.ContentPart{loom.TextPart("calling")},
 				ReasoningContent: "the reasoning that must come back",
 				ToolCalls:        []loom.ToolCall{{ID: "c1", Name: "lookup", Arguments: `{}`}},
 			},
-			{Role: loom.RoleTool, Content: "result", ToolCallID: "c1"},
+			{Role: loom.RoleTool, Parts: []loom.ContentPart{loom.TextPart("result")}, ToolCallID: "c1"},
 		},
 		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled},
 	})

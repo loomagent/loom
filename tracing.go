@@ -294,7 +294,7 @@ func marshalForSpan(v any) string {
 func assistantMessageForSpan(resp *ChatResponse) Message {
 	return Message{
 		Role:             RoleAssistant,
-		Content:          resp.Content,
+		Parts:            []ContentPart{TextPart(resp.Content)},
 		ReasoningContent: resp.ReasoningContent,
 		ToolCalls:        resp.ToolCalls,
 	}

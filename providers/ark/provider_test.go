@@ -54,7 +54,7 @@ func TestBuildRequestReasoningModeRequired(t *testing.T) {
 	}
 
 	_, err = m.buildRequest(loom.ChatRequest{
-		Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 		// Reasoning is deliberately omitted
 	})
 	if err == nil {
@@ -82,7 +82,7 @@ func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		req, err := m.buildRequest(loom.ChatRequest{
-			Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+			Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 			Reasoning: loom.Reasoning{Mode: tt.mode},
 		})
 		if err != nil {
@@ -152,7 +152,7 @@ func TestExplicitNoneDeclarationRejectsEnabledBeforeNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = model.Chat(context.Background(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hello"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}})
+	_, err = model.Chat(context.Background(), loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hello")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled}})
 	if _, ok := errors.AsType[*loom.RequestValidationError](err); !ok {
 		t.Fatalf("expected local contradiction, got %v", err)
 	}

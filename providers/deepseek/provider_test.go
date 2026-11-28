@@ -43,7 +43,7 @@ func TestBuildRequestReasoningModeRequired(t *testing.T) {
 	}
 
 	_, err = m.buildRequest(loom.ChatRequest{
-		Messages: []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 		// Reasoning is deliberately omitted
 	})
 	if err == nil {
@@ -64,7 +64,7 @@ func TestBuildRequestReasoningModeExplicit(t *testing.T) {
 
 	for _, mode := range []loom.ReasoningMode{loom.ReasoningModeEnabled, loom.ReasoningModeDisabled} {
 		req, err := m.buildRequest(loom.ChatRequest{
-			Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+			Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 			Reasoning: loom.Reasoning{Mode: mode},
 		})
 		if err != nil {

@@ -65,7 +65,7 @@ func TestProviderCapabilitiesStayAtConstruction(t *testing.T) {
 						returned.ReasoningEfforts[0] = "max"
 					}
 					// A caller's edit must not change which requests reach the provider.
-					request := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hello"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "high"}}
+					request := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hello")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "high"}}
 					if err := callCapabilitySnapshotModel(t.Context(), model, entry, request); err != nil {
 						t.Fatalf("original declared effort stopped working: %v", err)
 					}

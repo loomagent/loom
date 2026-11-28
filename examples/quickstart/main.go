@@ -31,10 +31,10 @@ func main() {
 		}); err != nil {
 			return err
 		}
-		return w.FinalAnswer(ctx, "Hello, "+input.Text+".")
+		return w.FinalAnswer(ctx, "Hello, "+loom.TextOf(input.Parts)+".")
 	}, loom.RunOptions{
 		ConversationID: "quickstart",
-		Input:          loom.UserMessage{Text: "Loom"},
+		Input:          loom.TextUserMessage("Loom"),
 		Sinks:          []loom.Sink{sink},
 	})
 	if err != nil {

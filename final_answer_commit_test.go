@@ -125,16 +125,16 @@ func TestFailedFinalAnswerReleasesTheCommitAndStaysOutOfHistory(t *testing.T) {
 	if items[1].Status != ItemStatusCompleted || items[1].Text != "the answer" {
 		t.Fatalf("commit = %+v", items[1])
 	}
-	history, err := HistoryToMessages([]Turn{*turn}, UserMessage{Text: "next"})
+	history, err := HistoryToMessages([]Turn{*turn}, TextUserMessage("next"))
 	if err != nil {
 		t.Fatalf("HistoryToMessages: %v", err)
 	}
 	for _, message := range history {
-		if strings.Contains(message.Content, "a draft") {
+		if strings.Contains(TextOf(message.Parts), "a draft") {
 			t.Fatalf("a rejected candidate reached the history: %+v", history)
 		}
 	}
-	if history[len(history)-2].Content != "the answer" {
+	if TextOf(history[len(history)-2].Parts) != "the answer" {
 		t.Fatalf("history = %+v", history)
 	}
 }

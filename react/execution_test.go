@@ -13,7 +13,7 @@ import (
 
 func runReservationTest(t *testing.T, ctx context.Context, cfg Config) (*loom.Turn, error) {
 	t.Helper()
-	cfg.Messages = []loom.Message{{Role: loom.RoleUser, Content: "test task"}}
+	cfg.Messages = []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}}
 	return loom.Run(ctx, func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
 		result, err := Run(ctx, w, cfg)
 		if err != nil {

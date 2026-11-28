@@ -109,7 +109,7 @@ func (p *Policy) AfterTools(ctx context.Context, w loom.Writer, state react.Stat
 		}
 		if instruction != "" {
 			messages := append([]loom.Message(nil), state.Messages...)
-			messages = append(messages, loom.Message{Role: loom.RoleSystem, Content: instruction})
+			messages = append(messages, loom.Message{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart(instruction)}})
 			return react.AfterToolsDecision{Messages: messages}, nil
 		}
 	}

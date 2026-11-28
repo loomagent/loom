@@ -176,7 +176,7 @@ func probeReasoning(ctx context.Context, model loom.ChatModel, timeout time.Dura
 	defer cancel()
 	evidence := requestEvidence(model, reasoning)
 	response, err := model.Chat(callCtx, loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "Three boxes are labeled apples, oranges, and mixed; every label is wrong. Explain how drawing one fruit from one box identifies all three boxes."}},
+		Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("Three boxes are labeled apples, oranges, and mixed; every label is wrong. Explain how drawing one fruit from one box identifies all three boxes.")}}},
 		Reasoning: reasoning,
 	})
 	check := Check{Name: name, DurationMS: time.Since(started).Milliseconds(), Evidence: evidence}
@@ -241,9 +241,9 @@ func probeStructured(ctx context.Context, model loom.ChatModel, timeout time.Dur
 	started := time.Now()
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	request.Messages = []loom.Message{{Role: loom.RoleUser, Content: `Return exactly one JSON object with this shape: {"ok": true}`}}
+	request.Messages = []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart(`Return exactly one JSON object with this shape: {"ok": true}`)}}}
 	if schema != nil {
-		request.Messages[0].Content = "Return an object conforming to the supplied response schema."
+		request.Messages[0].Parts = []loom.ContentPart{loom.TextPart("Return an object conforming to the supplied response schema.")}
 	}
 	request.Reasoning = reasoning
 	evidence := requestEvidence(model, reasoning)

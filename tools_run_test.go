@@ -46,7 +46,7 @@ func TestExecuteToolCalls_Success(t *testing.T) {
 			t.Errorf("outputs: %+v", results)
 		}
 		return w.FinalAnswer(ctx, "ok")
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	if turn == nil {
 		t.Fatalf("Run returned nil turn")
@@ -77,7 +77,7 @@ func TestExecuteToolCalls_ToolFails(t *testing.T) {
 			t.Error("expected err")
 		}
 		return w.FinalAnswer(ctx, "ok")
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	if turn == nil {
 		t.Fatalf("Run returned nil turn")
@@ -113,7 +113,7 @@ func TestRunToolByName_Success(t *testing.T) {
 			t.Errorf("output2: %s", output2)
 		}
 		return w.FinalAnswer(ctx, "ok")
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	if turn == nil {
 		t.Fatalf("Run returned nil turn")
@@ -136,7 +136,7 @@ func TestRunToolByName_NotFound(t *testing.T) {
 			t.Error("expected err")
 		}
 		return w.FinalAnswer(ctx, "ok")
-	}, RunOptions{ConversationID: "conv_test", Input: UserMessage{Text: "x"}})
+	}, RunOptions{ConversationID: "conv_test", Input: TextUserMessage("x")})
 
 	if turn == nil {
 		t.Fatalf("Run returned nil turn")

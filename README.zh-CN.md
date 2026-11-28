@@ -15,6 +15,7 @@ Loom 刻意保持小:agent 的控制流仍然是普通的 Go 代码,而模型、
 - 流式的模型 API 和 Writer API
 - fan-out 到多个可插拔的 `Sink` 实现
 - 与 provider 无关的 `ChatModel` 抽象
+- user 消息的文本之外可带图片,内置 provider 全部支持
 - 推理过程的回传:下一轮调用会带回上一轮的推理,文本之外,若 provider 返回结构化推理块,则原样按序带回
 - OpenTelemetry 链路追踪,默认不采集内容
 - 可选的[输出文本乱码观测](docs/text-integrity.md),只检测,不修改输出
@@ -63,10 +64,10 @@ func main() {
 		if err := w.WriteReasoning(ctx, "Plan", "Answer directly"); err != nil {
 			return err
 		}
-		return w.FinalAnswer(ctx, "Hello, "+input.Text)
+		return w.FinalAnswer(ctx, "Hello, "+loom.TextOf(input.Parts))
 	}, loom.RunOptions{
 		ConversationID: "example",
-		Input:          loom.UserMessage{Text: "Loom"},
+		Input:          loom.TextUserMessage("Loom"),
 		Sinks:          []loom.Sink{sink},
 	})
 	if err != nil {
@@ -199,8 +200,8 @@ loom 依然不会自己把它放进请求:**由调用方索取、由调用方决
 
 ```go
 messages := []loom.Message{
-    {Role: loom.RoleSystem, Content: contract.JSONObjectPrompt()},
-    {Role: loom.RoleUser, Content: "判断这条配送评价的整体情绪。"},
+    {Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart(contract.JSONObjectPrompt())}},
+    {Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("判断这条配送评价的整体情绪。")}},
 }
 ```
 
@@ -250,8 +251,8 @@ args, _, err := loom.ChatStructuredArgs(ctx, "summary", model, request, contract
     loom.WithStructuredNextRequest(func(_ context.Context, attempt loom.StructuredAttempt) (*loom.ChatRequest, error) {
         next := attempt.Request                                  // 刚刚失败的那次请求
         next.Messages = append(next.Messages,
-            loom.Message{Role: loom.RoleAssistant, Content: attempt.Response.Content},
-            loom.Message{Role: loom.RoleUser, Content: "Return one JSON value matching:\n" + schemaJSON})
+            loom.Message{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart(attempt.Response.Content)}},
+            loom.Message{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("Return one JSON value matching:\n" + schemaJSON)}})
         return &next, nil                                        // 返回 nil 即停止并报出失败
     }))
 ```
@@ -283,10 +284,10 @@ for attempt := 1; ; attempt++ {
         return err // 请求本身的失败,provider 层已经重试过了
     }
     messages = append(messages,
-        loom.Message{Role: loom.RoleAssistant, Content: invalid.Content},
-        loom.Message{Role: loom.RoleUser, Content: fmt.Sprintf(
+        loom.Message{Role: loom.RoleAssistant, Parts: []loom.ContentPart{loom.TextPart(invalid.Content)}},
+        loom.Message{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart(fmt.Sprintf(
             "Your previous output was rejected: %v\nReturn one JSON value matching:\n%s",
-            err, schemaJSON)})
+            err, schemaJSON))}})
 }
 ```
 
@@ -403,6 +404,38 @@ HTTP、SSE 及重试使用同一份快照；构造后修改原始 map 不影响�
 业务模型和能力探测的构造函数就能共用。其他供应商不需要设置这个头，Loom 也没有默认关闭
 审核的账号策略。应用继续通过构造入口检查阻止业务代码绕开统一入口；额外请求头本身无法
 发现应用从未声明的必填要求，也无法控制 Loom Chat/Stream 接口之外的独立 SDK 客户端/API。
+
+### 图片输入
+
+消息的内容是一组 part，文本和图片按顺序排列。图片放在 user 消息上，紧挨着谈论它的文本：
+
+```go
+model, err := modelfactory.Build(modelfactory.Config{
+    Provider:     modelfactory.ProviderOpenRouter,
+    APIKey:       os.Getenv("OPENROUTER_API_KEY"),
+    Model:        os.Getenv("MODEL_NAME"),
+    Capabilities: &loom.ModelCapabilities{Vision: true},
+})
+response, err := model.Chat(ctx, loom.ChatRequest{
+    Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{
+        loom.TextPart("这张图里是什么？"),
+        loom.ImagePart("https://example.com/cat.png", "low"),
+    }}},
+})
+```
+
+`ImagePart` 的第二个参数是端点的 `detail` 设置，原样发送：Loom 不维护可取值列表，因为各家
+provider 的定义不同。传空串则不发送 `detail`，由 provider 应用自己的默认值。
+`loom.TextOf(parts)` 只取消息中的文本，供不读图片的 handler 或校验使用；
+`loom.TextUserMessage(text)` 构造纯文本一轮所需的输入。
+
+`Vision` 是唯一 fail closed 的能力。构造模型时没有声明 `Vision: true`，带图片的请求会在发送
+之前以 `RequestValidationError` 被拒绝。图片放在 system、assistant 或 tool 消息上同样被拒：
+这些消息只以文本发出，模型会在看不到图片的情况下作答。四个内置 provider 发送图片的方式
+一致：在 user 消息上以 content-parts 数组发送。
+
+图片只属于传入它的那一轮。历史中的 user 消息是文本（`Item.Text`），之后重放该消息的轮次
+不会再发送图片。开启内容采集时，内联图片会与其余 prompt 一起写入 span。
 
 ## 模型能力快照
 
@@ -753,7 +786,7 @@ if err != nil {
     return err
 }
 response, err := model.Chat(ctx, loom.ChatRequest{
-    Messages: []loom.Message{{Role: loom.RoleUser, Content: "Explain your answer briefly."}},
+    Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("Explain your answer briefly.")}}},
     Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: loom.ReasoningEffortLow},
 })
 // Handle err and consume response.

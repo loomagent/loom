@@ -29,13 +29,13 @@ func runInTurn(t *testing.T, cfg Config) (*Result, error) {
 			return runErr
 		}
 		return w.FinalAnswer(ctx, result.FinalContent)
-	}, loom.RunOptions{ConversationID: "react-policy", Input: loom.UserMessage{Text: "go"}})
+	}, loom.RunOptions{ConversationID: "react-policy", Input: loom.TextUserMessage("go")})
 	return result, err
 }
 
 func TestRunRequiresItsInputs(t *testing.T) {
 	model := &scriptedModel{responses: []*loom.ChatResponse{{Content: "ok", FinishReason: loom.FinishReasonStop}}}
-	if _, err := Run(context.Background(), nil, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model, Tools: loom.NewToolRegistry()}); err == nil ||
+	if _, err := Run(context.Background(), nil, Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}}, Model: model, Tools: loom.NewToolRegistry()}); err == nil ||
 		!strings.Contains(err.Error(), "Writer is required") {
 		t.Fatalf("nil writer error = %v", err)
 	}
@@ -43,7 +43,7 @@ func TestRunRequiresItsInputs(t *testing.T) {
 		!strings.Contains(err.Error(), "Model is required") {
 		t.Fatalf("nil model error = %v", err)
 	}
-	if _, err := Run(context.Background(), nil, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}}, Model: model}); err == nil ||
+	if _, err := Run(context.Background(), nil, Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}}, Model: model}); err == nil ||
 		!strings.Contains(err.Error(), "Tools is required") {
 		t.Fatalf("nil tools error = %v", err)
 	}
@@ -53,7 +53,7 @@ func TestRunRequiresItsInputs(t *testing.T) {
 func TestStepPolicyRewritesTheStep(t *testing.T) {
 	model := &scriptedModel{responses: []*loom.ChatResponse{{Content: "answer", FinishReason: loom.FinishReasonStop}}}
 	seen := 0
-	result, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}},
+	result, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}},
 		Model: model,
 		Tools: loom.NewToolRegistry(),
 		StepPolicies: []StepPolicy{StepPolicyFunc(func(_ context.Context, state State, plan *StepPlan) error {
@@ -61,7 +61,7 @@ func TestStepPolicyRewritesTheStep(t *testing.T) {
 			if state.Step != 0 || state.ToolCallsUsed != 0 || len(state.Messages) != len(plan.Messages) {
 				t.Errorf("state = %+v", state)
 			}
-			plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Content: "policy instruction"})
+			plan.Messages = append(plan.Messages, loom.Message{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("policy instruction")}})
 			plan.Tools = nil
 			plan.ToolChoice = &loom.ToolChoice{Mode: loom.ToolChoiceNone}
 			return nil
@@ -74,7 +74,7 @@ func TestStepPolicyRewritesTheStep(t *testing.T) {
 		t.Fatalf("seen=%d result=%+v", seen, result)
 	}
 	request := model.requests[0]
-	if len(request.Messages) != 2 || request.Messages[1].Content != "policy instruction" {
+	if len(request.Messages) != 2 || loom.TextOf(request.Messages[1].Parts) != "policy instruction" {
 		t.Fatalf("policy messages not sent: %+v", request.Messages)
 	}
 	if len(request.Tools) != 0 || request.ToolChoice == nil || request.ToolChoice.Mode != loom.ToolChoiceNone {
@@ -83,7 +83,7 @@ func TestStepPolicyRewritesTheStep(t *testing.T) {
 }
 
 func TestStepPolicyErrorStopsTheLoop(t *testing.T) {
-	_, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}},
+	_, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}},
 		Model: &scriptedModel{responses: []*loom.ChatResponse{{Content: "x", FinishReason: loom.FinishReasonStop}}},
 		Tools: loom.NewToolRegistry(),
 		StepPolicies: []StepPolicy{StepPolicyFunc(func(context.Context, State, *StepPlan) error {
@@ -98,7 +98,7 @@ func TestStepPolicyErrorStopsTheLoop(t *testing.T) {
 // A finish policy may reject a finish once and continue with an instruction, and a failure
 // in the policy itself stops the loop.
 func TestFinishPolicyErrorStopsTheLoop(t *testing.T) {
-	_, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}},
+	_, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}},
 		Model: &scriptedModel{responses: []*loom.ChatResponse{{Content: "x", FinishReason: loom.FinishReasonStop}}},
 		Tools: loom.NewToolRegistry(),
 		FinishPolicies: []FinishPolicy{FinishPolicyFunc(func(context.Context, State, *loom.ChatResponse) (FinishDecision, error) {
@@ -119,7 +119,7 @@ func TestAfterToolsPolicyReplacesMessagesAndStops(t *testing.T) {
 	}
 	model := &scriptedModel{responses: []*loom.ChatResponse{response}}
 	registry := loom.NewToolRegistry(lookupTool())
-	result, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}},
+	result, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}},
 		Model: model,
 		Tools: registry,
 		AfterToolsPolicies: []AfterToolsPolicy{AfterToolsPolicyFunc(func(_ context.Context, _ loom.Writer, state State, results []loom.ToolExecResult) (AfterToolsDecision, error) {
@@ -127,7 +127,7 @@ func TestAfterToolsPolicyReplacesMessagesAndStops(t *testing.T) {
 				t.Errorf("results = %+v", results)
 			}
 			return AfterToolsDecision{
-				Messages:     append(state.Messages, loom.Message{Role: loom.RoleSystem, Content: "reviewed"}),
+				Messages:     append(state.Messages, loom.Message{Role: loom.RoleSystem, Parts: []loom.ContentPart{loom.TextPart("reviewed")}}),
 				Stop:         true,
 				FinalContent: "stopped by policy",
 			}, nil
@@ -143,7 +143,7 @@ func TestAfterToolsPolicyReplacesMessagesAndStops(t *testing.T) {
 	if result.FinalContent != "stopped by policy" || result.Steps != 1 {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(result.Messages) == 0 || result.Messages[len(result.Messages)-1].Content != "reviewed" {
+	if len(result.Messages) == 0 || loom.TextOf(result.Messages[len(result.Messages)-1].Parts) != "reviewed" {
 		t.Fatalf("policy messages not kept: %+v", result.Messages)
 	}
 }
@@ -153,7 +153,7 @@ func TestAfterToolsPolicyErrorStopsTheLoop(t *testing.T) {
 		FinishReason: loom.FinishReasonToolCalls,
 		ToolCalls:    []loom.ToolCall{{ID: "c1", Name: "lookup", Arguments: `{}`}},
 	}
-	_, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}},
+	_, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}},
 		Model: &scriptedModel{responses: []*loom.ChatResponse{response}},
 		Tools: loom.NewToolRegistry(lookupTool()),
 		AfterToolsPolicies: []AfterToolsPolicy{AfterToolsPolicyFunc(func(context.Context, loom.Writer, State, []loom.ToolExecResult) (AfterToolsDecision, error) {
@@ -201,7 +201,7 @@ func TestToolCallsBeyondTheTotalBudgetAreRefused(t *testing.T) {
 		},
 		{Content: "done", FinishReason: loom.FinishReasonStop},
 	}}
-	result, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}},
+	result, err := runInTurn(t, Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}},
 		Model:        model,
 		Tools:        loom.NewToolRegistry(lookupTool()),
 		MaxToolCalls: 1,
@@ -217,7 +217,7 @@ func TestToolCallsBeyondTheTotalBudgetAreRefused(t *testing.T) {
 	second := model.requests[1]
 	found := false
 	for _, message := range second.Messages {
-		if message.Role == loom.RoleTool && strings.Contains(message.Content, "tool call limit 1 reached") {
+		if message.Role == loom.RoleTool && strings.Contains(loom.TextOf(message.Parts), "tool call limit 1 reached") {
 			found = true
 		}
 	}
@@ -241,7 +241,7 @@ func TestRejectedToolCallReportsAWriterFailure(t *testing.T) {
 	}
 	for _, failing := range []failingWriter{{failToolCall: true}, {failToolResult: true}} {
 		_, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, _ loom.UserMessage) error {
-			_, runErr := Run(ctx, failing.wrap(w), Config{Messages: []loom.Message{{Role: loom.RoleUser, Content: "test task"}},
+			_, runErr := Run(ctx, failing.wrap(w), Config{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("test task")}}},
 				Model:        &scriptedModel{responses: []*loom.ChatResponse{response}},
 				Tools:        loom.NewToolRegistry(lookupTool()),
 				MaxToolCalls: 1,

@@ -193,7 +193,7 @@ func TestBuildPassesAnAttemptLimiterThrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := model.Chat(context.Background(), loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 	}); err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func TestBuildKeepsTheCallersRetryPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := model.Chat(context.Background(), loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "hi"}},
+		Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hi")}}},
 		Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled},
 	}); err == nil {
 		t.Fatal("an endpoint that is down must fail")

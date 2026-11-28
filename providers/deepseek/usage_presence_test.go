@@ -64,7 +64,7 @@ func TestUsagePresenceOnWire(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "hello"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
+				req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("hello")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}}
 				var got loom.Usage
 				if stream {
 					s, err := m.Stream(t.Context(), req)

@@ -17,7 +17,7 @@ func TestHistoryToMessages_ReasoningPairing(t *testing.T) {
 			},
 		},
 	}
-	msgs, err := HistoryToMessages(history, UserMessage{Text: "find one more"})
+	msgs, err := HistoryToMessages(history, TextUserMessage("find one more"))
 	if err != nil {
 		t.Fatalf("HistoryToMessages: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestHistoryToMessages_ReasoningPairing(t *testing.T) {
 	if len(msgs) != 5 {
 		t.Fatalf("len=%d, want 5; msgs=%+v", len(msgs), msgs)
 	}
-	if msgs[0].Role != RoleUser || msgs[0].Content != "find AI tools" {
+	if msgs[0].Role != RoleUser || TextOf(msgs[0].Parts) != "find AI tools" {
 		t.Errorf("msg[0]: %+v", msgs[0])
 	}
 	if msgs[1].Role != RoleAssistant || msgs[1].ReasoningContent != "search first" || len(msgs[1].ToolCalls) != 1 {
@@ -43,10 +43,10 @@ func TestHistoryToMessages_ReasoningPairing(t *testing.T) {
 	if msgs[2].Role != RoleTool || msgs[2].ToolCallID != "c1" {
 		t.Errorf("msg[2]: %+v", msgs[2])
 	}
-	if msgs[3].Role != RoleAssistant || msgs[3].ReasoningContent != "good results, summarize" || msgs[3].Content != "found 5 tools" {
+	if msgs[3].Role != RoleAssistant || msgs[3].ReasoningContent != "good results, summarize" || TextOf(msgs[3].Parts) != "found 5 tools" {
 		t.Errorf("msg[3]: %+v", msgs[3])
 	}
-	if msgs[4].Role != RoleUser || msgs[4].Content != "find one more" {
+	if msgs[4].Role != RoleUser || TextOf(msgs[4].Parts) != "find one more" {
 		t.Errorf("msg[4]: %+v", msgs[4])
 	}
 }
@@ -68,7 +68,7 @@ func TestHistoryToMessages_StepNesting(t *testing.T) {
 			},
 		},
 	}
-	msgs, err := HistoryToMessages(history, UserMessage{Text: "Q2"})
+	msgs, err := HistoryToMessages(history, TextUserMessage("Q2"))
 	if err != nil {
 		t.Fatalf("HistoryToMessages: %v", err)
 	}
@@ -84,17 +84,17 @@ func TestHistoryToMessages_StepNesting(t *testing.T) {
 	if msgs[1].ReasoningContent != "R1" || len(msgs[1].ToolCalls) != 1 {
 		t.Errorf("msg[1]: %+v", msgs[1])
 	}
-	if msgs[3].Content != "A" || msgs[3].ReasoningContent != "" {
+	if TextOf(msgs[3].Parts) != "A" || msgs[3].ReasoningContent != "" {
 		t.Errorf("msg[3]: %+v", msgs[3])
 	}
 }
 
 func TestHistoryToMessages_OnlyInput(t *testing.T) {
-	msgs, err := HistoryToMessages(nil, UserMessage{Text: "hi"})
+	msgs, err := HistoryToMessages(nil, TextUserMessage("hi"))
 	if err != nil {
 		t.Fatalf("HistoryToMessages: %v", err)
 	}
-	if len(msgs) != 1 || msgs[0].Role != RoleUser || msgs[0].Content != "hi" {
+	if len(msgs) != 1 || msgs[0].Role != RoleUser || TextOf(msgs[0].Parts) != "hi" {
 		t.Errorf("got %+v", msgs)
 	}
 }
@@ -116,7 +116,7 @@ func TestHistoryToMessages_RejectsNonCompletedHistory(t *testing.T) {
 					{Kind: ItemKindUserMessage, Text: "Q"},
 				},
 			},
-		}, UserMessage{Text: "Q2"})
+		}, TextUserMessage("Q2"))
 		if err == nil {
 			t.Fatalf("status=%q: want error", status)
 		}

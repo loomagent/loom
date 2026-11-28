@@ -58,7 +58,7 @@ func TestSchemaRequestReachesUnknownModel(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "Use the response schema."}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "future-effort"}, StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema, Name: "future_contract", Schema: &loom.Schema{Type: "object"}}}
+			req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("Use the response schema.")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeEnabled, Effort: "future-effort"}, StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema, Name: "future_contract", Schema: &loom.Schema{Type: "object"}}}
 			if streaming {
 				stream, err := m.Stream(t.Context(), req)
 				if err != nil {
@@ -108,7 +108,7 @@ func TestSchemaUpstreamErrorAndDeclaredBusinessGuard(t *testing.T) {
 		w.WriteHeader(400)
 		_, _ = fmt.Fprint(w, `{"error":{"message":"This response_format type is unavailable now"}}`)
 	}))
-	req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Content: "JSON"}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema, Name: "probe", Schema: &loom.Schema{Type: "object"}}}
+	req := loom.ChatRequest{Messages: []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("JSON")}}}, Reasoning: loom.Reasoning{Mode: loom.ReasoningModeDisabled}, StructuredOutput: &loom.StructuredOutput{Mode: loom.StructuredOutputJSONSchema, Name: "probe", Schema: &loom.Schema{Type: "object"}}}
 	m, err := New(Config{APIKey: "test", BaseURL: server.URL, HTTPClient: server.Client(), ModelName: "deepseek-flash", Retry: &loom.RetryConfig{Mode: loom.RetryModeDisabled}})
 	if err != nil {
 		t.Fatal(err)

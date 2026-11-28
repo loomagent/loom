@@ -43,7 +43,7 @@ func main() {
 	sink := loom.NewMemorySink()
 	turn, err := loom.Run(context.Background(), func(ctx context.Context, w loom.TurnWriter, _ []loom.Turn, input loom.UserMessage) error {
 		_, err := react.RunToFinalAnswer(ctx, w, react.Config{
-			Messages:  []loom.Message{{Role: loom.RoleUser, Content: input.Text}},
+			Messages:  []loom.Message{{Role: loom.RoleUser, Parts: input.Parts}},
 			Model:     model,
 			Tools:     loom.NewToolRegistry(tool, finalize),
 			Purpose:   "glossary",
@@ -52,7 +52,7 @@ func main() {
 		return err
 	}, loom.RunOptions{
 		ConversationID: "react-example",
-		Input:          loom.UserMessage{Text: "What is a phony target?"},
+		Input:          loom.TextUserMessage("What is a phony target?"),
 		Sinks:          []loom.Sink{sink},
 		StrictSink:     true,
 	})

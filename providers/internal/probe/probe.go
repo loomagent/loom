@@ -18,7 +18,7 @@ import (
 // infers how the provider interprets the result.
 func RequestParameters[T any](build func(loom.ChatRequest) (T, error), reasoning loom.Reasoning) (map[string]any, error) {
 	request, err := build(loom.ChatRequest{
-		Messages:  []loom.Message{{Role: loom.RoleUser, Content: "probe"}},
+		Messages:  []loom.Message{{Role: loom.RoleUser, Parts: []loom.ContentPart{loom.TextPart("probe")}}},
 		Reasoning: reasoning,
 	})
 	if err != nil {
